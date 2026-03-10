@@ -11,6 +11,7 @@ import NetworkView from "./pages/NetworkView";
 import CgroupView from "./pages/CgroupView";
 import ProgramsView from "./pages/ProgramsView";
 import SettingsView from "./pages/SettingsView";
+import OsMapView from "./pages/OsMapView";
 
 function Router() {
   return (
@@ -22,6 +23,7 @@ function Router() {
         <Route path="/cgroups" component={CgroupView} />
         <Route path="/programs" component={ProgramsView} />
         <Route path="/settings" component={SettingsView} />
+        <Route path="/map" component={OsMapView} />
         <Route path="/404" component={NotFound} />
         <Route component={NotFound} />
       </Switch>

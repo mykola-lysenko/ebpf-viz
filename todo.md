@@ -59,3 +59,18 @@
 - [x] Kernel zone cards: heatmap glow intensity based on total CPU time consumed
 - [x] Dashboard: Runtime Activity leaderboard with sparklines
 - [x] Tests for ring buffer delta computation (41 tests total, all passing)
+
+## OS Map View (React Flow)
+- [x] Install @xyflow/react and add /map route + sidebar entry
+- [x] useOsMapLayout hook: convert snapshot → React Flow nodes + edges
+- [x] Custom node: KernelBoundary, UserspaceBoundary, NetworkBoundary
+- [x] Custom node: ZoneNode (kernel hook zones)
+- [x] Custom node: CgroupNode (cgroup tree nodes)
+- [x] Custom node: InterfaceNode (network interfaces with OSI mini-stack)
+- [x] Custom node: ProgramNode (BPF program badge with sparkline)
+- [x] Custom node: ProcessNode (owning process pill)
+- [x] LOD switching via useViewport zoom thresholds
+- [x] Minimap + toolbar (fit, zoom in/out, label toggle)
+- [x] Search highlighting (dim non-matching, ring around matches)
+- [x] Click program → open existing ProgramDetailPanel
+- [x] Click zone/cgroup/interface → zoom-fit that region (double-click)
