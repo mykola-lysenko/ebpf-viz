@@ -7,6 +7,7 @@ import { registerOAuthRoutes } from "./oauth";
 import { appRouter } from "../routers";
 import { createContext } from "./context";
 import { serveStatic, setupVite } from "./vite";
+import { startPoller } from "../ebpf-poller";
 
 function isPortAvailable(port: number): Promise<boolean> {
   return new Promise(resolve => {
@@ -63,3 +64,8 @@ async function startServer() {
 }
 
 startServer().catch(console.error);
+
+// Start eBPF polling service
+startPoller().catch(err => {
+  console.error("[ebpf-poller] Failed to start:", err);
+});
