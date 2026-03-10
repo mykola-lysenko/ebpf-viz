@@ -1,13 +1,13 @@
-import React, { useState } from "react";
+import React, { useState, useMemo } from "react";
 import { useEbpf } from "@/contexts/EbpfContext";
-import { ProgBadge } from "@/components/ProgBadge";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Activity, SortAsc, SortDesc, Filter, X } from "lucide-react";
+import { Activity, SortAsc, SortDesc, Filter, X, Zap } from "lucide-react";
 import { cn } from "@/lib/utils";
-import type { BpfProgram } from "../../../shared/ebpf-types";
+import type { BpfProgram, ProgHistory } from "../../../shared/ebpf-types";
+import Sparkline, { samplesToCallsPerSec, fmtCps, fmtNs, fmtCpu } from "@/components/Sparkline";
 
-type SortKey = "id" | "name" | "type" | "loadedAt" | "runCnt" | "bytesXlated";
+type SortKey = "id" | "name" | "type" | "loadedAt" | "runCnt" | "bytesXlated" | "callsPerSec" | "avgLatency" | "cpuFraction";
 type SortDir = "asc" | "desc";
 
 const TYPE_COLORS_MAP: Record<string, string> = {
@@ -38,30 +38,56 @@ function formatBytes(b: number) {
   return `${(b / 1024).toFixed(1)}KB`;
 }
 
-function formatNs(ns: number) {
-  if (ns < 1000) return `${ns}ns`;
-  if (ns < 1_000_000) return `${(ns / 1000).toFixed(1)}µs`;
-  if (ns < 1_000_000_000) return `${(ns / 1_000_000).toFixed(1)}ms`;
-  return `${(ns / 1_000_000_000).toFixed(2)}s`;
+// Latency → color
+function latencyColor(ns: number): string {
+  if (ns === 0) return "#6b7280";
+  if (ns < 1_000) return "#22d3ee";
+  if (ns < 100_000) return "#4ade80";
+  if (ns < 1_000_000) return "#f59e0b";
+  return "#f87171";
 }
 
-function ProgramRow({ prog }: { prog: BpfProgram }) {
+function ProgramRow({
+  prog,
+  history,
+  maxCallsPerSec,
+}: {
+  prog: BpfProgram;
+  history?: ProgHistory | null;
+  maxCallsPerSec: number;
+}) {
   const { setSelectedProgram } = useEbpf();
   const color = TYPE_COLORS_MAP[prog.rawType] ?? "#6b7280";
+
+  const callsPerSec = history?.latest?.callsPerSec ?? 0;
+  const avgLatencyNs = history?.latest?.avgLatencyNs ?? 0;
+  const cpuFraction = history?.latest?.cpuFraction ?? 0;
+  const hasStats = callsPerSec > 0 || avgLatencyNs > 0;
+
+  const sparkData = useMemo(() => {
+    if (!history?.samples || history.samples.length < 2) return [];
+    return samplesToCallsPerSec(history.samples);
+  }, [history]);
+
+  const barFraction = maxCallsPerSec > 0 ? Math.min(1, callsPerSec / maxCallsPerSec) : 0;
+  const lColor = latencyColor(avgLatencyNs);
 
   return (
     <tr
       className="border-b border-border/40 hover:bg-accent/20 transition-colors cursor-pointer group"
       onClick={() => setSelectedProgram(prog)}
     >
+      {/* ID */}
       <td className="px-4 py-3 font-mono text-xs text-muted-foreground w-16">{prog.id}</td>
+
+      {/* Name */}
       <td className="px-4 py-3">
         <div className="flex items-center gap-2">
           <span
             className="w-2 h-2 rounded-full shrink-0"
             style={{ background: color, boxShadow: `0 0 6px ${color}60` }}
           />
-          <span className="text-sm font-mono text-foreground group-hover:text-primary transition-colors truncate max-w-[200px]">
+          <span className="text-sm font-mono text-foreground group-hover:text-primary transition-colors truncate max-w-[180px]">
             {prog.name || `prog_${prog.id}`}
           </span>
           {prog.orphaned && (
@@ -71,6 +97,8 @@ function ProgramRow({ prog }: { prog: BpfProgram }) {
           )}
         </div>
       </td>
+
+      {/* Type */}
       <td className="px-4 py-3">
         <span
           className="text-[11px] font-mono px-2 py-0.5 rounded border"
@@ -79,9 +107,64 @@ function ProgramRow({ prog }: { prog: BpfProgram }) {
           {prog.rawType}
         </span>
       </td>
+
+      {/* Calls/sec — with inline bar + sparkline */}
+      <td className="px-4 py-3 hidden lg:table-cell min-w-[140px]">
+        {hasStats ? (
+          <div className="flex flex-col gap-1">
+            <div className="flex items-center gap-2">
+              <span className="text-xs font-mono tabular-nums" style={{ color: lColor }}>
+                {fmtCps(callsPerSec)}
+              </span>
+              {sparkData.length >= 2 && (
+                <Sparkline data={sparkData} height={16} width={50} color={lColor} variant="calls" />
+              )}
+            </div>
+            {/* Relative bar */}
+            <div className="h-[2px] rounded-full bg-white/5 overflow-hidden w-full">
+              <div
+                className="h-full rounded-full transition-all duration-700"
+                style={{
+                  width: `${barFraction * 100}%`,
+                  background: lColor,
+                  minWidth: barFraction > 0 ? 2 : 0,
+                }}
+              />
+            </div>
+          </div>
+        ) : (
+          <span className="text-xs text-muted-foreground/40">—</span>
+        )}
+      </td>
+
+      {/* Avg Latency */}
+      <td className="px-4 py-3 hidden xl:table-cell">
+        {avgLatencyNs > 0 ? (
+          <span className="text-xs font-mono tabular-nums" style={{ color: lColor }}>
+            {fmtNs(avgLatencyNs)}
+          </span>
+        ) : (
+          <span className="text-xs text-muted-foreground/40">—</span>
+        )}
+      </td>
+
+      {/* CPU% */}
+      <td className="px-4 py-3 hidden xl:table-cell">
+        {cpuFraction > 0 ? (
+          <span className="text-xs font-mono tabular-nums text-violet-400">
+            {fmtCpu(cpuFraction)}
+          </span>
+        ) : (
+          <span className="text-xs text-muted-foreground/40">—</span>
+        )}
+      </td>
+
+      {/* Tag */}
       <td className="px-4 py-3 text-xs font-mono text-muted-foreground hidden md:table-cell">
         {prog.tag}
       </td>
+
+      {/* Flags */}
       <td className="px-4 py-3 text-xs text-muted-foreground hidden lg:table-cell">
         <div className="flex gap-1 flex-wrap">
           {prog.jited && (
@@ -95,15 +178,13 @@ function ProgramRow({ prog }: { prog: BpfProgram }) {
           )}
         </div>
       </td>
+
+      {/* Size */}
       <td className="px-4 py-3 text-xs font-mono text-muted-foreground hidden xl:table-cell">
         {formatBytes(prog.bytesXlated)}
       </td>
-      <td className="px-4 py-3 text-xs font-mono text-muted-foreground hidden xl:table-cell">
-        {prog.runCnt !== undefined ? prog.runCnt.toLocaleString() : "—"}
-      </td>
-      <td className="px-4 py-3 text-xs font-mono text-muted-foreground hidden lg:table-cell">
-        {prog.runTimeNs !== undefined ? formatNs(prog.runTimeNs) : "—"}
-      </td>
+
+      {/* Loaded */}
       <td className="px-4 py-3 text-xs text-muted-foreground hidden sm:table-cell">
         {prog.loadedAt ? new Date(prog.loadedAt * 1000).toLocaleTimeString() : "—"}
       </td>
@@ -112,7 +193,7 @@ function ProgramRow({ prog }: { prog: BpfProgram }) {
 }
 
 export default function ProgramsView() {
-  const { snapshot, filteredPrograms, typeFilter, setTypeFilter } = useEbpf();
+  const { snapshot, filteredPrograms, typeFilter, setTypeFilter, historyMap, statsEnabled } = useEbpf();
   const [sortKey, setSortKey] = useState<SortKey>("id");
   const [sortDir, setSortDir] = useState<SortDir>("asc");
 
@@ -120,7 +201,6 @@ export default function ProgramsView() {
     return <div className="flex items-center justify-center h-full"><p className="text-muted-foreground">Loading…</p></div>;
   }
 
-  // Get all unique types from snapshot
   const allTypes = Array.from(new Set(snapshot.programs.map(p => p.rawType))).sort();
 
   const handleSort = (key: SortKey) => {
@@ -128,8 +208,18 @@ export default function ProgramsView() {
     else { setSortKey(key); setSortDir("asc"); }
   };
 
+  // Compute max calls/sec across all visible programs for bar scaling
+  const maxCallsPerSec = useMemo(() => {
+    return filteredPrograms.reduce((max, p) => {
+      const h = historyMap.get(p.id);
+      return Math.max(max, h?.latest?.callsPerSec ?? 0);
+    }, 0);
+  }, [filteredPrograms, historyMap]);
+
   const sorted = [...filteredPrograms].sort((a, b) => {
     let av: string | number = 0, bv: string | number = 0;
+    const ha = historyMap.get(a.id);
+    const hb = historyMap.get(b.id);
     switch (sortKey) {
       case "id": av = a.id; bv = b.id; break;
       case "name": av = a.name; bv = b.name; break;
@@ -137,6 +227,9 @@ export default function ProgramsView() {
       case "loadedAt": av = a.loadedAt; bv = b.loadedAt; break;
       case "runCnt": av = a.runCnt ?? -1; bv = b.runCnt ?? -1; break;
       case "bytesXlated": av = a.bytesXlated; bv = b.bytesXlated; break;
+      case "callsPerSec": av = ha?.latest?.callsPerSec ?? -1; bv = hb?.latest?.callsPerSec ?? -1; break;
+      case "avgLatency": av = ha?.latest?.avgLatencyNs ?? -1; bv = hb?.latest?.avgLatencyNs ?? -1; break;
+      case "cpuFraction": av = ha?.latest?.cpuFraction ?? -1; bv = hb?.latest?.cpuFraction ?? -1; break;
     }
     const cmp = av < bv ? -1 : av > bv ? 1 : 0;
     return sortDir === "asc" ? cmp : -cmp;
@@ -171,6 +264,12 @@ export default function ProgramsView() {
           </h1>
           <p className="text-sm text-muted-foreground mt-0.5">
             {sorted.length} of {snapshot.stats.total} programs
+            {statsEnabled && (
+              <span className="ml-2 text-cyan-400 text-xs inline-flex items-center gap-1">
+                <Zap size={10} />
+                runtime stats active
+              </span>
+            )}
           </p>
         </div>
       </div>
@@ -221,21 +320,27 @@ export default function ProgramsView() {
                 <ColHeader col="id" label="ID" className="w-16" />
                 <ColHeader col="name" label="Name" />
                 <ColHeader col="type" label="Type" />
+                <ColHeader col="callsPerSec" label="Calls/s" className="hidden lg:table-cell" />
+                <ColHeader col="avgLatency" label="Avg Latency" className="hidden xl:table-cell" />
+                <ColHeader col="cpuFraction" label="CPU%" className="hidden xl:table-cell" />
                 <th className="px-4 py-3 text-left text-xs font-semibold text-muted-foreground hidden md:table-cell">Tag</th>
                 <th className="px-4 py-3 text-left text-xs font-semibold text-muted-foreground hidden lg:table-cell">Flags</th>
                 <ColHeader col="bytesXlated" label="Size" className="hidden xl:table-cell" />
-                <ColHeader col="runCnt" label="Runs" className="hidden xl:table-cell" />
-                <th className="px-4 py-3 text-left text-xs font-semibold text-muted-foreground hidden lg:table-cell">Runtime</th>
                 <ColHeader col="loadedAt" label="Loaded" className="hidden sm:table-cell" />
               </tr>
             </thead>
             <tbody>
               {sorted.map(prog => (
-                <ProgramRow key={prog.id} prog={prog} />
+                <ProgramRow
+                  key={prog.id}
+                  prog={prog}
+                  history={historyMap.get(prog.id)}
+                  maxCallsPerSec={maxCallsPerSec}
+                />
               ))}
               {sorted.length === 0 && (
                 <tr>
-                  <td colSpan={9} className="px-4 py-12 text-center text-muted-foreground text-sm">
+                  <td colSpan={10} className="px-4 py-12 text-center text-muted-foreground text-sm">
                     No programs match the current filter.
                   </td>
                 </tr>

@@ -1,15 +1,18 @@
-import React from "react";
-import { X, Copy, Check, Clock, Cpu, Hash, Tag, Database, Activity, Shield, AlertTriangle } from "lucide-react";
+import React, { useMemo } from "react";
+import { X, Copy, Check, Clock, Cpu, Hash, Tag, Database, Activity, Shield, AlertTriangle, Zap, Timer, BarChart2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
-import type { BpfProgram } from "../../../shared/ebpf-types";
+import { AreaChart, Area, XAxis, YAxis, Tooltip as RechartTooltip, ResponsiveContainer } from "recharts";
+import type { BpfProgram, ProgHistory } from "../../../shared/ebpf-types";
 import { cn } from "@/lib/utils";
 import { useState } from "react";
 import { toast } from "sonner";
+import { samplesToCallsPerSec, samplesToAvgLatency, fmtCps, fmtNs, fmtCpu } from "./Sparkline";
 
 interface Props {
   program: BpfProgram;
+  history?: ProgHistory | null;
   onClose: () => void;
 }
 
@@ -51,16 +54,31 @@ function MetaRow({ icon: Icon, label, value, mono = false, copyable = false }: {
   );
 }
 
+function StatCard({ icon: Icon, label, value, sub, color }: {
+  icon: React.ElementType;
+  label: string;
+  value: string;
+  sub?: string;
+  color: string;
+}) {
+  return (
+    <div
+      className="rounded-lg p-3 border flex flex-col gap-1"
+      style={{ borderColor: `${color}25`, background: `${color}08` }}
+    >
+      <div className="flex items-center gap-1.5">
+        <Icon size={11} style={{ color }} />
+        <span className="text-[10px] text-muted-foreground uppercase tracking-wider">{label}</span>
+      </div>
+      <div className="text-sm font-mono font-semibold" style={{ color }}>{value}</div>
+      {sub && <div className="text-[10px] text-muted-foreground">{sub}</div>}
+    </div>
+  );
+}
+
 function formatBytes(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
   return `${(bytes / 1024).toFixed(1)} KB`;
-}
-
-function formatNs(ns: number): string {
-  if (ns < 1000) return `${ns} ns`;
-  if (ns < 1_000_000) return `${(ns / 1000).toFixed(1)} µs`;
-  if (ns < 1_000_000_000) return `${(ns / 1_000_000).toFixed(1)} ms`;
-  return `${(ns / 1_000_000_000).toFixed(2)} s`;
 }
 
 function formatTimestamp(unix: number): string {
@@ -79,7 +97,37 @@ const ATTACH_KIND_COLORS: Record<string, string> = {
   unknown:        "#6b7280",
 };
 
-export function ProgramDetailPanel({ program, onClose }: Props) {
+// Custom tooltip for the detail chart
+function ChartTooltip({ active, payload, label, mode }: {
+  active?: boolean;
+  payload?: Array<{ value: number }>;
+  label?: number;
+  mode: "calls" | "latency";
+}) {
+  if (!active || !payload?.length) return null;
+  const val = payload[0]?.value ?? 0;
+  return (
+    <div className="bg-[#0f172a] border border-white/10 rounded px-2 py-1 text-xs text-white/80">
+      {mode === "calls" ? fmtCps(val) : fmtNs(val)}
+    </div>
+  );
+}
+
+export function ProgramDetailPanel({ program, history, onClose }: Props) {
+  const hasHistory = (history?.samples?.length ?? 0) >= 2;
+
+  // Derive chart series
+  const { callsSeries, latencySeries, chartData } = useMemo(() => {
+    if (!hasHistory || !history) return { callsSeries: [], latencySeries: [], chartData: [] };
+    const calls = samplesToCallsPerSec(history.samples);
+    const lats = samplesToAvgLatency(history.samples);
+    const data = calls.map((c, i) => ({ i, calls: c, latency: lats[i] ?? 0 }));
+    return { callsSeries: calls, latencySeries: lats, chartData: data };
+  }, [history, hasHistory]);
+
+  const latest = history?.latest;
+  const hasLiveStats = latest !== null && latest !== undefined && (latest.callsPerSec > 0 || latest.avgLatencyNs > 0);
+
   return (
     <div className="detail-panel fade-up">
       {/* Header */}
@@ -134,10 +182,129 @@ export function ProgramDetailPanel({ program, onClose }: Props) {
               multi-attach
             </Badge>
           )}
+          {hasLiveStats && (
+            <Badge variant="outline" className="text-[10px] px-2 py-0.5 border-cyan-500/40 text-cyan-400 animate-pulse">
+              ● live stats
+            </Badge>
+          )}
         </div>
       </div>
 
       <div className="px-5 py-4 space-y-5">
+
+        {/* ── Runtime statistics chart ─────────────────────────────────────── */}
+        {hasHistory && (
+          <>
+            <section>
+              <h3 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-3">
+                Runtime Activity
+              </h3>
+
+              {/* Stat cards */}
+              {hasLiveStats && (
+                <div className="grid grid-cols-3 gap-2 mb-4">
+                  <StatCard
+                    icon={Zap}
+                    label="Calls/s"
+                    value={fmtCps(latest!.callsPerSec)}
+                    sub={`peak ${fmtCps(history!.peakCallsPerSec)}`}
+                    color="#22d3ee"
+                  />
+                  <StatCard
+                    icon={Timer}
+                    label="Avg Latency"
+                    value={fmtNs(latest!.avgLatencyNs)}
+                    sub={`peak ${fmtNs(history!.peakAvgLatencyNs)}`}
+                    color="#f59e0b"
+                  />
+                  <StatCard
+                    icon={BarChart2}
+                    label="CPU Share"
+                    value={fmtCpu(latest!.cpuFraction)}
+                    sub="of 1 core"
+                    color="#a78bfa"
+                  />
+                </div>
+              )}
+
+              {/* Calls/sec chart */}
+              {callsSeries.length >= 2 && (
+                <div className="mb-3">
+                  <div className="text-[10px] text-muted-foreground mb-1 flex items-center gap-1">
+                    <span className="inline-block w-2 h-2 rounded-full bg-cyan-400" />
+                    Calls / sec
+                  </div>
+                  <div className="h-[72px] w-full">
+                    <ResponsiveContainer width="100%" height="100%">
+                      <AreaChart data={chartData} margin={{ top: 2, right: 0, bottom: 2, left: 0 }}>
+                        <defs>
+                          <linearGradient id="dp-calls" x1="0" y1="0" x2="0" y2="1">
+                            <stop offset="5%" stopColor="#22d3ee" stopOpacity={0.3} />
+                            <stop offset="95%" stopColor="#22d3ee" stopOpacity={0.02} />
+                          </linearGradient>
+                        </defs>
+                        <XAxis dataKey="i" hide />
+                        <YAxis hide />
+                        <RechartTooltip content={<ChartTooltip mode="calls" />} />
+                        <Area
+                          type="monotone"
+                          dataKey="calls"
+                          stroke="#22d3ee"
+                          strokeWidth={1.5}
+                          fill="url(#dp-calls)"
+                          dot={false}
+                          isAnimationActive={false}
+                        />
+                      </AreaChart>
+                    </ResponsiveContainer>
+                  </div>
+                </div>
+              )}
+
+              {/* Avg latency chart */}
+              {latencySeries.length >= 2 && (
+                <div>
+                  <div className="text-[10px] text-muted-foreground mb-1 flex items-center gap-1">
+                    <span className="inline-block w-2 h-2 rounded-full bg-amber-400" />
+                    Avg latency (ns)
+                  </div>
+                  <div className="h-[56px] w-full">
+                    <ResponsiveContainer width="100%" height="100%">
+                      <AreaChart data={chartData} margin={{ top: 2, right: 0, bottom: 2, left: 0 }}>
+                        <defs>
+                          <linearGradient id="dp-latency" x1="0" y1="0" x2="0" y2="1">
+                            <stop offset="5%" stopColor="#f59e0b" stopOpacity={0.3} />
+                            <stop offset="95%" stopColor="#f59e0b" stopOpacity={0.02} />
+                          </linearGradient>
+                        </defs>
+                        <XAxis dataKey="i" hide />
+                        <YAxis hide />
+                        <RechartTooltip content={<ChartTooltip mode="latency" />} />
+                        <Area
+                          type="monotone"
+                          dataKey="latency"
+                          stroke="#f59e0b"
+                          strokeWidth={1.5}
+                          fill="url(#dp-latency)"
+                          dot={false}
+                          isAnimationActive={false}
+                        />
+                      </AreaChart>
+                    </ResponsiveContainer>
+                  </div>
+                </div>
+              )}
+
+              {!hasLiveStats && hasHistory && (
+                <div className="text-xs text-muted-foreground/50 text-center py-3">
+                  Accumulating data… stats appear after the program executes with bpf_stats_enabled=1
+                </div>
+              )}
+            </section>
+            <Separator className="bg-border/50" />
+          </>
+        )}
+
         {/* Identity */}
         <section>
           <h3 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2">Identity</h3>
@@ -159,13 +326,13 @@ export function ProgramDetailPanel({ program, onClose }: Props) {
           <div className="divide-y divide-border/50">
             <MetaRow icon={Clock} label="Loaded at" value={formatTimestamp(program.loadedAt)} />
             {program.runTimeNs !== undefined && (
-              <MetaRow icon={Activity} label="Total run time" value={formatNs(program.runTimeNs)} mono />
+              <MetaRow icon={Activity} label="Total run time" value={fmtNs(program.runTimeNs)} mono />
             )}
             {program.runCnt !== undefined && (
               <MetaRow icon={Activity} label="Run count" value={program.runCnt.toLocaleString()} mono />
             )}
             {program.runTimeNs !== undefined && program.runCnt !== undefined && program.runCnt > 0 && (
-              <MetaRow icon={Activity} label="Avg per run" value={formatNs(Math.round(program.runTimeNs / program.runCnt))} mono />
+              <MetaRow icon={Activity} label="Avg per run" value={fmtNs(Math.round(program.runTimeNs / program.runCnt))} mono />
             )}
           </div>
         </section>

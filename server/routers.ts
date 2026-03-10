@@ -8,6 +8,10 @@ import {
   getPollerStatus,
   triggerPoll,
   updateConfig,
+  getAllHistories,
+  getHistory,
+  buildActivitySummary,
+  isStatsEnabled,
 } from "./ebpf-poller";
 
 export const appRouter = router({
@@ -22,17 +26,19 @@ export const appRouter = router({
   }),
 
   ebpf: router({
-    // Get the latest snapshot (full data)
+    // ── Core snapshot ──────────────────────────────────────────────────────
+
+    /** Full snapshot — all programs, interfaces, cgroup tree, kernel zones */
     snapshot: publicProcedure.query(() => {
       return getLatestSnapshot();
     }),
 
-    // Get poller status and config
+    /** Poller status and config */
     status: publicProcedure.query(() => {
       return getPollerStatus();
     }),
 
-    // Get a single program by ID
+    /** Single program by ID */
     program: publicProcedure
       .input(z.object({ id: z.number() }))
       .query(({ input }) => {
@@ -41,7 +47,7 @@ export const appRouter = router({
         return snap.programs.find(p => p.id === input.id) ?? null;
       }),
 
-    // Update polling configuration
+    /** Update polling configuration */
     updateConfig: publicProcedure
       .input(
         z.object({
@@ -56,13 +62,13 @@ export const appRouter = router({
         return { success: true };
       }),
 
-    // Force an immediate poll
+    /** Force an immediate poll */
     refresh: publicProcedure.mutation(async () => {
       await triggerPoll();
       return getLatestSnapshot();
     }),
 
-    // Get summary stats only (lightweight)
+    /** Lightweight summary stats */
     stats: publicProcedure.query(() => {
       const snap = getLatestSnapshot();
       if (!snap) return null;
@@ -76,6 +82,42 @@ export const appRouter = router({
         hostname: snap.hostname,
         kernelVersion: snap.kernelVersion,
       };
+    }),
+
+    // ── Runtime statistics ─────────────────────────────────────────────────
+
+    /**
+     * Full ring-buffer history for all programs.
+     * Returns up to RING_SIZE samples per program with derived rates.
+     */
+    allHistory: publicProcedure.query(() => {
+      return getAllHistories();
+    }),
+
+    /**
+     * Ring-buffer history for a single program.
+     */
+    programHistory: publicProcedure
+      .input(z.object({ id: z.number() }))
+      .query(({ input }) => {
+        return getHistory(input.id);
+      }),
+
+    /**
+     * Activity summary — top-N programs by calls/sec, total CPU fraction.
+     * Lightweight — suitable for polling every second from the dashboard.
+     */
+    activity: publicProcedure.query(() => {
+      const snap = getLatestSnapshot();
+      if (!snap) {
+        return {
+          topByCallsPerSec: [],
+          totalCallsPerSec: 0,
+          totalCpuFraction: 0,
+          statsEnabled: isStatsEnabled(),
+        };
+      }
+      return buildActivitySummary(snap.programs, isStatsEnabled());
     }),
   }),
 });

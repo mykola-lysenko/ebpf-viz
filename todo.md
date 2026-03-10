@@ -46,3 +46,16 @@
 - [x] Demo mode banner
 - [x] Settings page: polling interval, demo mode toggle, bpftool path
 - [x] Vitest tests for parser and tRPC procedures
+
+## Runtime Statistics (run_cnt / run_time_ns)
+- [x] Auto-enable kernel.bpf_stats_enabled=1 in poller startup
+- [x] Delta ring buffer (last 60 samples) in poller with per-program rate computation
+- [x] ProgSample and ProgHistory types in shared/ebpf-types.ts
+- [x] trpc.ebpf.allHistory and trpc.ebpf.activity procedures
+- [x] Sparkline component (recharts AreaChart, reusable across all views)
+- [x] ProgBadge inline activity bar (width = relative run_cnt, color = avg latency)
+- [x] Programs Table: Calls/s, Avg Latency, CPU% columns (sortable)
+- [x] Program Detail Panel: time-series AreaChart + stat cards for derived metrics
+- [x] Kernel zone cards: heatmap glow intensity based on total CPU time consumed
+- [x] Dashboard: Runtime Activity leaderboard with sparklines
+- [x] Tests for ring buffer delta computation (41 tests total, all passing)

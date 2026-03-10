@@ -1,6 +1,6 @@
-import React, { createContext, useContext, useState, useCallback, useRef, useEffect } from "react";
+import React, { createContext, useContext, useState, useCallback, useMemo } from "react";
 import { trpc } from "@/lib/trpc";
-import type { BpfProgram, EbpfSnapshot } from "../../../shared/ebpf-types";
+import type { BpfProgram, EbpfSnapshot, ProgHistory, ActivitySummary } from "../../../shared/ebpf-types";
 
 interface EbpfContextValue {
   snapshot: EbpfSnapshot | null;
@@ -19,6 +19,11 @@ interface EbpfContextValue {
   setRefreshInterval: (ms: number) => void;
   refresh: () => void;
   demoMode: boolean;
+  /** Map from program ID → ProgHistory (ring buffer data) */
+  historyMap: Map<number, ProgHistory>;
+  /** Activity summary — top programs by calls/sec */
+  activity: ActivitySummary | null;
+  statsEnabled: boolean;
 }
 
 const EbpfContext = createContext<EbpfContextValue | null>(null);
@@ -30,17 +35,43 @@ export function EbpfProvider({ children }: { children: React.ReactNode }) {
   const [autoRefresh, setAutoRefresh] = useState(true);
   const [refreshInterval, setRefreshInterval] = useState(5000);
 
+  // ── Core snapshot ──────────────────────────────────────────────────────────
   const { data: snapshot, isLoading, error, refetch } = trpc.ebpf.snapshot.useQuery(undefined, {
     refetchInterval: autoRefresh ? refreshInterval : false,
     staleTime: 1000,
   });
 
-  const refresh = useCallback(() => {
-    refetch();
-  }, [refetch]);
+  // ── History ring buffer — poll at same interval ────────────────────────────
+  const { data: allHistories } = trpc.ebpf.allHistory.useQuery(undefined, {
+    refetchInterval: autoRefresh ? refreshInterval : false,
+    staleTime: 1000,
+  });
+
+  // ── Activity summary — slightly faster poll for the live indicator ─────────
+  const { data: activity } = trpc.ebpf.activity.useQuery(undefined, {
+    refetchInterval: autoRefresh ? Math.min(refreshInterval, 3000) : false,
+    staleTime: 500,
+  });
+
+  // ── Poller status (for statsEnabled flag) ─────────────────────────────────
+  const { data: pollerStatus } = trpc.ebpf.status.useQuery(undefined, {
+    refetchInterval: 10000,
+    staleTime: 5000,
+  });
+
+  const refresh = useCallback(() => { refetch(); }, [refetch]);
+
+  // Build a Map<id, ProgHistory> for O(1) lookup in components
+  const historyMap = useMemo(() => {
+    const m = new Map<number, ProgHistory>();
+    if (allHistories) {
+      for (const h of allHistories) m.set(h.id, h);
+    }
+    return m;
+  }, [allHistories]);
 
   // Filter programs based on search + type filter
-  const filteredPrograms = React.useMemo(() => {
+  const filteredPrograms = useMemo(() => {
     if (!snapshot) return [];
     let progs = snapshot.programs;
 
@@ -80,6 +111,9 @@ export function EbpfProvider({ children }: { children: React.ReactNode }) {
       setRefreshInterval,
       refresh,
       demoMode: snapshot?.demoMode ?? false,
+      historyMap,
+      activity: activity ?? null,
+      statsEnabled: pollerStatus?.statsEnabled ?? false,
     }}>
       {children}
     </EbpfContext.Provider>

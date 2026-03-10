@@ -195,3 +195,54 @@ export interface PollingConfig {
   bpftoolPath: string;
   sudo: boolean;
 }
+
+// ─── Runtime statistics ───────────────────────────────────────────────────────
+
+/** One data point from a single poll snapshot for a specific program */
+export interface ProgSample {
+  /** Unix timestamp in milliseconds */
+  ts: number;
+  /** Cumulative run count at this snapshot */
+  runCnt: number;
+  /** Cumulative run_time_ns at this snapshot */
+  runTimeNs: number;
+  /** Recursion misses at this snapshot */
+  recursionMisses: number;
+}
+
+/** Derived per-interval rates computed from two consecutive ProgSamples */
+export interface ProgRates {
+  /** Calls per second over the last interval */
+  callsPerSec: number;
+  /** Average execution latency in nanoseconds over the last interval */
+  avgLatencyNs: number;
+  /** CPU time share as a fraction 0–1 over the last interval */
+  cpuFraction: number;
+  /** Recursion miss rate (misses / calls) over the last interval */
+  recursionRate: number;
+}
+
+/** Full history ring for one program — up to RING_SIZE samples */
+export interface ProgHistory {
+  id: number;
+  /** Raw samples in chronological order */
+  samples: ProgSample[];
+  /** Latest derived rates (computed from last two samples) */
+  latest: ProgRates | null;
+  /** Peak calls/sec seen in the ring window */
+  peakCallsPerSec: number;
+  /** Peak avg latency seen in the ring window */
+  peakAvgLatencyNs: number;
+}
+
+/** Summary of all programs' activity for the current snapshot */
+export interface ActivitySummary {
+  /** Programs sorted by current calls/sec descending */
+  topByCallsPerSec: Array<{ id: number; name: string; rawType: string; callsPerSec: number; avgLatencyNs: number }>;
+  /** Total calls/sec across all programs */
+  totalCallsPerSec: number;
+  /** Total CPU fraction across all programs */
+  totalCpuFraction: number;
+  /** Whether bpf_stats_enabled is active on this host */
+  statsEnabled: boolean;
+}

@@ -1,11 +1,12 @@
-import React from "react";
+import React, { useMemo } from "react";
 import { useEbpf } from "@/contexts/EbpfContext";
 import { ProgBadge } from "@/components/ProgBadge";
 import { Badge } from "@/components/ui/badge";
-import { Cpu, Network, FolderTree, Activity, Zap, AlertTriangle, Server, GitBranch } from "lucide-react";
+import { Cpu, Network, FolderTree, Activity, Zap, AlertTriangle, Server, GitBranch, Timer, BarChart2 } from "lucide-react";
 import { Link } from "wouter";
 import { cn } from "@/lib/utils";
 import { TYPE_COLORS } from "../../../server/ebpf-parser";
+import Sparkline, { samplesToCallsPerSec, fmtCps, fmtNs, fmtCpu } from "@/components/Sparkline";
 
 function StatCard({ label, value, sub, icon: Icon, color }: {
   label: string; value: string | number; sub?: string;
@@ -79,8 +80,138 @@ function QuickNavCard({ href, icon: Icon, label, count, color }: {
   );
 }
 
+// ── Activity Leaderboard ──────────────────────────────────────────────────────
+
+function ActivityLeaderboard() {
+  const { activity, historyMap, snapshot, statsEnabled } = useEbpf();
+
+  const topPrograms = activity?.topByCallsPerSec ?? [];
+  const totalCps = activity?.totalCallsPerSec ?? 0;
+  const totalCpu = activity?.totalCpuFraction ?? 0;
+
+  // Get full program objects for the top programs
+  const progMap = useMemo(() => {
+    const m = new Map();
+    if (snapshot) for (const p of snapshot.programs) m.set(p.id, p);
+    return m;
+  }, [snapshot]);
+
+  if (!statsEnabled) {
+    return (
+      <div className="glass rounded-xl p-5">
+        <h2 className="text-sm font-semibold text-foreground mb-3 flex items-center gap-2">
+          <Zap size={14} className="text-primary" />
+          Runtime Activity
+        </h2>
+        <div className="text-xs text-muted-foreground/60 text-center py-6">
+          Enable <code className="font-mono bg-white/5 px-1 rounded">kernel.bpf_stats_enabled=1</code> to see live call rates and CPU usage.
+        </div>
+      </div>
+    );
+  }
+
+  if (topPrograms.length === 0) {
+    return (
+      <div className="glass rounded-xl p-5">
+        <h2 className="text-sm font-semibold text-foreground mb-3 flex items-center gap-2">
+          <Zap size={14} className="text-primary" />
+          Runtime Activity
+        </h2>
+        <div className="text-xs text-muted-foreground/60 text-center py-6">
+          Accumulating data… programs will appear here once they execute.
+        </div>
+      </div>
+    );
+  }
+
+  const maxCps = topPrograms[0]?.callsPerSec ?? 1;
+
+  return (
+    <div className="glass rounded-xl p-5">
+      <div className="flex items-center justify-between mb-4">
+        <h2 className="text-sm font-semibold text-foreground flex items-center gap-2">
+          <Zap size={14} className="text-cyan-400" />
+          Runtime Activity
+        </h2>
+        <div className="flex items-center gap-3 text-xs text-muted-foreground">
+          <span className="flex items-center gap-1">
+            <span className="w-1.5 h-1.5 rounded-full bg-cyan-400 animate-pulse" />
+            {fmtCps(totalCps)} total
+          </span>
+          <span className="text-violet-400">{fmtCpu(totalCpu)} CPU</span>
+        </div>
+      </div>
+
+      <div className="space-y-3">
+        {topPrograms.map((entry, rank) => {
+          const prog = progMap.get(entry.id);
+          if (!prog) return null;
+          const history = historyMap.get(entry.id);
+          const sparkData = history?.samples && history.samples.length >= 2
+            ? samplesToCallsPerSec(history.samples)
+            : [];
+          const barFraction = maxCps > 0 ? Math.min(1, entry.callsPerSec / maxCps) : 0;
+
+          // Latency color
+          const lat = entry.avgLatencyNs;
+          const lColor = lat === 0 ? "#6b7280"
+            : lat < 1_000 ? "#22d3ee"
+            : lat < 100_000 ? "#4ade80"
+            : lat < 1_000_000 ? "#f59e0b"
+            : "#f87171";
+
+          return (
+            <div key={entry.id} className="flex items-center gap-3 group">
+              {/* Rank */}
+              <span className="text-[10px] font-mono text-muted-foreground/40 w-4 shrink-0 text-right">
+                {rank + 1}
+              </span>
+
+              {/* Program badge */}
+              <div className="w-36 shrink-0">
+                <ProgBadge program={prog} history={history} compact />
+              </div>
+
+              {/* Bar + sparkline */}
+              <div className="flex-1 flex flex-col gap-0.5 min-w-0">
+                <div className="flex items-center gap-2">
+                  <div className="flex-1 h-[3px] rounded-full bg-white/5 overflow-hidden">
+                    <div
+                      className="h-full rounded-full transition-all duration-700"
+                      style={{
+                        width: `${barFraction * 100}%`,
+                        background: lColor,
+                        minWidth: barFraction > 0 ? 2 : 0,
+                      }}
+                    />
+                  </div>
+                  {sparkData.length >= 2 && (
+                    <Sparkline data={sparkData} height={14} width={48} color={lColor} variant="calls" />
+                  )}
+                </div>
+              </div>
+
+              {/* Metrics */}
+              <div className="flex flex-col items-end gap-0.5 shrink-0 min-w-[72px]">
+                <span className="text-[11px] font-mono tabular-nums" style={{ color: lColor }}>
+                  {fmtCps(entry.callsPerSec)}
+                </span>
+                <span className="text-[10px] font-mono tabular-nums text-muted-foreground/60">
+                  {fmtNs(entry.avgLatencyNs)}
+                </span>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+// ── Main ──────────────────────────────────────────────────────────────────────
+
 export default function Dashboard() {
-  const { snapshot, isLoading, demoMode } = useEbpf();
+  const { snapshot, isLoading, demoMode, activity, statsEnabled } = useEbpf();
 
   if (isLoading && !snapshot) {
     return (
@@ -106,6 +237,9 @@ export default function Dashboard() {
   const netProgs = networkInterfaces.reduce((acc, i) => acc + i.allPrograms.length, 0);
   const cgroupProgs = programs.filter(p => p.type.startsWith("cgroup") || p.type === "sock_ops").length;
 
+  const totalCps = activity?.totalCallsPerSec ?? 0;
+  const totalCpu = activity?.totalCpuFraction ?? 0;
+
   return (
     <div className="p-6 space-y-6 max-w-7xl mx-auto">
       {/* Header */}
@@ -115,6 +249,12 @@ export default function Dashboard() {
           <p className="text-sm text-muted-foreground mt-0.5">
             {snapshot.hostname} · {snapshot.kernelVersion}
             {demoMode && <span className="ml-2 text-amber-400">(demo mode)</span>}
+            {statsEnabled && totalCps > 0 && (
+              <span className="ml-2 text-cyan-400 inline-flex items-center gap-1">
+                <span className="w-1.5 h-1.5 rounded-full bg-cyan-400 animate-pulse" />
+                {fmtCps(totalCps)} · {fmtCpu(totalCpu)} CPU
+              </span>
+            )}
           </p>
         </div>
         <div className="text-xs text-muted-foreground font-mono">
@@ -188,6 +328,9 @@ export default function Dashboard() {
           </div>
         </div>
       </div>
+
+      {/* Activity Leaderboard */}
+      <ActivityLeaderboard />
 
       {/* Kernel zones overview */}
       <div className="glass rounded-xl p-5">

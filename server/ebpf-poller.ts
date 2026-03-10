@@ -4,6 +4,13 @@ import { hostname } from "os";
 import type { EbpfSnapshot, PollingConfig, RawBpfProg, RawCgroupEntry, RawNetSnapshot } from "../shared/ebpf-types";
 import { buildSnapshot } from "./ebpf-parser";
 import { MOCK_CGROUPS, MOCK_NET, MOCK_PROGS } from "./ebpf-mock";
+import {
+  ingestSnapshot,
+  pruneStale,
+  buildActivitySummary,
+  getAllHistories,
+  getHistory,
+} from "./ebpf-stats-ring";
 
 const execAsync = promisify(exec);
 
@@ -25,8 +32,30 @@ let lastError: string | null = null;
 let bpftoolVersion = "unknown";
 let kernelVersion = "unknown";
 let isPolling = false;
+let statsEnabled = false;
 
 const listeners = new Set<(snap: EbpfSnapshot) => void>();
+
+// ─── bpf_stats_enabled ─────────────────────────────────────────────────────
+
+async function ensureBpfStatsEnabled(): Promise<void> {
+  try {
+    const { stdout } = await execAsync("cat /proc/sys/kernel/bpf_stats_enabled 2>/dev/null");
+    const current = parseInt(stdout.trim(), 10);
+    if (current === 1) {
+      statsEnabled = true;
+      console.log("[ebpf-poller] bpf_stats_enabled is already 1 — run_time_ns will be collected");
+      return;
+    }
+    // Try to enable it
+    await execAsync("sudo sysctl -w kernel.bpf_stats_enabled=1 2>/dev/null");
+    statsEnabled = true;
+    console.log("[ebpf-poller] Enabled kernel.bpf_stats_enabled=1 — runtime stats will accumulate");
+  } catch {
+    statsEnabled = false;
+    console.warn("[ebpf-poller] Could not enable bpf_stats_enabled — run_time_ns will be 0");
+  }
+}
 
 // ─── System info ───────────────────────────────────────────────────────────
 
@@ -101,14 +130,16 @@ async function poll(): Promise<void> {
     let cgroups: RawCgroupEntry[];
 
     if (config.demoMode) {
-      // Add slight variation to mock data to simulate live updates
+      // Simulate incrementing stats in demo mode so sparklines are always active
+      const now = Date.now();
       progs = MOCK_PROGS.map(p => ({
         ...p,
-        run_cnt: p.run_cnt !== undefined ? p.run_cnt + Math.floor(Math.random() * 50) : undefined,
-        run_time_ns: p.run_time_ns !== undefined ? p.run_time_ns + Math.floor(Math.random() * 1000000) : undefined,
+        run_cnt: (p.run_cnt ?? 0) + Math.floor(Math.random() * 200 + 10),
+        run_time_ns: (p.run_time_ns ?? 0) + Math.floor(Math.random() * 5_000_000 + 50_000),
       }));
       net = MOCK_NET;
       cgroups = MOCK_CGROUPS;
+      void now; // used implicitly via Date.now() in ingestSnapshot
     } else {
       const data = await fetchLiveData();
       progs = data.progs;
@@ -122,6 +153,10 @@ async function poll(): Promise<void> {
       bpftoolVersion,
       demoMode: config.demoMode,
     });
+
+    // ── Feed the stats ring buffer ──────────────────────────────────────────
+    ingestSnapshot(snap.programs, snap.timestamp);
+    pruneStale(new Set(snap.programs.map(p => p.id)));
 
     latestSnapshot = snap;
     lastError = null;
@@ -142,6 +177,7 @@ async function poll(): Promise<void> {
         bpftoolVersion: "demo",
         demoMode: true,
       });
+      ingestSnapshot(snap.programs, snap.timestamp);
       latestSnapshot = snap;
       for (const cb of Array.from(listeners)) {
         try { cb(snap); } catch { /* ignore */ }
@@ -160,9 +196,12 @@ export async function startPoller(): Promise<void> {
   // Check if bpftool is actually available
   try {
     await runBpftool("version");
+    // Only try to enable stats when we have a real bpftool
+    await ensureBpfStatsEnabled();
   } catch {
     console.warn("[ebpf-poller] bpftool not accessible, enabling demo mode");
     config.demoMode = true;
+    statsEnabled = true; // demo mode always has stats
   }
 
   await poll(); // immediate first poll
@@ -182,17 +221,23 @@ export function getLatestSnapshot(): EbpfSnapshot | null {
   return latestSnapshot;
 }
 
+export function isStatsEnabled(): boolean {
+  return statsEnabled;
+}
+
 export function getPollerStatus(): {
   running: boolean;
   config: PollingConfig;
   lastError: string | null;
   lastPollTime: number | null;
+  statsEnabled: boolean;
 } {
   return {
     running: pollingTimer !== null,
     config,
     lastError,
     lastPollTime: latestSnapshot?.timestamp ?? null,
+    statsEnabled,
   };
 }
 
@@ -219,3 +264,6 @@ export function subscribe(cb: (snap: EbpfSnapshot) => void): () => void {
 export function triggerPoll(): Promise<void> {
   return poll();
 }
+
+// Re-export ring buffer accessors for use in routers
+export { getAllHistories, getHistory, buildActivitySummary };
