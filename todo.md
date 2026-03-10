@@ -76,15 +76,24 @@
 - [x] Click zone/cgroup/interface → zoom-fit that region (double-click)
 
 ## Code Inspector
-- [ ] Install @viz-js/viz for Graphviz CFG rendering
-- [ ] Backend: tRPC ebpf.progDump procedure (xlated, jited, linum, visual/dot)
-- [ ] Backend: auto-set kptr_restrict=0 when fetching jited dump
-- [ ] Shared type: ProgDump with xlated[], jited[], dot, linumLines[], available flags
-- [ ] Frontend: CodeInspector full-screen modal component
-- [ ] Tab 1 — BPF Bytecode: line numbers, opcode/register/immediate coloring, jump-target highlighting
-- [ ] Tab 2 — CFG: @viz-js/viz DOT renderer with pan/zoom
-- [ ] Tab 3 — JIT Assembly: disassembly with register coloring, unavailable state
-- [ ] Tab 4 — C Source: interleaved BTF linum view, unavailable state
-- [ ] Wire "View Code" button into ProgramDetailPanel
-- [ ] Wire "View Code" into Programs table row action
-- [ ] Tests for dump parser
+- [x] Install @viz-js/viz for Graphviz CFG rendering
+- [x] Backend: tRPC ebpf.progDump procedure (xlated, jited, linum, visual/dot)
+- [x] Backend: auto-set kptr_restrict=0 when fetching jited dump
+- [x] Shared type: ProgDump with xlated[], jited[], dot, linumLines[], available flags
+- [x] Frontend: CodeInspector full-screen modal component
+- [x] Tab 1 — BPF Bytecode: line numbers, opcode/register/immediate coloring, jump-target highlighting
+- [x] Tab 2 — CFG: @viz-js/viz DOT renderer with pan/zoom
+- [x] Tab 3 — JIT Assembly: disassembly with register coloring, unavailable state
+- [x] Tab 4 — C Source: interleaved BTF linum view, unavailable state
+- [x] Wire "View Code" button into ProgramDetailPanel
+- [x] Tests for dump parser
+
+## Standalone Mode (no DB, no OAuth)
+- [ ] Remove DB dependency from server startup and routers
+- [ ] Replace OAuth middleware with no-op passthrough
+- [ ] Remove login/logout UI from frontend
+- [ ] Remove useAuth hook usage from layout and pages
+- [ ] Write .env.example for standalone install
+- [ ] Write Dockerfile for containerized deployment
+- [ ] Write INSTALL.md with step-by-step instructions
+- [ ] Update tests to reflect no-auth context
