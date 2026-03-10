@@ -74,3 +74,17 @@
 - [x] Search highlighting (dim non-matching, ring around matches)
 - [x] Click program → open existing ProgramDetailPanel
 - [x] Click zone/cgroup/interface → zoom-fit that region (double-click)
+
+## Code Inspector
+- [ ] Install @viz-js/viz for Graphviz CFG rendering
+- [ ] Backend: tRPC ebpf.progDump procedure (xlated, jited, linum, visual/dot)
+- [ ] Backend: auto-set kptr_restrict=0 when fetching jited dump
+- [ ] Shared type: ProgDump with xlated[], jited[], dot, linumLines[], available flags
+- [ ] Frontend: CodeInspector full-screen modal component
+- [ ] Tab 1 — BPF Bytecode: line numbers, opcode/register/immediate coloring, jump-target highlighting
+- [ ] Tab 2 — CFG: @viz-js/viz DOT renderer with pan/zoom
+- [ ] Tab 3 — JIT Assembly: disassembly with register coloring, unavailable state
+- [ ] Tab 4 — C Source: interleaved BTF linum view, unavailable state
+- [ ] Wire "View Code" button into ProgramDetailPanel
+- [ ] Wire "View Code" into Programs table row action
+- [ ] Tests for dump parser

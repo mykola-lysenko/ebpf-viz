@@ -1,14 +1,14 @@
-import React, { useMemo } from "react";
-import { X, Copy, Check, Clock, Cpu, Hash, Tag, Database, Activity, Shield, AlertTriangle, Zap, Timer, BarChart2 } from "lucide-react";
+import React, { useMemo, useState } from "react";
+import { X, Copy, Check, Clock, Cpu, Hash, Tag, Database, Activity, Shield, AlertTriangle, Zap, Timer, BarChart2, Code2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
 import { AreaChart, Area, XAxis, YAxis, Tooltip as RechartTooltip, ResponsiveContainer } from "recharts";
 import type { BpfProgram, ProgHistory } from "../../../shared/ebpf-types";
 import { cn } from "@/lib/utils";
-import { useState } from "react";
 import { toast } from "sonner";
 import { samplesToCallsPerSec, samplesToAvgLatency, fmtCps, fmtNs, fmtCpu } from "./Sparkline";
+import { CodeInspector } from "./CodeInspector";
 
 interface Props {
   program: BpfProgram;
@@ -114,6 +114,7 @@ function ChartTooltip({ active, payload, label, mode }: {
 }
 
 export function ProgramDetailPanel({ program, history, onClose }: Props) {
+  const [showCode, setShowCode] = useState(false);
   const hasHistory = (history?.samples?.length ?? 0) >= 2;
 
   // Derive chart series
@@ -129,6 +130,7 @@ export function ProgramDetailPanel({ program, history, onClose }: Props) {
   const hasLiveStats = latest !== null && latest !== undefined && (latest.callsPerSec > 0 || latest.avgLatencyNs > 0);
 
   return (
+    <>
     <div className="detail-panel fade-up">
       {/* Header */}
       <div className="sticky top-0 z-10 bg-[oklch(0.10_0.012_240/0.97)] backdrop-blur-xl border-b border-border px-5 py-4">
@@ -153,9 +155,21 @@ export function ProgramDetailPanel({ program, history, onClose }: Props) {
             </h2>
             <div className="text-xs text-muted-foreground mt-0.5">ID: {program.id}</div>
           </div>
-          <Button variant="ghost" size="icon" className="w-7 h-7 shrink-0" onClick={onClose}>
-            <X size={14} />
-          </Button>
+          <div className="flex items-center gap-1 shrink-0">
+            <Button
+              variant="ghost"
+              size="sm"
+              className="h-7 px-2 text-xs text-muted-foreground hover:text-foreground gap-1.5"
+              onClick={() => setShowCode(true)}
+              title="Open Code Inspector"
+            >
+              <Code2 size={12} />
+              Code
+            </Button>
+            <Button variant="ghost" size="icon" className="w-7 h-7" onClick={onClose}>
+              <X size={14} />
+            </Button>
+          </div>
         </div>
 
         {/* State badges */}
@@ -444,5 +458,11 @@ export function ProgramDetailPanel({ program, history, onClose }: Props) {
         )}
       </div>
     </div>
+
+    {/* Code Inspector full-screen modal */}
+    {showCode && (
+      <CodeInspector program={program} onClose={() => setShowCode(false)} />
+    )}
+    </>
   );
 }

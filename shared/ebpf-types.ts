@@ -246,3 +246,40 @@ export interface ActivitySummary {
   /** Whether bpf_stats_enabled is active on this host */
   statsEnabled: boolean;
 }
+
+// ─── Code Inspector types ─────────────────────────────────────────────────────
+
+/** A single xlated (BPF bytecode) instruction */
+export interface XlatedInsn {
+  index: number;
+  disasm: string;
+  opcodes?: string;
+  /** Source file:line annotation from BTF linum info, e.g. "kernel/bpf/core.c:42" */
+  linum?: string;
+}
+
+/** A single JIT-compiled native instruction */
+export interface JitedInsn {
+  /** PC address as hex string */
+  pc: string;
+  disasm: string;
+  opcodes?: string;
+}
+
+/** Full code dump for one BPF program */
+export interface ProgDump {
+  progId: number;
+  /** BPF bytecode instructions — always available */
+  xlated: XlatedInsn[];
+  /** Graphviz DOT source for the CFG — always available */
+  cfgDot: string;
+  /** JIT-compiled native instructions — null when unavailable */
+  jited: JitedInsn[] | null;
+  /** Human-readable reason why jited is unavailable */
+  jitedUnavailableReason?: string;
+  /** True when BTF line-number info is embedded (linum annotations present) */
+  hasLineInfo: boolean;
+  /** True when a BTF object is attached to this program */
+  hasBtf: boolean;
+  btfId?: number;
+}

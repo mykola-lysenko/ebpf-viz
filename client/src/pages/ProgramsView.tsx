@@ -197,6 +197,15 @@ export default function ProgramsView() {
   const [sortKey, setSortKey] = useState<SortKey>("id");
   const [sortDir, setSortDir] = useState<SortDir>("asc");
 
+  // Compute max calls/sec across all visible programs for bar scaling
+  // NOTE: must be before any early returns to satisfy Rules of Hooks
+  const maxCallsPerSec = useMemo(() => {
+    return filteredPrograms.reduce((max, p) => {
+      const h = historyMap.get(p.id);
+      return Math.max(max, h?.latest?.callsPerSec ?? 0);
+    }, 0);
+  }, [filteredPrograms, historyMap]);
+
   if (!snapshot) {
     return <div className="flex items-center justify-center h-full"><p className="text-muted-foreground">Loading…</p></div>;
   }
@@ -207,14 +216,6 @@ export default function ProgramsView() {
     if (sortKey === key) setSortDir(d => d === "asc" ? "desc" : "asc");
     else { setSortKey(key); setSortDir("asc"); }
   };
-
-  // Compute max calls/sec across all visible programs for bar scaling
-  const maxCallsPerSec = useMemo(() => {
-    return filteredPrograms.reduce((max, p) => {
-      const h = historyMap.get(p.id);
-      return Math.max(max, h?.latest?.callsPerSec ?? 0);
-    }, 0);
-  }, [filteredPrograms, historyMap]);
 
   const sorted = [...filteredPrograms].sort((a, b) => {
     let av: string | number = 0, bv: string | number = 0;

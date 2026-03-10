@@ -13,6 +13,7 @@ import {
   buildActivitySummary,
   isStatsEnabled,
 } from "./ebpf-poller";
+import { fetchProgDump } from "./ebpf-dump";
 
 export const appRouter = router({
   system: systemRouter,
@@ -83,6 +84,29 @@ export const appRouter = router({
         kernelVersion: snap.kernelVersion,
       };
     }),
+
+    // ── Code Inspector ─────────────────────────────────────────────────────
+
+    /**
+     * Fetch the full code dump for a single BPF program:
+     * xlated bytecode, CFG DOT, jited assembly (when available),
+     * and BTF line-number info (when available).
+     */
+    progDump: publicProcedure
+      .input(z.object({ id: z.number() }))
+      .query(async ({ input }) => {
+        const snap = getLatestSnapshot();
+        const prog = snap?.programs.find(p => p.id === input.id);
+        if (!prog) return null;
+        try {
+          const dump = await fetchProgDump(input.id, !!prog.btfId, prog.jited);
+          if (prog.btfId) dump.btfId = prog.btfId;
+          return dump;
+        } catch (err) {
+          console.error("[progDump] failed for id", input.id, err);
+          return null;
+        }
+      }),
 
     // ── Runtime statistics ─────────────────────────────────────────────────
 
