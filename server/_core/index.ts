@@ -40,13 +40,32 @@ async function startServer() {
   app.get("/api/sse", sseHandler);
 
   // tRPC API
-  app.use(
-    "/api/trpc",
-    createExpressMiddleware({
-      router: appRouter,
-      createContext,
-    })
-  );
+  // On Node 16, tRPC's writeResponse() calls res.end() in a finally{} block, but
+  // the 'close' event on ServerResponse fires synchronously inside res.end() on
+  // Node 16 (unlike Node 18+ where it fires asynchronously). This causes the
+  // AbortController tied to the request signal to fire, which can cause
+  // internal_exceptionHandler to call res.end() a second time, crashing with
+  // ERR_STREAM_WRITE_AFTER_END. We fix this by:
+  // 1. Making res.end() idempotent (no-op if already ended)
+  // 2. Swallowing write-after-end errors on the response stream
+  const trpcMiddleware = createExpressMiddleware({ router: appRouter, createContext });
+  app.use("/api/trpc", (req, res, next) => {
+    // Make res.end() idempotent to survive the Node 16 double-end race
+    const originalEnd = res.end.bind(res);
+    let ended = false;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (res as any).end = function patchedEnd(...args: unknown[]) {
+      if (ended) return res; // already ended — swallow the second call
+      ended = true;
+      return (originalEnd as (...a: unknown[]) => unknown)(...args);
+    };
+    // Swallow write-after-end errors so they don't kill the process
+    res.on("error", (err: NodeJS.ErrnoException) => {
+      if (err.code === "ERR_STREAM_WRITE_AFTER_END") return; // expected on Node 16
+      console.error("[trpc] unexpected response stream error:", err.message);
+    });
+    trpcMiddleware(req, res, next);
+  });
 
   // Development mode uses Vite, production mode uses static files
   if (process.env.NODE_ENV === "development") {

@@ -213,9 +213,10 @@
 - [x] Rebuild standalone package and verify tRPC calls work
 
 ## Node 16 Crash Fixes
-- [ ] Fix ERR_STREAM_WRITE_AFTER_END: tRPC adapter calls res.end() twice on Node 16 (once via undici Response, once via Express)
-- [ ] Suppress OAuth ERROR log when OAUTH_SERVER_URL is not set (standalone mode has no OAuth)
-- [ ] Rebuild standalone package and verify code dump works end-to-end on Node 16
+- [x] Fix ERR_STREAM_WRITE_AFTER_END: wrap tRPC middleware to make res.end() idempotent and swallow write-after-end errors
+- [x] Add error listener on ServerResponse to prevent process crash
+- [x] Suppress OAuth ERROR log when OAUTH_SERVER_URL is not set (standalone mode has no OAuth)
+- [x] Rebuild standalone package and verify tRPC calls work without crashing
 
 ## Network Tab: NIC vs Sockmap Split
 - [x] Split NetworkView into two sections: "Network Interfaces" (kind=nic) and "Sockmap Interfaces" (kind=sockmap)

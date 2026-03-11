@@ -90253,11 +90253,10 @@ var GET_USER_INFO_WITH_JWT_PATH = `/webdev.v1.WebDevAuthPublicService/GetUserInf
 var OAuthService = class {
   constructor(client) {
     this.client = client;
-    console.log("[OAuth] Initialized with baseURL:", ENV.oAuthServerUrl);
-    if (!ENV.oAuthServerUrl) {
-      console.error(
-        "[OAuth] ERROR: OAUTH_SERVER_URL is not configured! Set OAUTH_SERVER_URL environment variable."
-      );
+    if (ENV.oAuthServerUrl) {
+      console.log("[OAuth] Initialized with baseURL:", ENV.oAuthServerUrl);
+    } else {
+      console.log("[OAuth] Running in standalone mode (auth disabled \u2014 no OAUTH_SERVER_URL)");
     }
   }
   decodeState(state) {
@@ -90563,13 +90562,21 @@ async function startServer() {
   app.use(import_express2.default.json({ limit: "50mb" }));
   app.use(import_express2.default.urlencoded({ limit: "50mb", extended: true }));
   app.get("/api/sse", sseHandler);
-  app.use(
-    "/api/trpc",
-    createExpressMiddleware({
-      router: appRouter,
-      createContext
-    })
-  );
+  const trpcMiddleware = createExpressMiddleware({ router: appRouter, createContext });
+  app.use("/api/trpc", (req, res, next) => {
+    const originalEnd = res.end.bind(res);
+    let ended = false;
+    res.end = function patchedEnd(...args) {
+      if (ended) return res;
+      ended = true;
+      return originalEnd(...args);
+    };
+    res.on("error", (err) => {
+      if (err.code === "ERR_STREAM_WRITE_AFTER_END") return;
+      console.error("[trpc] unexpected response stream error:", err.message);
+    });
+    trpcMiddleware(req, res, next);
+  });
   if (false) {
     await setupVite(app, server);
   } else {
