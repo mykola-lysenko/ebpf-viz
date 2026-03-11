@@ -90580,9 +90580,41 @@ async function startServer() {
   const server = createServer2(app);
   app.use(import_express2.default.json({ limit: "50mb" }));
   app.use(import_express2.default.urlencoded({ limit: "50mb", extended: true }));
+  app.get("/healthz", (_req, res) => {
+    res.json({ status: "ok", uptime: process.uptime(), timestamp: (/* @__PURE__ */ new Date()).toISOString() });
+  });
   app.get("/api/sse", sseHandler);
   const trpcMiddleware = createExpressMiddleware({ router: appRouter, createContext });
   app.use("/api/trpc", (req, res, next) => {
+    const chunks = [];
+    const originalWrite = res.write.bind(res);
+    const originalEnd = res.end.bind(res);
+    let ended = false;
+    res.write = function bufferedWrite(chunk, encodingOrCb, cb) {
+      if (ended) return false;
+      const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk, typeof encodingOrCb === "string" ? encodingOrCb : "utf8");
+      chunks.push(buf);
+      const callback = typeof encodingOrCb === "function" ? encodingOrCb : cb;
+      if (callback) setImmediate(callback);
+      return true;
+    };
+    res.end = function bufferedEnd(chunkOrCb, encodingOrCb, cb) {
+      if (ended) return res;
+      ended = true;
+      if (chunkOrCb && typeof chunkOrCb !== "function") {
+        const buf = Buffer.isBuffer(chunkOrCb) ? chunkOrCb : Buffer.from(chunkOrCb, typeof encodingOrCb === "string" ? encodingOrCb : "utf8");
+        chunks.push(buf);
+      }
+      const combined = Buffer.concat(chunks);
+      if (combined.length > 0 && !res.headersSent) {
+        res.setHeader("Content-Length", combined.length);
+      }
+      const callback = typeof chunkOrCb === "function" ? chunkOrCb : typeof encodingOrCb === "function" ? encodingOrCb : cb;
+      if (combined.length > 0) {
+        return originalEnd(combined, callback);
+      }
+      return originalEnd(callback);
+    };
     const originalOnce = res.once.bind(res);
     res.once = function patchedOnce(event, listener) {
       if (event === "close") {
@@ -90591,13 +90623,6 @@ async function startServer() {
         });
       }
       return originalOnce(event, listener);
-    };
-    const originalEnd = res.end.bind(res);
-    let ended = false;
-    res.end = function patchedEnd(...args) {
-      if (ended) return res;
-      ended = true;
-      return originalEnd(...args);
     };
     res.on("error", (err) => {
       if (err.code === "ERR_STREAM_WRITE_AFTER_END") return;

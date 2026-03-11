@@ -245,3 +245,20 @@
 - [x] Fix: patch ReadableStream.prototype.pipeTo in polyfill.ts to strip the signal option on Node 16, preventing any abort from truncating the body
 - [x] Also install ReadableStream/WritableStream/TransformStream globals from stream/web for correct instanceof checks
 - [x] Rebuilt and verified: 22KB response delivered as valid JSON, server stays alive
+
+## Code Dump: Deep Debug (still failing after pipeTo fix)
+- [ ] Trace full request/response path for progDump on a real BPF program
+- [ ] Identify exact truncation point
+- [ ] Fix and verify
+
+## Code Dump: Definitive Fix (response buffering)
+- [x] Root cause confirmed: tRPC uses chunked transfer encoding; any abort mid-stream truncates body on Node 16
+- [x] Fix: intercept res.write() in tRPC middleware wrapper to buffer all chunks in memory, then send as single res.end(buffer) with Content-Length header — no chunked encoding, no abort risk
+- [x] Verified: Content-Length: 25195 set correctly, full 25KB JSON delivered, server stays alive
+
+## Remaining Action Items
+- [x] Add Node.js version check to start.sh (fail if < 16)
+- [x] Add /healthz endpoint for monitoring
+- [x] Add ./start.sh --demo flag for DEMO_MODE=1
+- [x] Add --no-warnings flag to suppress Node 16 ESM warnings
+- [x] Rebuild standalone package with all fixes and deliver to user
