@@ -205,3 +205,9 @@
 - [x] Update .env.example with HOST documentation
 - [x] Update build-standalone.sh start.sh template with HOST documentation
 - [x] Rebuild standalone package
+
+## Node 16 Web API Polyfill
+- [x] Add undici as a dependency for Headers/Request/Response/fetch polyfill
+- [x] Create server/polyfill.ts that installs globals when missing
+- [x] Import polyfill as first import in server/_core/index.ts
+- [x] Rebuild standalone package and verify tRPC calls work

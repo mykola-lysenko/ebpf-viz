@@ -1,3 +1,4 @@
+import "../polyfill"; // Must be first — installs Web API globals on Node < 18
 import "dotenv/config";
 import express from "express";
 import { createServer } from "http";
