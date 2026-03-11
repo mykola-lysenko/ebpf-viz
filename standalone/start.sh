@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# start.sh — run on the devserver (requires Node.js >= 18 only, no npm needed)
+# start.sh — run on the devserver (requires Node.js >= 16 only, no npm needed)
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

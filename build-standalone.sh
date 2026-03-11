@@ -31,8 +31,9 @@ NODE_ENV=production npx vite build
 # ── 3. Create stubs for dev-only packages ─────────────────────────────────────
 # vite and its plugins are dev-only; the server never calls setupVite() in
 # production (guarded by NODE_ENV === "development"), but esbuild still sees
-# the static imports in vite.ts. We replace them with no-op ESM stubs so the
-# bundle has no external dependencies on vite packages at runtime.
+# the static imports in vite.ts and vite.config.ts.
+# We replace them with no-op ESM stubs so the bundle has no runtime dependency
+# on vite packages, and avoids import.meta.dirname (Node 21+ only) at startup.
 echo "[3/6] Creating dev-dependency stubs..."
 rm -rf "$STUB_DIR"
 mkdir -p "$STUB_DIR"
@@ -71,23 +72,21 @@ function react() { return { name: 'react-stub' }; }
 export default react;
 STUB
 
+# vite.config.ts stub — replaces the local vite.config.ts which uses
+# import.meta.dirname at module level (only available in Node 21.2+).
+# In production the viteConfig object is only used inside setupVite() which
+# is never called, so an empty object is a safe replacement.
+cat > "$STUB_DIR/vite-config.mjs" << 'STUB'
+// Standalone build stub — vite.config.ts is dev-only.
+export default {};
+STUB
+
 # ── 4. Bundle the server + ALL runtime deps into one file ─────────────────────
-# Use ESM format (required for import.meta.dirname used in the server).
-# Add a CJS compatibility banner so CommonJS modules (dotenv, etc.) work
-# inside the ESM bundle via createRequire.
+# Uses the esbuild JS API (scripts/bundle-server.mjs) which adds a plugin to
+# intercept the vite.config.ts import and replace it with the stub above.
+# The banner adds a createRequire shim for CJS modules (dotenv, mysql2, etc.).
 echo "[4/6] Bundling server (esbuild, all deps inlined)..."
-npx esbuild server/_core/index.ts \
-  --platform=node \
-  --bundle \
-  --format=esm \
-  --outfile="$SCRIPT_DIR/dist/server.js" \
-  --banner:js="import { createRequire } from 'module'; const require = createRequire(import.meta.url);" \
-  --alias:vite="$STUB_DIR/vite.mjs" \
-  --alias:vite-plugin-manus-runtime="$STUB_DIR/vite-plugin-manus-runtime.mjs" \
-  --alias:"@builder.io/vite-plugin-jsx-loc"="$STUB_DIR/vite-plugin-jsx-loc.mjs" \
-  --alias:"@tailwindcss/vite"="$STUB_DIR/tailwindcss-vite.mjs" \
-  --alias:"@vitejs/plugin-react"="$STUB_DIR/vitejs-plugin-react.mjs" \
-  --define:process.env.NODE_ENV='"production"'
+node "$SCRIPT_DIR/scripts/bundle-server.mjs"
 
 # ── 5. Assemble the standalone directory ──────────────────────────────────────
 echo "[5/6] Assembling standalone package..."
@@ -104,7 +103,7 @@ cp "$SCRIPT_DIR/.env.example" "$OUT_DIR/.env.example" 2>/dev/null || true
 # Write the start script
 cat > "$OUT_DIR/start.sh" << 'STARTSCRIPT'
 #!/usr/bin/env bash
-# start.sh — run on the devserver (requires Node.js >= 18 only, no npm needed)
+# start.sh — run on the devserver (requires Node.js >= 16 only, no npm needed)
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -156,7 +155,7 @@ echo ""
 echo "Contents:"
 tar -tzf "$TARBALL" | head -20
 echo ""
-echo "To deploy:"
+echo "To deploy (requires Node.js >= 16):"
 echo "  scp ebpf-viz-standalone.tar.gz user@devserver:/opt/"
 echo "  ssh user@devserver"
 echo "  cd /opt && tar -xzf ebpf-viz-standalone.tar.gz"
