@@ -268,9 +268,14 @@ function MapLegend() {
 function OsMapCanvas() {
   const { snapshot, searchQuery, setSelectedProgram } = useEbpf();
   const mapsQuery = trpc.ebpf.maps.useQuery(undefined, { refetchInterval: 10000 });
-  const maps = mapsQuery.data ?? [];
+  // Stabilize the maps array reference — a new [] on every render would cause
+  // useOsMapLayout's useMemo to recompute every render, creating an infinite loop.
+  const maps = useMemo(() => mapsQuery.data ?? [], [mapsQuery.data]);
   const layout = useOsMapLayout(snapshot, maps);
   const { fitView, getViewport } = useReactFlow();
+  // Keep a stable ref to fitView so it never appears in useEffect deps
+  const fitViewRef = useRef(fitView);
+  useEffect(() => { fitViewRef.current = fitView; });
   const [nodes, setNodes, onNodesChange] = useNodesState(layout.nodes);
   const [edges, setEdges, onEdgesChange] = useEdgesState(layout.edges);
   const [zoom, setZoom] = useState(0.35);
@@ -278,20 +283,20 @@ function OsMapCanvas() {
   const didFit = useRef(false);
   const fitAttempts = useRef(0);
 
-  // Sync layout → nodes/edges when snapshot changes
+  // Sync layout → nodes/edges when snapshot or maps change.
+  // fitView is accessed via ref so it never appears in deps (it is not stable
+  // across renders in React Flow and would cause an infinite loop).
   useEffect(() => {
     setNodes(layout.nodes);
     setEdges(layout.edges);
     if (!didFit.current && layout.nodes.length > 0) {
-      // Fit to content nodes only (exclude wide band backgrounds)
-      // Retry up to 3 times to handle async node measurement
       const tryFit = (delay: number) => {
         setTimeout(() => {
           const contentNodes = layout.nodes.filter(
             n => n.type === "zoneNode" || n.type === "cgroupNode" ||
                  n.type === "interfaceNode" || n.type === "processNode"
           );
-          fitView({
+          fitViewRef.current({
             nodes: contentNodes.length > 0 ? contentNodes : undefined,
             duration: 600,
             padding: 0.15,
@@ -303,7 +308,8 @@ function OsMapCanvas() {
       };
       tryFit(300);
     }
-  }, [layout, setNodes, setEdges, fitView]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [layout]);
 
   // Track zoom for LOD
   const onMoveEnd = useCallback(() => {
