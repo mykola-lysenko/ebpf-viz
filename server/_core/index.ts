@@ -40,17 +40,41 @@ async function startServer() {
   app.get("/api/sse", sseHandler);
 
   // tRPC API
-  // On Node 16, tRPC's writeResponse() calls res.end() in a finally{} block, but
-  // the 'close' event on ServerResponse fires synchronously inside res.end() on
-  // Node 16 (unlike Node 18+ where it fires asynchronously). This causes the
-  // AbortController tied to the request signal to fire, which can cause
-  // internal_exceptionHandler to call res.end() a second time, crashing with
-  // ERR_STREAM_WRITE_AFTER_END. We fix this by:
-  // 1. Making res.end() idempotent (no-op if already ended)
-  // 2. Swallowing write-after-end errors on the response stream
+  //
+  // Node 16 compatibility shim
+  // ─────────────────────────
+  // On Node 16, ServerResponse emits 'close' synchronously *inside* res.end().
+  // tRPC's incomingMessageToRequest() listens for res.once('close', onAbort) and
+  // uses it to abort the AbortController that guards pipeTo(). Because 'close'
+  // fires while the async microtask queue is still unwinding after pipeTo(), the
+  // abort can fire *before* pipeTo() has fully resolved, causing two problems:
+  //
+  //   1. Truncated JSON body — pipeTo() is interrupted mid-stream, writeResponseBody
+  //      catches the AbortError and returns early, then finally{} calls res.end()
+  //      with only partial data written → client sees "Unexpected end of JSON input".
+  //
+  //   2. ERR_STREAM_WRITE_AFTER_END crash — internal_exceptionHandler calls
+  //      res.end(errorJson) after writeResponse's finally{} already called res.end().
+  //
+  // Fix: intercept res.once('close', cb) and defer the callback by one event-loop
+  // tick (setImmediate). By the time the deferred callback runs, pipeTo() has
+  // already resolved and the full body has been written. This is safe because a
+  // 1-tick delay still properly aborts genuinely disconnected clients.
+  // Additionally, make res.end() idempotent to guard against the double-end race.
   const trpcMiddleware = createExpressMiddleware({ router: appRouter, createContext });
   app.use("/api/trpc", (req, res, next) => {
-    // Make res.end() idempotent to survive the Node 16 double-end race
+    // Defer 'close' listeners by one tick so pipeTo() resolves before abort fires
+    const originalOnce = res.once.bind(res);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (res as any).once = function patchedOnce(event: string, listener: (...args: unknown[]) => void) {
+      if (event === "close") {
+        return originalOnce(event, (...args: unknown[]) => {
+          setImmediate(() => listener(...args));
+        });
+      }
+      return originalOnce(event, listener);
+    };
+    // Make res.end() idempotent to guard against the double-end race
     const originalEnd = res.end.bind(res);
     let ended = false;
     // eslint-disable-next-line @typescript-eslint/no-explicit-any

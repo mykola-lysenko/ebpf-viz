@@ -223,3 +223,8 @@
 - [x] Add section headers with interface count and description
 - [x] Hide sockmap section when no sockmap interfaces exist (live mode)
 - [x] Update tests if needed
+
+## Node 16: Truncated tRPC Response Body
+- [x] Diagnose: on Node 16, 'close' fires synchronously inside res.end(), triggering abort mid-stream via tRPC's incomingMessageToRequest signal
+- [x] Fix: defer res.once('close', cb) by one setImmediate tick so pipeTo() resolves before abort fires
+- [x] Rebuild standalone and verify full JSON responses are delivered

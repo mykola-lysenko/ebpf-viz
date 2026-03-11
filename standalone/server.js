@@ -90564,6 +90564,15 @@ async function startServer() {
   app.get("/api/sse", sseHandler);
   const trpcMiddleware = createExpressMiddleware({ router: appRouter, createContext });
   app.use("/api/trpc", (req, res, next) => {
+    const originalOnce = res.once.bind(res);
+    res.once = function patchedOnce(event, listener) {
+      if (event === "close") {
+        return originalOnce(event, (...args) => {
+          setImmediate(() => listener(...args));
+        });
+      }
+      return originalOnce(event, listener);
+    };
     const originalEnd = res.end.bind(res);
     let ended = false;
     res.end = function patchedEnd(...args) {
