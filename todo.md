@@ -133,3 +133,9 @@
 - [x] NIC hardware base node at bottom of stack with custom SVG icon
 - [x] Layer descriptions shown in full LOD for inactive layers
 - [x] 23 new tests for packet path logic (168 total, all passing)
+
+## Bug Fixes
+- [x] L7 layer phantom arrow: empty layers now hidden in compact LOD; FlowArrow only renders when adjacent layer is visible
+- [x] netfilter programs were never pushed to iface.layers.L3 in buildNetworkInterfaces (now fixed)
+- [x] flow_dissector was incorrectly assigned to L4 (now correctly in L3 alongside netfilter)
+- [x] netkit programs now assigned to L2 in buildNetworkInterfaces

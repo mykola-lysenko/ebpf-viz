@@ -653,11 +653,19 @@ export function InterfaceNode({ data, selected }: { data: InterfaceNodeData; sel
       {lod !== "minimal" && (
         <div style={{ padding: "8px 8px 6px", display: "flex", flexDirection: "column", gap: 0 }}>
 
-          {/* Layers rendered top-to-bottom: L7 → L4 → L3 → L2 → NIC HW */}
+          {/* Layers rendered top-to-bottom: L7 → L4 → L3 → L2 → NIC HW
+               In compact LOD, empty layers are hidden to reduce visual noise.
+               In full LOD, all layers are shown with their descriptions. */}
           {PACKET_PATH_LAYERS.map((layer, idx) => {
             const progs = layers[layer.key] ?? [];
             const active = progs.length > 0;
             const isLast = idx === PACKET_PATH_LAYERS.length - 1;
+            const nextProgs = isLast ? [] : (layers[PACKET_PATH_LAYERS[idx + 1].key] ?? []);
+
+            // In compact LOD, skip empty layers entirely to avoid phantom arrows
+            if (!active && lod !== "full") {
+              return null;
+            }
 
             return (
               <React.Fragment key={layer.key}>
@@ -737,18 +745,18 @@ export function InterfaceNode({ data, selected }: { data: InterfaceNodeData; sel
                   )}
                 </div>
 
-                {/* Flow arrow between layers (not after last layer) */}
-                {!isLast && (
+                {/* Flow arrow between layers — only shown when the next layer is also visible */}
+                {!isLast && (active || nextProgs.length > 0 || lod === "full") && (
                   <FlowArrow
                     color={layer.color}
-                    active={active || (layers[PACKET_PATH_LAYERS[idx + 1].key] ?? []).length > 0}
+                    active={active || nextProgs.length > 0}
                   />
                 )}
               </React.Fragment>
             );
           })}
 
-          {/* Arrow from L2 to NIC HW */}
+          {/* Arrow from L2 to NIC HW — always shown since NIC HW base is always rendered */}
           <FlowArrow color="#00d4ff" active={(layers.L2 ?? []).length > 0} />
 
           {/* NIC hardware base */}

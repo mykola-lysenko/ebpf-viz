@@ -304,11 +304,19 @@ export function buildNetworkInterfaces(
     iface.allPrograms.push(p);
   }
 
-  for (const entry of snapshot.flow_dissector ?? []) {
+  for (const entry of [...(snapshot.netfilter ?? []), ...(snapshot.flow_dissector ?? [])]) {
     const p = progs.get(entry.id);
     if (!p) continue;
     const iface = getOrCreate(entry.devname, entry.ifindex);
-    iface.layers.L4.push(p);
+    iface.layers.L3.push(p);
+    iface.allPrograms.push(p);
+  }
+
+  for (const entry of snapshot.netkit ?? []) {
+    const p = progs.get(entry.id);
+    if (!p) continue;
+    const iface = getOrCreate(entry.devname, entry.ifindex);
+    iface.layers.L2.push(p);
     iface.allPrograms.push(p);
   }
 
