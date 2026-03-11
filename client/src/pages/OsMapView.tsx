@@ -267,7 +267,8 @@ function MapLegend() {
 
 function OsMapCanvas() {
   const { snapshot, searchQuery, setSelectedProgram } = useEbpf();
-  const mapsQuery = trpc.ebpf.maps.useQuery(undefined, { refetchInterval: 10000 });
+  // Maps arrive via SSE push — no polling needed here
+  const mapsQuery = trpc.ebpf.maps.useQuery(undefined, { staleTime: Infinity, refetchOnWindowFocus: false });
   // Stabilize the maps array reference — a new [] on every render would cause
   // useOsMapLayout's useMemo to recompute every render, creating an infinite loop.
   const maps = useMemo(() => mapsQuery.data ?? [], [mapsQuery.data]);

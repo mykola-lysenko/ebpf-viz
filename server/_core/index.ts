@@ -7,6 +7,7 @@ import { appRouter } from "../routers";
 import { createContext } from "./context";
 import { serveStatic, setupVite } from "./vite";
 import { startPoller } from "../ebpf-poller";
+import { sseHandler } from "../sse";
 
 function isPortAvailable(port: number): Promise<boolean> {
   return new Promise(resolve => {
@@ -33,6 +34,9 @@ async function startServer() {
 
   app.use(express.json({ limit: "50mb" }));
   app.use(express.urlencoded({ limit: "50mb", extended: true }));
+
+  // SSE live-stream endpoint (must be before Vite catch-all)
+  app.get("/api/sse", sseHandler);
 
   // tRPC API
   app.use(

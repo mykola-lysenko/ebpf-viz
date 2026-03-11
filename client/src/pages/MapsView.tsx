@@ -398,8 +398,11 @@ function MapDetailPanel({
 
 export default function MapsView() {
   const { snapshot } = useEbpf();
+  // Maps are pushed via SSE stream — no polling needed.
+  // Fall back to a single tRPC fetch on first load if SSE hasn't delivered yet.
   const { data: maps = [] } = trpc.ebpf.maps.useQuery(undefined, {
-    refetchInterval: 5000,
+    staleTime: Infinity,
+    refetchOnWindowFocus: false,
   });
 
   const [search, setSearch] = useState("");

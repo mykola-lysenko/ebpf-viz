@@ -1,6 +1,9 @@
 import React, { createContext, useContext, useState, useCallback, useMemo } from "react";
 import { trpc } from "@/lib/trpc";
+import { useEbpfStream } from "@/hooks/useEbpfStream";
 import type { BpfProgram, EbpfSnapshot, ProgHistory, ActivitySummary } from "../../../shared/ebpf-types";
+
+export type { StreamStatus } from "@/hooks/useEbpfStream";
 
 interface EbpfContextValue {
   snapshot: EbpfSnapshot | null;
@@ -13,6 +16,9 @@ interface EbpfContextValue {
   typeFilter: string[];
   setTypeFilter: (types: string[]) => void;
   filteredPrograms: BpfProgram[];
+  /** SSE stream status — replaces the old autoRefresh boolean */
+  streamStatus: import("@/hooks/useEbpfStream").StreamStatus;
+  /** Legacy compat: true when stream is live */
   autoRefresh: boolean;
   setAutoRefresh: (v: boolean) => void;
   refreshInterval: number;
@@ -32,34 +38,31 @@ export function EbpfProvider({ children }: { children: React.ReactNode }) {
   const [selectedProgram, setSelectedProgram] = useState<BpfProgram | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
   const [typeFilter, setTypeFilter] = useState<string[]>([]);
-  const [autoRefresh, setAutoRefresh] = useState(true);
+  // refreshInterval is kept for the Settings page UI but no longer drives polling
   const [refreshInterval, setRefreshInterval] = useState(5000);
 
-  // ── Core snapshot ──────────────────────────────────────────────────────────
-  const { data: snapshot, isLoading, error, refetch } = trpc.ebpf.snapshot.useQuery(undefined, {
-    refetchInterval: autoRefresh ? refreshInterval : false,
-    staleTime: 1000,
+  // ── SSE live stream ────────────────────────────────────────────────────────
+  const {
+    snapshot,
+    allHistories,
+    activity,
+    status: streamStatus,
+  } = useEbpfStream();
+
+  // ── Poller status (for statsEnabled flag) — lightweight 30s poll ──────────
+  const { data: pollerStatus, refetch } = trpc.ebpf.status.useQuery(undefined, {
+    refetchInterval: 30_000,
+    staleTime: 15_000,
   });
 
-  // ── History ring buffer — poll at same interval ────────────────────────────
-  const { data: allHistories } = trpc.ebpf.allHistory.useQuery(undefined, {
-    refetchInterval: autoRefresh ? refreshInterval : false,
-    staleTime: 1000,
-  });
+  const isLoading = snapshot === null && streamStatus === "connecting";
 
-  // ── Activity summary — slightly faster poll for the live indicator ─────────
-  const { data: activity } = trpc.ebpf.activity.useQuery(undefined, {
-    refetchInterval: autoRefresh ? Math.min(refreshInterval, 3000) : false,
-    staleTime: 500,
-  });
-
-  // ── Poller status (for statsEnabled flag) ─────────────────────────────────
-  const { data: pollerStatus } = trpc.ebpf.status.useQuery(undefined, {
-    refetchInterval: 10000,
-    staleTime: 5000,
-  });
-
-  const refresh = useCallback(() => { refetch(); }, [refetch]);
+  // Manual refresh: trigger an immediate server-side poll via tRPC mutation
+  const refreshMutation = trpc.ebpf.refresh.useMutation();
+  const refresh = useCallback(() => {
+    refreshMutation.mutate();
+    refetch();
+  }, [refreshMutation, refetch]);
 
   // Build a Map<id, ProgHistory> for O(1) lookup in components
   const historyMap = useMemo(() => {
@@ -93,11 +96,19 @@ export function EbpfProvider({ children }: { children: React.ReactNode }) {
     return progs;
   }, [snapshot, searchQuery, typeFilter]);
 
+  // Legacy compat shim — components that read autoRefresh get true when live
+  const autoRefresh = streamStatus === "live" || streamStatus === "reconnecting";
+  const setAutoRefresh = useCallback((v: boolean) => {
+    // No-op: SSE manages its own connection lifecycle.
+    // Kept for API compatibility with SettingsView and EbpfLayout.
+    void v;
+  }, []);
+
   return (
     <EbpfContext.Provider value={{
       snapshot: snapshot ?? null,
       isLoading,
-      error: error?.message ?? null,
+      error: streamStatus === "offline" ? "Stream disconnected — check server" : null,
       selectedProgram,
       setSelectedProgram,
       searchQuery,
@@ -105,6 +116,7 @@ export function EbpfProvider({ children }: { children: React.ReactNode }) {
       typeFilter,
       setTypeFilter,
       filteredPrograms,
+      streamStatus,
       autoRefresh,
       setAutoRefresh,
       refreshInterval,

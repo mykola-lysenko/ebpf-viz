@@ -1,7 +1,7 @@
-import React, { useState } from "react";
+import { useState } from "react";
 import { useEbpf } from "@/contexts/EbpfContext";
 import { trpc } from "@/lib/trpc";
-import { Settings, RefreshCw, Terminal, Cpu, Info, CheckCircle } from "lucide-react";
+import { Settings, RefreshCw, Terminal, Cpu, Info, CheckCircle, Radio, Wifi } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
@@ -18,7 +18,7 @@ const INTERVAL_OPTIONS = [
 ];
 
 export default function SettingsView() {
-  const { snapshot, autoRefresh, setAutoRefresh, refreshInterval, setRefreshInterval, demoMode } = useEbpf();
+  const { snapshot, streamStatus, refreshInterval, setRefreshInterval, demoMode } = useEbpf();
   const [saving, setSaving] = useState(false);
 
   const updateConfig = trpc.ebpf.updateConfig.useMutation({
@@ -33,7 +33,7 @@ export default function SettingsView() {
   });
 
   const { data: status } = trpc.ebpf.status.useQuery(undefined, {
-    refetchInterval: 5000,
+    refetchInterval: 10_000,
   });
 
   const handleIntervalChange = (ms: number) => {
@@ -47,6 +47,20 @@ export default function SettingsView() {
     updateConfig.mutate({ demoMode: !demoMode });
   };
 
+  const streamStatusLabel = {
+    live:         "Live",
+    connecting:   "Connecting…",
+    reconnecting: "Reconnecting…",
+    offline:      "Offline",
+  }[streamStatus];
+
+  const streamStatusColor = {
+    live:         "border-emerald-500/40 text-emerald-400",
+    connecting:   "border-amber-500/40 text-amber-400",
+    reconnecting: "border-amber-500/40 text-amber-400",
+    offline:      "border-destructive/40 text-destructive",
+  }[streamStatus];
+
   return (
     <div className="p-6 space-y-6 max-w-2xl mx-auto">
       <div>
@@ -54,7 +68,7 @@ export default function SettingsView() {
           <Settings size={20} className="text-primary" />
           Settings
         </h1>
-        <p className="text-sm text-muted-foreground mt-0.5">Configure polling and display options</p>
+        <p className="text-sm text-muted-foreground mt-0.5">Configure polling interval, data source, and display options</p>
       </div>
 
       {/* System info */}
@@ -79,38 +93,41 @@ export default function SettingsView() {
         </div>
       </div>
 
+      {/* Live stream status */}
+      <div className="glass rounded-xl p-5 space-y-4">
+        <h2 className="text-sm font-semibold text-foreground flex items-center gap-2">
+          <Wifi size={14} className="text-primary" />
+          Live Stream (SSE)
+        </h2>
+        <p className="text-xs text-muted-foreground">
+          The dashboard receives live updates via Server-Sent Events (SSE). No polling is required — the server pushes a new snapshot automatically after each bpftool cycle.
+        </p>
+        <div className="flex items-center gap-3">
+          <Badge variant="outline" className={cn("text-xs", streamStatusColor)}>
+            {streamStatusLabel}
+          </Badge>
+          {streamStatus === "live" && (
+            <span className="text-xs text-muted-foreground">
+              Connected · updates push every {status?.config.intervalMs ? `${status.config.intervalMs / 1000}s` : "…"}
+            </span>
+          )}
+          {(streamStatus === "reconnecting" || streamStatus === "connecting") && (
+            <Radio size={12} className="text-amber-400 animate-pulse" />
+          )}
+        </div>
+      </div>
+
       {/* Polling config */}
       <div className="glass rounded-xl p-5 space-y-4">
         <h2 className="text-sm font-semibold text-foreground flex items-center gap-2">
           <RefreshCw size={14} className="text-primary" />
-          Polling Configuration
+          Polling Interval
         </h2>
+        <p className="text-xs text-muted-foreground">
+          Controls how often the server runs bpftool to collect new data. Shorter intervals give faster updates at the cost of more CPU overhead.
+        </p>
 
-        {/* Auto-refresh toggle */}
-        <div className="flex items-center justify-between">
-          <div>
-            <div className="text-sm text-foreground">Auto-refresh</div>
-            <div className="text-xs text-muted-foreground">Automatically poll bpftool at the configured interval</div>
-          </div>
-          <button
-            onClick={() => setAutoRefresh(!autoRefresh)}
-            className={cn(
-              "relative w-11 h-6 rounded-full transition-colors duration-200",
-              autoRefresh ? "bg-primary" : "bg-muted"
-            )}
-          >
-            <span className={cn(
-              "absolute top-1 left-1 w-4 h-4 rounded-full bg-white shadow transition-transform duration-200",
-              autoRefresh && "translate-x-5"
-            )} />
-          </button>
-        </div>
-
-        <Separator className="bg-border/50" />
-
-        {/* Interval */}
         <div>
-          <div className="text-sm text-foreground mb-2">Poll interval</div>
           <div className="grid grid-cols-3 gap-2">
             {INTERVAL_OPTIONS.map(opt => (
               <button
@@ -211,6 +228,12 @@ export default function SettingsView() {
             <div className="flex items-center justify-between py-2">
               <span className="text-xs text-muted-foreground">Interval</span>
               <span className="text-xs font-mono text-foreground">{status.config.intervalMs}ms</span>
+            </div>
+            <div className="flex items-center justify-between py-2">
+              <span className="text-xs text-muted-foreground">SSE stream</span>
+              <Badge variant="outline" className={cn("text-[10px]", streamStatusColor)}>
+                {streamStatusLabel}
+              </Badge>
             </div>
           </div>
         </div>

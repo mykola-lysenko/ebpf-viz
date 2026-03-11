@@ -105,3 +105,14 @@
 - [x] Per-CPU value expansion (percpu_hash, percpu_array)
 - [x] "Dump entries" button on map cards and detail panel in MapsView
 - [x] Tests for map dump parser (36 tests, all passing)
+
+## Live Updates via SSE
+- [x] Add EventEmitter to ebpf-poller so it fires 'snapshot' events after each poll cycle
+- [x] Add GET /api/sse endpoint (Express) that streams snapshot, maps, history, activity events
+- [x] useEbpfStream hook: connects to SSE, deserialises superjson, replaces tRPC polling
+- [x] EbpfContext updated to consume SSE stream for snapshot/history/activity/maps
+- [x] Graceful reconnect with exponential back-off (1s → 30s) on SSE disconnect
+- [x] Connection status indicator in sidebar and top bar (Live / Connecting / Reconnecting / Offline)
+- [x] Removed refetchInterval polling from MapsView, OsMapView, and EbpfContext
+- [x] SettingsView updated to show SSE stream status and explain live-push model
+- [x] 10 new SSE endpoint tests (138 total, all passing)

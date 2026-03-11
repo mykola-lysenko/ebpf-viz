@@ -1,11 +1,13 @@
-import React, { useState } from "react";
+import { useState } from "react";
 import { Link, useLocation } from "wouter";
 import {
   Cpu, Network, FolderTree, List, Settings,
   LayoutDashboard, RefreshCw, Wifi, WifiOff,
-  ChevronLeft, ChevronRight, Search, X, Map, Database
+  ChevronLeft, ChevronRight, Search, X, Map, Database,
+  Radio
 } from "lucide-react";
 import { EbpfProvider, useEbpf } from "@/contexts/EbpfContext";
+import type { StreamStatus } from "@/hooks/useEbpfStream";
 import { ProgramDetailPanel } from "./ProgramDetailPanel";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
@@ -24,9 +26,32 @@ const NAV_ITEMS = [
   { path: "/settings", icon: Settings,        label: "Settings",   },
 ];
 
+function StreamStatusDot({ status }: { status: StreamStatus }) {
+  const dotClass = {
+    live:         "bg-emerald-400 animate-pulse",
+    connecting:   "bg-amber-400 animate-pulse",
+    reconnecting: "bg-amber-400 animate-pulse",
+    offline:      "bg-red-500",
+  }[status];
+
+  const label = {
+    live:         "Live",
+    connecting:   "Connecting…",
+    reconnecting: "Reconnecting…",
+    offline:      "Offline",
+  }[status];
+
+  return (
+    <div className="flex items-center gap-2">
+      <div className={cn("w-2 h-2 rounded-full shrink-0", dotClass)} />
+      <span className="text-xs text-muted-foreground">{label}</span>
+    </div>
+  );
+}
+
 function Sidebar({ collapsed, onToggle }: { collapsed: boolean; onToggle: () => void }) {
   const [location] = useLocation();
-  const { snapshot, autoRefresh, refresh, isLoading, demoMode } = useEbpf();
+  const { snapshot, streamStatus, refresh, isLoading, demoMode } = useEbpf();
 
   return (
     <aside
@@ -58,15 +83,7 @@ function Sidebar({ collapsed, onToggle }: { collapsed: boolean; onToggle: () => 
       {!collapsed && (
         <div className="px-3 py-2 border-b border-border">
           <div className="flex items-center justify-between">
-            <div className="flex items-center gap-2">
-              <div className={cn(
-                "live-dot w-2 h-2 rounded-full",
-                autoRefresh ? "bg-emerald-400 text-emerald-400" : "bg-muted-foreground text-muted-foreground"
-              )} />
-              <span className="text-xs text-muted-foreground">
-                {autoRefresh ? "Live" : "Paused"}
-              </span>
-            </div>
+            <StreamStatusDot status={streamStatus} />
             {demoMode && (
               <Badge variant="outline" className="text-[10px] px-1.5 py-0 border-amber-500/50 text-amber-400">
                 DEMO
@@ -132,7 +149,7 @@ function Sidebar({ collapsed, onToggle }: { collapsed: boolean; onToggle: () => 
               <RefreshCw size={14} className={cn(isLoading && "animate-spin")} />
             </Button>
           </TooltipTrigger>
-          <TooltipContent side={collapsed ? "right" : "top"}>Refresh now</TooltipContent>
+          <TooltipContent side={collapsed ? "right" : "top"}>Force refresh</TooltipContent>
         </Tooltip>
 
         <Button
@@ -149,7 +166,28 @@ function Sidebar({ collapsed, onToggle }: { collapsed: boolean; onToggle: () => 
 }
 
 function TopBar() {
-  const { searchQuery, setSearchQuery, snapshot, demoMode, autoRefresh, setAutoRefresh } = useEbpf();
+  const { searchQuery, setSearchQuery, snapshot, demoMode, streamStatus } = useEbpf();
+
+  const statusIcon = {
+    live:         <Wifi size={14} />,
+    connecting:   <Radio size={14} className="animate-pulse" />,
+    reconnecting: <Radio size={14} className="animate-pulse" />,
+    offline:      <WifiOff size={14} />,
+  }[streamStatus];
+
+  const statusColor = {
+    live:         "text-emerald-400",
+    connecting:   "text-amber-400",
+    reconnecting: "text-amber-400",
+    offline:      "text-red-400",
+  }[streamStatus];
+
+  const statusLabel = {
+    live:         "Live stream",
+    connecting:   "Connecting…",
+    reconnecting: "Reconnecting…",
+    offline:      "Stream offline",
+  }[streamStatus];
 
   return (
     <header className="h-12 border-b border-border flex items-center gap-3 px-4 shrink-0 bg-[oklch(0.095_0.012_240)]">
@@ -187,19 +225,18 @@ function TopBar() {
 
         <Tooltip>
           <TooltipTrigger asChild>
-            <Button
-              variant="ghost"
-              size="icon"
-              className={cn(
-                "w-8 h-8",
-                autoRefresh ? "text-emerald-400" : "text-muted-foreground"
-              )}
-              onClick={() => setAutoRefresh(!autoRefresh)}
-            >
-              {autoRefresh ? <Wifi size={14} /> : <WifiOff size={14} />}
-            </Button>
+            <div className={cn("flex items-center gap-1.5 px-2 py-1 rounded text-xs", statusColor)}>
+              {statusIcon}
+              <span className="hidden sm:inline">{statusLabel}</span>
+            </div>
           </TooltipTrigger>
-          <TooltipContent>{autoRefresh ? "Pause auto-refresh" : "Resume auto-refresh"}</TooltipContent>
+          <TooltipContent>
+            {streamStatus === "live"
+              ? "Receiving live updates via SSE"
+              : streamStatus === "offline"
+              ? "Connection lost — check server"
+              : "Establishing SSE connection…"}
+          </TooltipContent>
         </Tooltip>
       </div>
     </header>
