@@ -179,3 +179,17 @@
 - [x] NicHardwareBase and L2→NIC FlowArrow hidden on sockmap nodes
 - [x] Sockmap node uses purple (#8b5cf6) accent colour and map icon (🗺) instead of green plug (🔌)
 - [x] 4 kind-field assertions added to existing buildNetworkInterfaces tests (191 total, all passing)
+
+## Bug: Mock Data Leaking into Live Mode
+- [x] RESOLVED: Not a bug. test_map/test_array/test_perf were real pinned BPF maps created during development to test bpftool map dump JSON format. Removed with sudo rm /sys/fs/bpf/test_hash /sys/fs/bpf/test_array /sys/fs/bpf/test_perf. Live data path confirmed correct, no mock data leaks.
+
+## Shared-Bytecode Highlighting (Options A + C)
+- [x] Option A: tagCount computed client-side from full program list; "×N clones" badge in Programs table Tag column
+- [x] Option A: clicking badge sets tagFilter state; table filters to show only programs with that tag
+- [x] Option A: active filter shown as dismissible amber chip below the search bar
+- [x] Option A: hint text shows count of shared tags when no filter is active
+- [x] Option C: SharedTagDot component renders coloured glowing dot next to each program chip in Cgroups tree
+- [x] Option C: legend panel at top of Cgroups tree (only shown when shared tags exist)
+- [x] Option C: hover tooltip shows tag prefix, sibling count, and scrollable list of id + cgroup path
+- [x] Option C: colours assigned deterministically (sorted tag → palette index) for stable rendering
+- [x] 14 new tests: buildTagCount, collectTagSiblings, buildSharedTagMap, buildTagColorMap (205 total, all passing)

@@ -1,10 +1,90 @@
-import React, { useState } from "react";
+import React, { useState, useMemo } from "react";
 import { useEbpf } from "@/contexts/EbpfContext";
 import { ProgBadge } from "@/components/ProgBadge";
 import { FolderTree, Folder, FolderOpen, ChevronDown, ChevronRight } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
 import type { CgroupNode } from "../../../shared/ebpf-types";
+
+// Palette of visually distinct colours for shared-tag dots
+const SHARED_TAG_PALETTE = [
+  "#f59e0b", // amber
+  "#10b981", // emerald
+  "#f43f5e", // rose
+  "#8b5cf6", // violet
+  "#06b6d4", // cyan
+  "#f97316", // orange
+  "#84cc16", // lime
+  "#ec4899", // pink
+  "#14b8a6", // teal
+  "#a855f7", // purple
+];
+
+/** Collect all (id, cgroupPath) pairs for each program tag across the full cgroup tree */
+function collectTagSiblings(
+  nodes: CgroupNode[],
+  acc: Map<string, Array<{ id: number; cgroupPath: string }>>
+) {
+  for (const node of nodes) {
+    for (const p of node.programs) {
+      const entry = acc.get(p.tag) ?? [];
+      if (!entry.some(e => e.id === p.id && e.cgroupPath === node.path)) {
+        entry.push({ id: p.id, cgroupPath: node.path });
+      }
+      acc.set(p.tag, entry);
+    }
+    collectTagSiblings(node.children, acc);
+  }
+}
+
+/** Dot shown on a program chip when its tag is shared across multiple cgroup nodes */
+function SharedTagDot({
+  tag,
+  color,
+  siblings,
+}: {
+  tag: string;
+  color: string;
+  siblings: Array<{ id: number; cgroupPath: string }>;
+}) {
+  const [hovered, setHovered] = useState(false);
+  return (
+    <span className="relative inline-block">
+      <span
+        className="inline-block w-2 h-2 rounded-full cursor-help shrink-0"
+        style={{ background: color, boxShadow: `0 0 5px ${color}80` }}
+        onMouseEnter={() => setHovered(true)}
+        onMouseLeave={() => setHovered(false)}
+      />
+      {hovered && (
+        <div
+          className="absolute z-50 left-3 top-0 w-72 rounded-lg border border-border/60 bg-popover text-popover-foreground shadow-xl p-3 text-xs"
+          onMouseEnter={() => setHovered(true)}
+          onMouseLeave={() => setHovered(false)}
+        >
+          <div className="font-semibold mb-1.5 flex items-center gap-1.5">
+            <span
+              className="inline-block w-2 h-2 rounded-full shrink-0"
+              style={{ background: color }}
+            />
+            Same bytecode — tag <span className="font-mono">{tag.slice(0, 8)}…</span>
+          </div>
+          <div className="text-muted-foreground mb-1.5">
+            {siblings.length} program{siblings.length !== 1 ? "s" : ""} share identical instructions:
+          </div>
+          <div className="space-y-1 max-h-40 overflow-y-auto">
+            {siblings.map(s => (
+              <div key={`${s.id}-${s.cgroupPath}`} className="flex items-center gap-1.5">
+                <span className="font-mono text-primary shrink-0">id={s.id}</span>
+                <span className="text-muted-foreground truncate">{s.cgroupPath.replace("/sys/fs/cgroup/", "")}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+    </span>
+  );
+}
 
 const ATTACH_TYPE_COLORS: Record<string, string> = {
   cgroup_inet_ingress:  "#3b82f6",
@@ -44,11 +124,15 @@ function CgroupNodeRow({
   depth,
   searchQuery,
   filteredIds,
+  sharedTagMap,
+  tagColorMap,
 }: {
   node: CgroupNode;
   depth: number;
   searchQuery: string;
   filteredIds: Set<number>;
+  sharedTagMap: Map<string, Array<{ id: number; cgroupPath: string }>>;
+  tagColorMap: Map<string, string>;
 }) {
   const hasMatchingProgs = node.programs.some(p => filteredIds.has(p.id));
   const hasMatchingChildren = (n: CgroupNode): boolean =>
@@ -117,6 +201,8 @@ function CgroupNodeRow({
             <div className="mt-2 space-y-1.5">
               {visibleProgs.map(p => {
                 const cgroupAtt = p.attachments.find(a => a.cgroupPath === node.path);
+                const sharedColor = tagColorMap.get(p.tag);
+                const siblings = sharedTagMap.get(p.tag);
                 return (
                   <div key={p.id} className="flex items-center gap-2 flex-wrap">
                     <ProgBadge program={p} />
@@ -124,6 +210,13 @@ function CgroupNodeRow({
                       <AttachTypeTag
                         attachType={cgroupAtt.detail.split(" ")[0]}
                         attachFlags={cgroupAtt.attachFlags}
+                      />
+                    )}
+                    {sharedColor && siblings && siblings.length > 1 && (
+                      <SharedTagDot
+                        tag={p.tag}
+                        color={sharedColor}
+                        siblings={siblings}
                       />
                     )}
                   </div>
@@ -148,6 +241,8 @@ function CgroupNodeRow({
               depth={depth + 1}
               searchQuery={searchQuery}
               filteredIds={filteredIds}
+              sharedTagMap={sharedTagMap}
+              tagColorMap={tagColorMap}
             />
           ))}
         </div>
@@ -158,6 +253,24 @@ function CgroupNodeRow({
 
 export default function CgroupView() {
   const { snapshot, filteredPrograms, searchQuery } = useEbpf();
+
+  // Build shared-tag maps: tags that appear on 2+ programs in the cgroup tree
+  const { sharedTagMap, tagColorMap } = useMemo(() => {
+    if (!snapshot) return { sharedTagMap: new Map(), tagColorMap: new Map() };
+    const raw = new Map<string, Array<{ id: number; cgroupPath: string }>>();
+    collectTagSiblings(snapshot.cgroupTree, raw);
+    const sharedTagMap = new Map<string, Array<{ id: number; cgroupPath: string }>>();
+    Array.from(raw.entries()).forEach(([tag, entries]) => {
+      if (entries.length > 1) sharedTagMap.set(tag, entries);
+    });
+    // Assign a stable colour per shared tag (sorted for determinism)
+    const tagColorMap = new Map<string, string>();
+    const sortedTags = Array.from(sharedTagMap.keys()).sort();
+    sortedTags.forEach((tag, i) => {
+      tagColorMap.set(tag, SHARED_TAG_PALETTE[i % SHARED_TAG_PALETTE.length]);
+    });
+    return { sharedTagMap, tagColorMap };
+  }, [snapshot]);
 
   if (!snapshot) {
     return <div className="flex items-center justify-center h-full"><p className="text-muted-foreground">Loading…</p></div>;
@@ -179,6 +292,31 @@ export default function CgroupView() {
           {snapshot.cgroupTree.length} top-level cgroup{snapshot.cgroupTree.length !== 1 ? "s" : ""} · {cgroupProgs.length} BPF programs
         </p>
       </div>
+
+      {/* Shared-bytecode legend */}
+      {tagColorMap.size > 0 && (
+        <div className="glass rounded-xl p-4">
+          <div className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2">Shared Bytecode</div>
+          <p className="text-xs text-muted-foreground mb-3">
+            Programs with the same colour dot have identical compiled bytecode (same BPF tag). Hover a dot for details.
+          </p>
+          <div className="flex flex-wrap gap-3">
+            {(Array.from(tagColorMap.entries()) as [string, string][]).map(([tag, color]) => {
+              const siblings = sharedTagMap.get(tag) ?? [];
+              return (
+                <div key={tag} className="flex items-center gap-1.5">
+                  <span
+                    className="inline-block w-2.5 h-2.5 rounded-full shrink-0"
+                    style={{ background: color, boxShadow: `0 0 5px ${color}80` }}
+                  />
+                  <span className="text-[10px] font-mono text-muted-foreground">{tag.slice(0, 8)}…</span>
+                  <span className="text-[10px] text-muted-foreground/60">×{siblings.length}</span>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
 
       {/* Attach type legend */}
       <div className="glass rounded-xl p-4">
@@ -211,6 +349,8 @@ export default function CgroupView() {
                 depth={0}
                 searchQuery={searchQuery}
                 filteredIds={filteredIds}
+                sharedTagMap={sharedTagMap}
+                tagColorMap={tagColorMap}
               />
             ))}
           </div>

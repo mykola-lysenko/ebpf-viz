@@ -51,10 +51,14 @@ function ProgramRow({
   prog,
   history,
   maxCallsPerSec,
+  tagCount,
+  onTagFilter,
 }: {
   prog: BpfProgram;
   history?: ProgHistory | null;
   maxCallsPerSec: number;
+  tagCount: Map<string, number>;
+  onTagFilter: (tag: string) => void;
 }) {
   const { setSelectedProgram } = useEbpf();
   const color = TYPE_COLORS_MAP[prog.rawType] ?? "#6b7280";
@@ -161,7 +165,18 @@ function ProgramRow({
 
       {/* Tag */}
       <td className="px-4 py-3 text-xs font-mono text-muted-foreground hidden md:table-cell">
-        {prog.tag}
+        <div className="flex items-center gap-1.5 flex-wrap">
+          <span>{prog.tag}</span>
+          {(tagCount.get(prog.tag) ?? 1) > 1 && (
+            <button
+              onClick={e => { e.stopPropagation(); onTagFilter(prog.tag); }}
+              title={`${tagCount.get(prog.tag)} programs share this bytecode — click to filter`}
+              className="inline-flex items-center gap-0.5 text-[10px] font-sans px-1.5 py-0.5 rounded border border-amber-500/40 bg-amber-500/10 text-amber-400 hover:bg-amber-500/20 transition-colors cursor-pointer"
+            >
+              ×{tagCount.get(prog.tag)} clones
+            </button>
+          )}
+        </div>
       </td>
 
       {/* Flags */}
@@ -196,28 +211,44 @@ export default function ProgramsView() {
   const { snapshot, filteredPrograms, typeFilter, setTypeFilter, historyMap, statsEnabled } = useEbpf();
   const [sortKey, setSortKey] = useState<SortKey>("id");
   const [sortDir, setSortDir] = useState<SortDir>("asc");
+  const [tagFilter, setTagFilter] = useState<string | null>(null);
+
+  // Compute tag frequency map across ALL programs (not just filtered)
+  const tagCount = useMemo(() => {
+    const m = new Map<string, number>();
+    if (!snapshot) return m;
+    for (const p of snapshot.programs) m.set(p.tag, (m.get(p.tag) ?? 0) + 1);
+    return m;
+  }, [snapshot]);
+
+  // Programs visible after type filter + tag filter
+  const visiblePrograms = useMemo(() => {
+    if (!tagFilter) return filteredPrograms;
+    return filteredPrograms.filter(p => p.tag === tagFilter);
+  }, [filteredPrograms, tagFilter]);
 
   // Compute max calls/sec across all visible programs for bar scaling
   // NOTE: must be before any early returns to satisfy Rules of Hooks
   const maxCallsPerSec = useMemo(() => {
-    return filteredPrograms.reduce((max, p) => {
+    return visiblePrograms.reduce((max, p) => {
       const h = historyMap.get(p.id);
       return Math.max(max, h?.latest?.callsPerSec ?? 0);
     }, 0);
-  }, [filteredPrograms, historyMap]);
+  }, [visiblePrograms, historyMap]);
 
   if (!snapshot) {
     return <div className="flex items-center justify-center h-full"><p className="text-muted-foreground">Loading…</p></div>;
   }
 
   const allTypes = Array.from(new Set(snapshot.programs.map(p => p.rawType))).sort();
+  const sharedTagCount = Array.from(tagCount.values()).filter(c => c > 1).length;
 
   const handleSort = (key: SortKey) => {
     if (sortKey === key) setSortDir(d => d === "asc" ? "desc" : "asc");
     else { setSortKey(key); setSortDir("asc"); }
   };
 
-  const sorted = [...filteredPrograms].sort((a, b) => {
+  const sorted = [...visiblePrograms].sort((a, b) => {
     let av: string | number = 0, bv: string | number = 0;
     const ha = historyMap.get(a.id);
     const hb = historyMap.get(b.id);
@@ -264,7 +295,7 @@ export default function ProgramsView() {
             All Programs
           </h1>
           <p className="text-sm text-muted-foreground mt-0.5">
-            {sorted.length} of {snapshot.stats.total} programs
+            {sorted.length} of {snapshot.stats.total} programs{tagFilter && ` · filtered to tag ${tagFilter.slice(0, 8)}…`}
             {statsEnabled && (
               <span className="ml-2 text-cyan-400 text-xs inline-flex items-center gap-1">
                 <Zap size={10} />
@@ -311,6 +342,23 @@ export default function ProgramsView() {
           </Button>
         )}
       </div>
+      {/* Shared-tag filter indicator */}
+      {(tagFilter || sharedTagCount > 0) && (
+        <div className="flex flex-wrap gap-2 items-center">
+          <span className="text-xs text-muted-foreground">Shared bytecode:</span>
+          {tagFilter ? (
+            <button
+              onClick={() => setTagFilter(null)}
+              className="inline-flex items-center gap-1 text-[11px] font-mono px-2 py-0.5 rounded border border-amber-500/60 bg-amber-500/15 text-amber-400 hover:bg-amber-500/25 transition-colors"
+            >
+              tag {tagFilter.slice(0, 8)}… ×{tagCount.get(tagFilter) ?? 0} clones
+              <X size={10} className="ml-0.5" />
+            </button>
+          ) : (
+            <span className="text-xs text-amber-400/70">{sharedTagCount} tag{sharedTagCount !== 1 ? "s" : ""} with duplicate bytecode — click ×N clones in the Tag column to filter</span>
+          )}
+        </div>
+      )}
 
       {/* Table */}
       <div className="glass rounded-xl overflow-hidden">
@@ -337,6 +385,8 @@ export default function ProgramsView() {
                   prog={prog}
                   history={historyMap.get(prog.id)}
                   maxCallsPerSec={maxCallsPerSec}
+                  tagCount={tagCount}
+                  onTagFilter={setTagFilter}
                 />
               ))}
               {sorted.length === 0 && (
