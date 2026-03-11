@@ -97,8 +97,55 @@ mkdir -p "$OUT_DIR"
 cp -r "$SCRIPT_DIR/dist/public" "$OUT_DIR/public"
 cp "$SCRIPT_DIR/dist/server.js" "$OUT_DIR/server.js"
 
-# Copy env example
-cp "$SCRIPT_DIR/.env.example" "$OUT_DIR/.env.example" 2>/dev/null || true
+# Write .env.example (generated so it always reflects current options)
+cat > "$OUT_DIR/.env.example" << 'ENVEXAMPLE'
+# eBPF Viz — Standalone Configuration
+# Copy this file to .env and edit as needed.
+# All settings are optional — the server starts with sensible defaults.
+
+# ── Server ────────────────────────────────────────────────────────────────────
+# Port to listen on (default: 3000)
+PORT=3000
+
+# Network interface / address to bind on.
+#   Unset (default) → 0.0.0.0  (all IPv4 interfaces)
+#   HOST=::          → all IPv6 interfaces; on dual-stack kernels this also
+#                      accepts IPv4 connections via IPv4-mapped addresses
+#   HOST=0.0.0.0     → all IPv4 interfaces (explicit)
+#   HOST=::1         → loopback IPv6 only
+#   HOST=192.168.1.5 → specific IPv4 address
+# HOST=::
+
+# Set to "production" (default when running via start.sh)
+NODE_ENV=production
+
+# ── bpftool ───────────────────────────────────────────────────────────────────
+# Full path to the bpftool binary.
+# If not set, the server searches: /usr/sbin/bpftool, /usr/local/sbin/bpftool,
+# /sbin/bpftool, and whatever is on $PATH.
+# BPFTOOL_PATH=/usr/sbin/bpftool
+
+# How often (in milliseconds) to poll bpftool for new data (default: 5000)
+# POLL_INTERVAL_MS=5000
+
+# Set to "true" to start in demo mode (synthetic data, no bpftool required).
+# Useful for testing the UI without a Linux kernel with BPF support.
+# DEMO_MODE=false
+
+# ── Authentication (optional) ─────────────────────────────────────────────────
+# Leave these blank to run without authentication (all endpoints are public).
+# All eBPF data procedures are public by default — auth is only needed if you
+# want to restrict access to the settings/admin endpoints.
+# JWT_SECRET=
+# VITE_APP_ID=
+# OAUTH_SERVER_URL=
+# VITE_OAUTH_PORTAL_URL=
+
+# ── Database (optional) ───────────────────────────────────────────────────────
+# Only required if you enable authentication above.
+# Without a DATABASE_URL the server skips DB init and runs in auth-less mode.
+# DATABASE_URL=mysql://user:password@host:3306/ebpf_viz
+ENVEXAMPLE
 
 # Write the start script
 cat > "$OUT_DIR/start.sh" << 'STARTSCRIPT'
@@ -119,9 +166,23 @@ fi
 # Defaults
 export NODE_ENV="${NODE_ENV:-production}"
 export PORT="${PORT:-3000}"
+# HOST controls the network interface to bind on.
+#   Unset (default) → 0.0.0.0  (all IPv4 interfaces)
+#   HOST=::          → all IPv6 interfaces (dual-stack: also accepts IPv4)
+#   HOST=0.0.0.0     → all IPv4 interfaces (explicit)
+#   HOST=::1         → loopback IPv6 only
+export HOST="${HOST:-}"
 
-echo "Starting eBPF Viz on port $PORT..."
-echo "Open http://localhost:$PORT in your browser."
+if [ -n "$HOST" ]; then
+  DISPLAY_HOST="$HOST"
+  # Wrap bare IPv6 addresses in brackets for display
+  if [[ "$HOST" == *:* && "$HOST" != \[* ]]; then
+    DISPLAY_HOST="[$HOST]"
+  fi
+  echo "Starting eBPF Viz on http://${DISPLAY_HOST}:${PORT}/"
+else
+  echo "Starting eBPF Viz on http://localhost:${PORT}/"
+fi
 echo "Press Ctrl+C to stop."
 echo ""
 

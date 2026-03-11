@@ -73810,9 +73810,17 @@ async function startServer() {
   if (port !== preferredPort) {
     console.log(`Port ${preferredPort} is busy, using port ${port} instead`);
   }
-  server.listen(port, () => {
-    console.log(`Server running on http://localhost:${port}/`);
-  });
+  const host = process.env.HOST;
+  if (host) {
+    const displayHost = host.includes(":") ? `[${host}]` : host;
+    server.listen(port, host, () => {
+      console.log(`Server running on http://${displayHost}:${port}/`);
+    });
+  } else {
+    server.listen(port, () => {
+      console.log(`Server running on http://localhost:${port}/`);
+    });
+  }
 }
 startServer().catch(console.error);
 startPoller().catch((err) => {

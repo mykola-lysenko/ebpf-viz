@@ -15,9 +15,23 @@ fi
 # Defaults
 export NODE_ENV="${NODE_ENV:-production}"
 export PORT="${PORT:-3000}"
+# HOST controls the network interface to bind on.
+#   Unset (default) → 0.0.0.0  (all IPv4 interfaces)
+#   HOST=::          → all IPv6 interfaces (dual-stack: also accepts IPv4)
+#   HOST=0.0.0.0     → all IPv4 interfaces (explicit)
+#   HOST=::1         → loopback IPv6 only
+export HOST="${HOST:-}"
 
-echo "Starting eBPF Viz on port $PORT..."
-echo "Open http://localhost:$PORT in your browser."
+if [ -n "$HOST" ]; then
+  DISPLAY_HOST="$HOST"
+  # Wrap bare IPv6 addresses in brackets for display
+  if [[ "$HOST" == *:* && "$HOST" != \[* ]]; then
+    DISPLAY_HOST="[$HOST]"
+  fi
+  echo "Starting eBPF Viz on http://${DISPLAY_HOST}:${PORT}/"
+else
+  echo "Starting eBPF Viz on http://localhost:${PORT}/"
+fi
 echo "Press Ctrl+C to stop."
 echo ""
 

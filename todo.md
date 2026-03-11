@@ -199,3 +199,9 @@
 - [x] .env.example for standalone install (no Manus OAuth, no DB required)
 - [x] DEPLOY.md with step-by-step instructions for Mac build + devserver deploy
 - [x] Standalone mode: disable OAuth middleware, skip DB init when DATABASE_URL is absent
+
+## HOST Binding (IPv6 Support)
+- [x] Read HOST env var in server/_core/index.ts and pass to server.listen(port, host)
+- [x] Update .env.example with HOST documentation
+- [x] Update build-standalone.sh start.sh template with HOST documentation
+- [x] Rebuild standalone package

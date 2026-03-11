@@ -61,9 +61,22 @@ async function startServer() {
     console.log(`Port ${preferredPort} is busy, using port ${port} instead`);
   }
 
-  server.listen(port, () => {
-    console.log(`Server running on http://localhost:${port}/`);
-  });
+  // HOST controls the network interface to bind on.
+  // Use "::" to listen on all IPv6 interfaces (also accepts IPv4 on dual-stack
+  // systems via IPv4-mapped addresses). Use "0.0.0.0" for IPv4-only. When HOST
+  // is unset Node.js defaults to 0.0.0.0 (all IPv4 interfaces).
+  const host = process.env.HOST;
+
+  if (host) {
+    const displayHost = host.includes(":") ? `[${host}]` : host;
+    server.listen(port, host, () => {
+      console.log(`Server running on http://${displayHost}:${port}/`);
+    });
+  } else {
+    server.listen(port, () => {
+      console.log(`Server running on http://localhost:${port}/`);
+    });
+  }
 }
 
 startServer().catch(console.error);
