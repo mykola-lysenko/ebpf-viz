@@ -40,6 +40,20 @@ const PROG_W = 180;
 const PROG_H = 52;
 const PROG_GAP = 8;
 
+// ─── NIC-owned zone keys ──────────────────────────────────────────────────────
+// These program types are attached to network interfaces and are displayed
+// exclusively on the NIC nodes in the Network Layer band.  They are NOT shown
+// in the "Kernel Hook Zones" row to avoid duplication.
+const NIC_ZONE_KEYS = new Set([
+  "xdp",
+  "tc_ingress",
+  "tc_egress",
+  "netfilter",
+  "socket_filter",
+  "flow_dissector",
+  "sk_ops",
+]);
+
 // ─── Zone layout data ─────────────────────────────────────────────────────────
 
 const ZONE_COLORS: Record<string, string> = {
@@ -196,45 +210,25 @@ export function buildOsMapLayout(snapshot: EbpfSnapshot, maps: BpfMap[] = []): O
   const nodes: Node[] = [];
   const edges: Edge[] = [];
 
-  // ── 1. Zones row ────────────────────────────────────────────────────────────
-  const PACKET_ZONES = ["xdp", "tc_ingress", "netfilter", "socket_filter", "tc_egress"];
-  const SYSTEM_ZONES = ["kprobe", "tracepoint", "perf_event", "cgroup", "flow_dissector", "sk_ops", "other"];
-  const allZoneKeys = [...PACKET_ZONES, ...SYSTEM_ZONES];
+  // ── 1. Zones row (kernel-only — NIC zones are excluded) ─────────────────────
+  //
+  // NIC_ZONE_KEYS (xdp, tc_ingress, tc_egress, netfilter, socket_filter,
+  // flow_dissector, sk_ops) are shown exclusively on the NIC interface nodes
+  // in the Network Layer band.  Showing them here too would duplicate them.
+  const KERNEL_ONLY_ZONES = ["kprobe", "tracepoint", "perf_event", "cgroup", "other"];
 
   const zoneMap = new Map(snapshot.kernelZones.map(z => [z.zone, z]));
 
-  // Two rows of zones
-  const packetRowY = ZONES_SECTION_Y;
-  const systemRowY = ZONES_SECTION_Y + ZONE_H + 32;
-
-  PACKET_ZONES.forEach((zk, idx) => {
+  // Filter to only zones that (a) are kernel-only and (b) have at least one program
+  const visibleKernelZones = KERNEL_ONLY_ZONES.filter(zk => {
     const zone = zoneMap.get(zk as any);
-    if (!zone) return;
-    const x = KERNEL_PADDING + idx * (ZONE_W + ZONE_GAP);
-    const y = packetRowY;
-    nodes.push({
-      id: `zone-${zk}`,
-      type: "zoneNode",
-      position: { x, y },
-      data: {
-        zone: zk,
-        label: zone.label,
-        description: zone.description,
-        color: ZONE_COLORS[zk] ?? "#6b7280",
-        icon: ZONE_ICONS[zk] ?? "⚙",
-        programCount: zone.programs.length,
-        programs: zone.programs,
-        isPacketPath: true,
-      } satisfies ZoneNodeData,
-      style: { width: ZONE_W, height: ZONE_H },
-    });
+    return zone && zone.programs.length > 0;
   });
 
-  SYSTEM_ZONES.forEach((zk, idx) => {
-    const zone = zoneMap.get(zk as any);
-    if (!zone) return;
+  visibleKernelZones.forEach((zk, idx) => {
+    const zone = zoneMap.get(zk as any)!;
     const x = KERNEL_PADDING + idx * (ZONE_W + ZONE_GAP);
-    const y = systemRowY;
+    const y = ZONES_SECTION_Y;
     nodes.push({
       id: `zone-${zk}`,
       type: "zoneNode",
@@ -253,19 +247,24 @@ export function buildOsMapLayout(snapshot: EbpfSnapshot, maps: BpfMap[] = []): O
     });
   });
 
-  // Zone section label
-  nodes.push({
-    id: "label-zones",
-    type: "zoneSectionLabel",
-    position: { x: KERNEL_PADDING, y: ZONES_SECTION_Y - 36 },
-    data: { label: "Kernel Hook Zones", color: "#00d4ff" } satisfies SectionLabelData,
-    selectable: false,
-    draggable: false,
-  });
+  // Zone section label — only render if there are visible kernel zones
+  if (visibleKernelZones.length > 0) {
+    nodes.push({
+      id: "label-zones",
+      type: "zoneSectionLabel",
+      position: { x: KERNEL_PADDING, y: ZONES_SECTION_Y - 36 },
+      data: { label: "Kernel Hook Zones", color: "#00d4ff" } satisfies SectionLabelData,
+      selectable: false,
+      draggable: false,
+    });
+  }
 
   // ── 2. Cgroup tree ──────────────────────────────────────────────────────────
   const cgroupStartX = KERNEL_PADDING;
-  const cgroupStartY = systemRowY + ZONE_H + 60;
+  // If there are no visible kernel zones, start cgroups right below the header
+  const cgroupStartY = visibleKernelZones.length > 0
+    ? ZONES_SECTION_Y + ZONE_H + 60
+    : ZONES_SECTION_Y;
 
   const cgroupPositions = layoutCgroupTree(snapshot.cgroupTree, cgroupStartX, cgroupStartY);
 
@@ -361,32 +360,11 @@ export function buildOsMapLayout(snapshot: EbpfSnapshot, maps: BpfMap[] = []): O
       style: { width: IFACE_W },
     });
 
-    // Edge from XDP zone to interface if it has XDP programs
-    if (iface.layers.L2.some(p => p.type === "xdp")) {
-      edges.push({
-        id: `e-xdp-${iface.name}`,
-        source: "zone-xdp",
-        target: `iface-${iface.name}`,
-        type: "smoothstep",
-        style: { stroke: "#00d4ff40", strokeWidth: 1.5, strokeDasharray: "4 3" },
-        animated: true,
-      });
-    }
-    // Edge from TC zone to interface if it has TC programs
-    if (iface.layers.L2.some(p => p.rawType === "sched_cls" || p.rawType === "sched_act")) {
-      edges.push({
-        id: `e-tc-${iface.name}`,
-        source: "zone-tc_ingress",
-        target: `iface-${iface.name}`,
-        type: "smoothstep",
-        style: { stroke: "#7c3aed40", strokeWidth: 1.5, strokeDasharray: "4 3" },
-        animated: true,
-      });
-    }
+    // NIC-owned zones no longer have zone nodes, so we skip the zone→iface edges.
+    // (Previously there were edges from zone-xdp and zone-tc_ingress to each iface.)
   });
 
   // Network band
-  const netIfaceCount = Math.max(snapshot.networkInterfaces.length, 1);
   const netBandH = IFACE_H + 120;
   nodes.push({
     id: "band-network",
@@ -433,19 +411,42 @@ export function buildOsMapLayout(snapshot: EbpfSnapshot, maps: BpfMap[] = []): O
       style: { width: PROC_W, height: PROC_H },
     });
 
-    // Edges from process to owned programs in kernel zones
+    // Edges from process to owned programs:
+    // - NIC-type programs → point to the NIC interface node (if one exists)
+    // - Kernel-type programs → point to the kernel zone node
     proc.programIds.forEach(progId => {
       const prog = snapshot.programs.find(p => p.id === progId);
       if (!prog) return;
       const zoneKey = progTypeToZone(prog.rawType);
-      edges.push({
-        id: `e-proc-${proc.pid}-prog-${progId}`,
-        source: `proc-${proc.pid}`,
-        target: `zone-${zoneKey}`,
-        type: "smoothstep",
-        style: { stroke: "#ffffff15", strokeWidth: 1, strokeDasharray: "3 4" },
-        animated: false,
-      });
+
+      if (NIC_ZONE_KEYS.has(zoneKey)) {
+        // Find the interface this program is attached to
+        const attachedIface = snapshot.networkInterfaces.find(iface =>
+          iface.allPrograms.some(ap => ap.id === prog.id)
+        );
+        if (attachedIface) {
+          edges.push({
+            id: `e-proc-${proc.pid}-prog-${progId}`,
+            source: `proc-${proc.pid}`,
+            target: `iface-${attachedIface.name}`,
+            type: "smoothstep",
+            style: { stroke: "#ffffff15", strokeWidth: 1, strokeDasharray: "3 4" },
+            animated: false,
+          });
+        }
+        // If not attached to any specific iface (e.g. global socket_filter),
+        // skip the edge — there's no kernel zone node to point to.
+      } else {
+        // Kernel zone node exists for this type
+        edges.push({
+          id: `e-proc-${proc.pid}-prog-${progId}`,
+          source: `proc-${proc.pid}`,
+          target: `zone-${zoneKey}`,
+          type: "smoothstep",
+          style: { stroke: "#ffffff15", strokeWidth: 1, strokeDasharray: "3 4" },
+          animated: false,
+        });
+      }
     });
   });
 
@@ -465,7 +466,7 @@ export function buildOsMapLayout(snapshot: EbpfSnapshot, maps: BpfMap[] = []): O
     zIndex: -10,
   });
 
-  // ── 6. BPF Maps (below network band) ─────────────────────────────────────────────────────────────────────
+  // ── 6. BPF Maps (below network band) ─────────────────────────────────────────
   const MAP_SECTION_TOP_MARGIN = 60;
   const MAP_W = 180;
   const MAP_H = 90;
@@ -523,15 +524,34 @@ export function buildOsMapLayout(snapshot: EbpfSnapshot, maps: BpfMap[] = []): O
         const prog = snapshot.programs.find(p => p.id === progId);
         if (!prog) return;
         const zoneKey = progTypeToZone(prog.rawType);
-        edges.push({
-          id: `e-prog-${progId}-map-${map.id}`,
-          source: `zone-${zoneKey}`,
-          target: nodeId,
-          type: "smoothstep",
-          style: { stroke: `${color}40`, strokeWidth: 1, strokeDasharray: "3 4" },
-          animated: false,
-          markerEnd: { type: "arrowclosed" as any, color, width: 8, height: 8 },
-        });
+
+        // For NIC-type programs, draw the edge from the NIC node instead
+        if (NIC_ZONE_KEYS.has(zoneKey)) {
+          const attachedIface = snapshot.networkInterfaces.find(iface =>
+            iface.allPrograms.some(ap => ap.id === prog.id)
+          );
+          if (attachedIface) {
+            edges.push({
+              id: `e-prog-${progId}-map-${map.id}`,
+              source: `iface-${attachedIface.name}`,
+              target: nodeId,
+              type: "smoothstep",
+              style: { stroke: `${color}40`, strokeWidth: 1, strokeDasharray: "3 4" },
+              animated: false,
+              markerEnd: { type: "arrowclosed" as any, color, width: 8, height: 8 },
+            });
+          }
+        } else {
+          edges.push({
+            id: `e-prog-${progId}-map-${map.id}`,
+            source: `zone-${zoneKey}`,
+            target: nodeId,
+            type: "smoothstep",
+            style: { stroke: `${color}40`, strokeWidth: 1, strokeDasharray: "3 4" },
+            animated: false,
+            markerEnd: { type: "arrowclosed" as any, color, width: 8, height: 8 },
+          });
+        }
       });
     });
   }

@@ -1,6 +1,13 @@
 /**
  * Tests for the OS Map layout engine (useOsMapLayout / buildOsMapLayout).
  * We import the pure buildOsMapLayout function directly — no React hooks needed.
+ *
+ * Key behaviour under test:
+ *   - NIC-specific zones (xdp, tc_ingress, tc_egress, netfilter, socket_filter,
+ *     flow_dissector, sk_ops) are NOT rendered as kernel zone nodes.
+ *   - Those programs appear exclusively on the NIC interface nodes.
+ *   - Kernel-only zones (kprobe, tracepoint, perf_event, cgroup, other) ARE
+ *     rendered as zone nodes — but only when they have at least one program.
  */
 import { describe, it, expect } from "vitest";
 import { buildOsMapLayout } from "../client/src/hooks/useOsMapLayout";
@@ -50,6 +57,23 @@ function makeSnapshot(overrides: Partial<EbpfSnapshot> = {}): EbpfSnapshot {
         osiLayer: "L3",
         color: "#3b82f6",
       },
+      {
+        id: 3,
+        type: "kprobe",
+        rawType: "kprobe",
+        name: "trace_sys_open",
+        tag: "aabbccdd99887766",
+        gplCompatible: true,
+        loadedAt: 1700000002,
+        orphaned: false,
+        bytesXlated: 256,
+        jited: true,
+        memlock: 4096,
+        mapIds: [],
+        attachments: [],
+        osiLayer: "kernel",
+        color: "#f59e0b",
+      },
     ],
     networkInterfaces: [
       {
@@ -86,21 +110,21 @@ function makeSnapshot(overrides: Partial<EbpfSnapshot> = {}): EbpfSnapshot {
         zone: "xdp",
         label: "XDP",
         description: "Express Data Path",
-        programs: [],
+        programs: [{ id: 1 } as any],
         osiLayer: "L2",
       },
       {
         zone: "cgroup",
         label: "Cgroup Hooks",
         description: "Cgroup BPF programs",
-        programs: [],
+        programs: [{ id: 2 } as any],
         osiLayer: "kernel",
       },
       {
         zone: "kprobe",
         label: "kprobes",
         description: "Kernel probes",
-        programs: [],
+        programs: [{ id: 3 } as any],
         osiLayer: "kernel",
       },
       {
@@ -168,9 +192,9 @@ function makeSnapshot(overrides: Partial<EbpfSnapshot> = {}): EbpfSnapshot {
       },
     ],
     stats: {
-      total: 2,
-      byType: { xdp: 1, cgroup_skb: 1 },
-      jited: 2,
+      total: 3,
+      byType: { xdp: 1, cgroup_skb: 1, kprobe: 1 },
+      jited: 3,
       orphaned: 0,
     },
     ...overrides,
@@ -195,15 +219,108 @@ describe("buildOsMapLayout", () => {
     expect(nodeIds).toContain("band-network");
   });
 
-  it("creates zone nodes for all kernel zones in the snapshot", () => {
+  // ── NIC deduplication ────────────────────────────────────────────────────────
+
+  it("does NOT create zone nodes for NIC-specific hook types (xdp, tc, netfilter, etc.)", () => {
     const layout = buildOsMapLayout(makeSnapshot());
     const zoneNodeIds = layout.nodes
       .filter(n => n.type === "zoneNode")
       .map(n => n.id);
-    expect(zoneNodeIds).toContain("zone-xdp");
+
+    // These must NOT appear as kernel zone nodes
+    expect(zoneNodeIds).not.toContain("zone-xdp");
+    expect(zoneNodeIds).not.toContain("zone-tc_ingress");
+    expect(zoneNodeIds).not.toContain("zone-tc_egress");
+    expect(zoneNodeIds).not.toContain("zone-netfilter");
+    expect(zoneNodeIds).not.toContain("zone-socket_filter");
+    expect(zoneNodeIds).not.toContain("zone-flow_dissector");
+    expect(zoneNodeIds).not.toContain("zone-sk_ops");
+  });
+
+  it("creates zone nodes only for kernel-only hook types that have programs", () => {
+    const layout = buildOsMapLayout(makeSnapshot());
+    const zoneNodeIds = layout.nodes
+      .filter(n => n.type === "zoneNode")
+      .map(n => n.id);
+
+    // cgroup and kprobe have programs in the fixture → should be present
     expect(zoneNodeIds).toContain("zone-cgroup");
     expect(zoneNodeIds).toContain("zone-kprobe");
+
+    // tracepoint and perf_event have no programs in the fixture → should be absent
+    expect(zoneNodeIds).not.toContain("zone-tracepoint");
+    expect(zoneNodeIds).not.toContain("zone-perf_event");
   });
+
+  it("shows zone-tracepoint when tracepoint zone has programs", () => {
+    const snap = makeSnapshot();
+    snap.kernelZones.find(z => z.zone === "tracepoint")!.programs = [{ id: 99 } as any];
+    const layout = buildOsMapLayout(snap);
+    const zoneNodeIds = layout.nodes.filter(n => n.type === "zoneNode").map(n => n.id);
+    expect(zoneNodeIds).toContain("zone-tracepoint");
+  });
+
+  it("does not render 'Kernel Hook Zones' section label when all zones are empty", () => {
+    const snap = makeSnapshot();
+    // Clear all kernel-only zone programs
+    snap.kernelZones.forEach(z => { z.programs = []; });
+    const layout = buildOsMapLayout(snap);
+    const labelNode = layout.nodes.find(n => n.id === "label-zones");
+    expect(labelNode).toBeUndefined();
+  });
+
+  it("renders 'Kernel Hook Zones' section label when at least one kernel zone has programs", () => {
+    const layout = buildOsMapLayout(makeSnapshot()); // kprobe + cgroup have programs
+    const labelNode = layout.nodes.find(n => n.id === "label-zones");
+    expect(labelNode).toBeDefined();
+  });
+
+  // ── NIC interface nodes ───────────────────────────────────────────────────────
+
+  it("creates interface nodes for each network interface", () => {
+    const layout = buildOsMapLayout(makeSnapshot());
+    const ifaceNodes = layout.nodes.filter(n => n.type === "interfaceNode");
+    expect(ifaceNodes.length).toBe(1);
+    expect(ifaceNodes[0].id).toBe("iface-eth0");
+  });
+
+  it("does not create zone-xdp→iface edge (NIC zones no longer have zone nodes)", () => {
+    const snap = makeSnapshot();
+    snap.networkInterfaces[0].layers.L2 = [snap.programs[0]];
+    snap.networkInterfaces[0].allPrograms = [snap.programs[0]];
+    const layout = buildOsMapLayout(snap);
+    // Old behaviour: edge from zone-xdp to iface-eth0. New behaviour: no such edge.
+    const oldEdge = layout.edges.find(
+      e => e.source === "zone-xdp" && e.target === "iface-eth0"
+    );
+    expect(oldEdge).toBeUndefined();
+  });
+
+  // ── Process → target edges ────────────────────────────────────────────────────
+
+  it("routes process→NIC-type program edge to the NIC interface node", () => {
+    const snap = makeSnapshot();
+    // Attach the XDP program to a process and to eth0
+    snap.programs[0].pids = [{ pid: 42, comm: "loader" }];
+    snap.networkInterfaces[0].allPrograms = [snap.programs[0]];
+    const layout = buildOsMapLayout(snap);
+    const edge = layout.edges.find(
+      e => e.source === "proc-42" && e.target === "iface-eth0"
+    );
+    expect(edge).toBeDefined();
+  });
+
+  it("routes process→kernel-type program edge to the kernel zone node", () => {
+    const snap = makeSnapshot();
+    snap.programs[2].pids = [{ pid: 99, comm: "tracer" }]; // kprobe program
+    const layout = buildOsMapLayout(snap);
+    const edge = layout.edges.find(
+      e => e.source === "proc-99" && e.target === "zone-kprobe"
+    );
+    expect(edge).toBeDefined();
+  });
+
+  // ── Cgroup tree ───────────────────────────────────────────────────────────────
 
   it("creates cgroup nodes for each cgroup in the tree", () => {
     const layout = buildOsMapLayout(makeSnapshot());
@@ -223,12 +340,7 @@ describe("buildOsMapLayout", () => {
     expect(cgroupEdge).toBeDefined();
   });
 
-  it("creates interface nodes for each network interface", () => {
-    const layout = buildOsMapLayout(makeSnapshot());
-    const ifaceNodes = layout.nodes.filter(n => n.type === "interfaceNode");
-    expect(ifaceNodes.length).toBe(1);
-    expect(ifaceNodes[0].id).toBe("iface-eth0");
-  });
+  // ── General correctness ───────────────────────────────────────────────────────
 
   it("all content nodes have valid x,y positions", () => {
     const layout = buildOsMapLayout(makeSnapshot());
@@ -257,19 +369,6 @@ describe("buildOsMapLayout", () => {
     expect(procNodes[0].id).toBe("proc-1234");
   });
 
-  it("creates an animated edge from XDP zone to interface with XDP programs", () => {
-    const snap = makeSnapshot();
-    // Put an XDP program on the interface
-    snap.networkInterfaces[0].layers.L2 = [snap.programs[0]];
-    snap.networkInterfaces[0].allPrograms = [snap.programs[0]];
-    const layout = buildOsMapLayout(snap);
-    const xdpEdge = layout.edges.find(
-      e => e.source === "zone-xdp" && e.target === "iface-eth0"
-    );
-    expect(xdpEdge).toBeDefined();
-    expect((xdpEdge as any).animated).toBe(true);
-  });
-
   it("does not create duplicate node IDs", () => {
     const layout = buildOsMapLayout(makeSnapshot());
     const ids = layout.nodes.map(n => n.id);
@@ -288,5 +387,40 @@ describe("buildOsMapLayout", () => {
     const layout = buildOsMapLayout(snap);
     expect(layout.nodes.length).toBeGreaterThan(0); // band nodes still exist
     expect(layout.edges.length).toBe(0);
+  });
+
+  it("routes map→NIC-type program edge from the NIC interface node", () => {
+    const snap = makeSnapshot();
+    // XDP program (id=1) is attached to eth0 and uses a map
+    snap.networkInterfaces[0].allPrograms = [snap.programs[0]];
+    const maps = [
+      {
+        id: 10,
+        type: "hash",
+        rawType: "hash",
+        name: "xdp_map",
+        flags: 0,
+        bytesKey: 4,
+        bytesValue: 8,
+        maxEntries: 128,
+        bytesMemlock: 4096,
+        frozen: false,
+        pinnedPaths: [],
+        btfId: null,
+        usedByProgIds: [1], // used by the XDP program
+        color: "#a78bfa",
+        category: "data",
+      },
+    ];
+    const layout = buildOsMapLayout(snap, maps as any);
+    const mapEdge = layout.edges.find(
+      e => e.source === "iface-eth0" && e.target === "map-10"
+    );
+    expect(mapEdge).toBeDefined();
+    // Must NOT come from zone-xdp (which no longer exists)
+    const badEdge = layout.edges.find(
+      e => e.source === "zone-xdp" && e.target === "map-10"
+    );
+    expect(badEdge).toBeUndefined();
   });
 });

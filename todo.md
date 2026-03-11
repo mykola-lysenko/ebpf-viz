@@ -116,3 +116,11 @@
 - [x] Removed refetchInterval polling from MapsView, OsMapView, and EbpfContext
 - [x] SettingsView updated to show SSE stream status and explain live-push model
 - [x] 10 new SSE endpoint tests (138 total, all passing)
+
+## OS Map Deduplication Fix
+- [x] Remove XDP/TC/sk_filter/sockops/netfilter/flow_dissector programs from Kernel Hook Zone nodes (keep only on NIC nodes)
+- [x] Empty kernel-only zones are now hidden from the OS map
+- [x] 'Kernel Hook Zones' section label hidden when no kernel zones have programs
+- [x] Process→NIC-type program edges now point to the NIC interface node
+- [x] Map→NIC-type program edges now originate from the NIC interface node
+- [x] Updated osmap-layout tests (19 tests, all passing; 145 total)
