@@ -145,3 +145,10 @@
 - [x] Added synthetic sockmap0 interface to MOCK_NET with sock_ops/sk_skb/sk_msg/sk_lookup programs
 - [x] Extended buildNetworkInterfaces: sk_skb/sk_lookup → L4, sk_msg/sock_ops → L7
 - [x] 5 new tests for sockmap/netfilter/flow_dissector layer assignment (173 total, all passing)
+
+## TC Direction Badges
+- [x] Added direction field to BpfAttachment type (shared/ebpf-types.ts)
+- [x] Parser sets direction from TC/TCx kind string (clsact/ingress → ingress, clsact/egress → egress)
+- [x] ProgBadge reads first TC/TCx attachment direction and renders → (blue) or ← (amber) badge
+- [x] Badge has title tooltip: "Ingress (incoming packets)" / "Egress (outgoing packets)"
+- [x] 5 new direction tests (177 total, all passing)

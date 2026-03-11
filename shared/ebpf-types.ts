@@ -122,6 +122,8 @@ export interface BpfAttachment {
   ifname?: string;
   cgroupPath?: string;
   attachFlags?: string;
+  /** Packet flow direction — set for TC, TCx, and netkit attachments */
+  direction?: "ingress" | "egress";
 }
 
 // ─── Network interface model ───────────────────────────────────────────────

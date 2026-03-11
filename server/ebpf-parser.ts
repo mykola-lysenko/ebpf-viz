@@ -205,25 +205,32 @@ export function enrichWithNetAttachments(
   for (const entry of snapshot.tc ?? []) {
     const p = progs.get(entry.id);
     if (!p) continue;
-    const isIngress = entry.kind?.includes("ingress");
+    const kindStr = entry.kind ?? "";
+    const direction: "ingress" | "egress" | undefined =
+      kindStr.includes("ingress") ? "ingress" :
+      kindStr.includes("egress")  ? "egress"  :
+      undefined;
     p.attachments.push({
       kind: "tc",
-      detail: `${entry.devname} ${entry.kind ?? "tc"} ${entry.name ? `[${entry.name}]` : ""}`.trim(),
+      detail: `${entry.devname} ${kindStr || "tc"} ${entry.name ? `[${entry.name}]` : ""}`.trim(),
       ifname: entry.devname,
+      direction,
     });
-    // refine kernel zone
-    if (p.type === "sched_cls" || p.type === "sched_act") {
-      // keep as-is, zone already set
-    }
   }
 
   for (const entry of snapshot.tcx ?? []) {
     const p = progs.get(entry.id);
     if (!p) continue;
+    const kindStr = entry.kind ?? "";
+    const direction: "ingress" | "egress" | undefined =
+      kindStr.includes("ingress") ? "ingress" :
+      kindStr.includes("egress")  ? "egress"  :
+      undefined;
     p.attachments.push({
       kind: "tcx",
-      detail: `${entry.devname} tcx`,
+      detail: `${entry.devname} tcx${kindStr ? ` ${kindStr}` : ""}`,
       ifname: entry.devname,
+      direction,
     });
   }
 

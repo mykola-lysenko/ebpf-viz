@@ -503,10 +503,19 @@ function ProgramTooltip({ prog, color, onClose }: {
   );
 }
 
-/** A single program badge with hover tooltip */
+/** Derive the packet direction from a program's TC/TCx attachments */
+function getTcDirection(prog: BpfProgram): "ingress" | "egress" | undefined {
+  const tcAttachment = prog.attachments.find(
+    a => (a.kind === "tc" || a.kind === "tcx") && a.direction != null
+  );
+  return tcAttachment?.direction;
+}
+
+/** A single program badge with hover tooltip and optional direction badge */
 function ProgBadge({ prog, color }: { prog: BpfProgram; color: string }) {
   const [hovered, setHovered] = useState(false);
   const displayName = prog.name.length > 12 ? prog.name.slice(0, 11) + "…" : prog.name;
+  const direction = getTcDirection(prog);
 
   return (
     <div style={{ position: "relative" }}>
@@ -525,9 +534,31 @@ function ProgBadge({ prog, color }: { prog: BpfProgram; color: string }) {
           whiteSpace: "nowrap",
           transition: "background 0.15s, border-color 0.15s",
           userSelect: "none",
+          display: "flex",
+          alignItems: "center",
+          gap: 3,
         }}
       >
         {displayName}
+        {direction && (
+          <span
+            title={direction === "ingress" ? "Ingress (incoming packets)" : "Egress (outgoing packets)"}
+            style={{
+              fontSize: 7,
+              fontWeight: 700,
+              fontFamily: "monospace",
+              background: direction === "ingress" ? "#3b82f620" : "#f59e0b20",
+              border: `1px solid ${direction === "ingress" ? "#3b82f650" : "#f59e0b50"}`,
+              color: direction === "ingress" ? "#60a5fa" : "#fbbf24",
+              borderRadius: 3,
+              padding: "0 3px",
+              lineHeight: "1.6",
+              letterSpacing: "0.02em",
+            }}
+          >
+            {direction === "ingress" ? "→" : "←"}
+          </span>
+        )}
       </div>
       {hovered && (
         <ProgramTooltip prog={prog} color={color} onClose={() => setHovered(false)} />

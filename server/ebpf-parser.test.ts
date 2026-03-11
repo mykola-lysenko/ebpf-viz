@@ -169,6 +169,54 @@ describe("enrichWithNetAttachments", () => {
     expect(prog.attachments[0].ifname).toBe("eth0");
   });
 
+  it("sets direction=ingress for clsact/ingress TC attachment", () => {
+    const tcProg: RawBpfProg = { ...xdpProg, id: 11, type: "sched_cls", name: "cls_ingress" };
+    const progs = parseProgList([tcProg]);
+    const net: RawNetSnapshot[] = [{
+      tc: [{ devname: "eth0", ifindex: 2, id: 11, name: "cls_ingress", kind: "clsact/ingress" }],
+    }];
+    enrichWithNetAttachments(progs, net);
+    const prog = progs.get(11)!;
+    expect(prog.attachments[0].direction).toBe("ingress");
+  });
+
+  it("sets direction=egress for clsact/egress TC attachment", () => {
+    const tcProg: RawBpfProg = { ...xdpProg, id: 12, type: "sched_cls", name: "cls_egress" };
+    const progs = parseProgList([tcProg]);
+    const net: RawNetSnapshot[] = [{
+      tc: [{ devname: "eth0", ifindex: 2, id: 12, name: "cls_egress", kind: "clsact/egress" }],
+    }];
+    enrichWithNetAttachments(progs, net);
+    const prog = progs.get(12)!;
+    expect(prog.attachments[0].direction).toBe("egress");
+  });
+
+  it("sets direction=undefined for TC attachment without ingress/egress in kind", () => {
+    const tcProg: RawBpfProg = { ...xdpProg, id: 13, type: "sched_cls", name: "tc_generic" };
+    const progs = parseProgList([tcProg]);
+    const net: RawNetSnapshot[] = [{
+      tc: [{ devname: "eth0", ifindex: 2, id: 13, name: "tc_generic", kind: "filter" }],
+    }];
+    enrichWithNetAttachments(progs, net);
+    const prog = progs.get(13)!;
+    expect(prog.attachments[0].direction).toBeUndefined();
+  });
+
+  it("sets direction for TCx ingress/egress attachments", () => {
+    const tcxIngress: RawBpfProg = { ...xdpProg, id: 14, type: "sched_cls", name: "tcx_in" };
+    const tcxEgress: RawBpfProg  = { ...xdpProg, id: 15, type: "sched_cls", name: "tcx_out" };
+    const progs = parseProgList([tcxIngress, tcxEgress]);
+    const net: RawNetSnapshot[] = [{
+      tcx: [
+        { devname: "eth0", ifindex: 2, id: 14, kind: "tcx/ingress" },
+        { devname: "eth0", ifindex: 2, id: 15, kind: "tcx/egress" },
+      ],
+    }];
+    enrichWithNetAttachments(progs, net);
+    expect(progs.get(14)!.attachments[0].direction).toBe("ingress");
+    expect(progs.get(15)!.attachments[0].direction).toBe("egress");
+  });
+
   it("ignores programs not in the prog map", () => {
     const progs = parseProgList([xdpProg]);
     const net: RawNetSnapshot[] = [{
