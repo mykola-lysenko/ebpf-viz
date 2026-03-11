@@ -3,7 +3,7 @@ import { Link, useLocation } from "wouter";
 import {
   Cpu, Network, FolderTree, List, Settings,
   LayoutDashboard, RefreshCw, Wifi, WifiOff,
-  ChevronLeft, ChevronRight, Search, X, Map
+  ChevronLeft, ChevronRight, Search, X, Map, Database
 } from "lucide-react";
 import { EbpfProvider, useEbpf } from "@/contexts/EbpfContext";
 import { ProgramDetailPanel } from "./ProgramDetailPanel";
@@ -19,6 +19,7 @@ const NAV_ITEMS = [
   { path: "/network",  icon: Network,         label: "Network",    },
   { path: "/cgroups",  icon: FolderTree,      label: "Cgroups",    },
   { path: "/programs", icon: List,            label: "Programs",   },
+  { path: "/maps",     icon: Database,        label: "Maps",       },
   { path: "/map",      icon: Map,             label: "OS Map",     },
   { path: "/settings", icon: Settings,        label: "Settings",   },
 ];

@@ -2,6 +2,7 @@ import { z } from "zod";
 import { publicProcedure, router } from "./_core/trpc";
 import {
   getLatestSnapshot,
+  getLatestMaps,
   getPollerStatus,
   triggerPoll,
   updateConfig,
@@ -70,8 +71,19 @@ export const appRouter = router({
         kernelVersion: snap.kernelVersion,
       };
     }),
+    // ── BPF Maps ───────────────────────────────────────────────────────────────────
+    /** All BPF maps with program relationships */
+    maps: publicProcedure.query(() => {
+      return getLatestMaps();
+    }),
+    /** Single map by ID */
+    map: publicProcedure
+      .input(z.object({ id: z.number() }))
+      .query(({ input }) => {
+        return getLatestMaps().find(m => m.id === input.id) ?? null;
+      }),
 
-    // ── Code Inspector ─────────────────────────────────────────────────────
+    // ── Code Inspector ─────────────────────────────────────────────────────────
     /**
      * Fetch the full code dump for a single BPF program:
      * xlated bytecode, CFG DOT, jited assembly (when available),

@@ -1,8 +1,9 @@
 import { exec } from "child_process";
 import { promisify } from "util";
 import { hostname } from "os";
-import type { EbpfSnapshot, PollingConfig, RawBpfProg, RawCgroupEntry, RawNetSnapshot } from "../shared/ebpf-types";
+import type { BpfMap, EbpfSnapshot, PollingConfig, RawBpfMap, RawBpfProg, RawCgroupEntry, RawNetSnapshot } from "../shared/ebpf-types";
 import { buildSnapshot } from "./ebpf-parser";
+import { buildMockMaps, parseMaps } from "./ebpf-map-parser";
 import { MOCK_CGROUPS, MOCK_NET, MOCK_PROGS } from "./ebpf-mock";
 import {
   ingestSnapshot,
@@ -27,6 +28,7 @@ const DEFAULT_CONFIG: PollingConfig = {
 
 let config: PollingConfig = { ...DEFAULT_CONFIG };
 let latestSnapshot: EbpfSnapshot | null = null;
+let latestMaps: BpfMap[] = [];
 let pollingTimer: ReturnType<typeof setInterval> | null = null;
 let lastError: string | null = null;
 let bpftoolVersion = "unknown";
@@ -94,16 +96,19 @@ async function fetchLiveData(): Promise<{
   progs: RawBpfProg[];
   net: RawNetSnapshot[];
   cgroups: RawCgroupEntry[];
+  rawMaps: RawBpfMap[];
 }> {
-  const [progOut, netOut, cgroupOut] = await Promise.allSettled([
+  const [progOut, netOut, cgroupOut, mapOut] = await Promise.allSettled([
     runBpftool("prog list"),
     runBpftool("net"),
     runBpftool("cgroup tree"),
+    runBpftool("map list"),
   ]);
 
   let progs: RawBpfProg[] = [];
   let net: RawNetSnapshot[] = [];
   let cgroups: RawCgroupEntry[] = [];
+  let rawMaps: RawBpfMap[] = [];
 
   if (progOut.status === "fulfilled") {
     try { progs = JSON.parse(stripNonJson(progOut.value)); } catch { progs = []; }
@@ -114,8 +119,11 @@ async function fetchLiveData(): Promise<{
   if (cgroupOut.status === "fulfilled") {
     try { cgroups = JSON.parse(stripNonJson(cgroupOut.value)); } catch { cgroups = []; }
   }
+  if (mapOut.status === "fulfilled") {
+    try { rawMaps = JSON.parse(stripNonJson(mapOut.value)); } catch { rawMaps = []; }
+  }
 
-  return { progs, net, cgroups };
+  return { progs, net, cgroups, rawMaps };
 }
 
 // ─── Poll ──────────────────────────────────────────────────────────────────
@@ -128,6 +136,8 @@ async function poll(): Promise<void> {
     let progs: RawBpfProg[];
     let net: RawNetSnapshot[];
     let cgroups: RawCgroupEntry[];
+
+    let rawMaps: RawBpfMap[] = [];
 
     if (config.demoMode) {
       // Simulate incrementing stats in demo mode so sparklines are always active
@@ -145,6 +155,7 @@ async function poll(): Promise<void> {
       progs = data.progs;
       net = data.net;
       cgroups = data.cgroups;
+      rawMaps = data.rawMaps;
     }
 
     const snap = buildSnapshot(progs, net, cgroups, {
@@ -153,6 +164,13 @@ async function poll(): Promise<void> {
       bpftoolVersion,
       demoMode: config.demoMode,
     });
+
+    // ── Parse maps ─────────────────────────────────────────────────────────
+    if (config.demoMode) {
+      latestMaps = buildMockMaps(snap.programs);
+    } else {
+      latestMaps = parseMaps(rawMaps, snap.programs);
+    }
 
     // ── Feed the stats ring buffer ──────────────────────────────────────────
     ingestSnapshot(snap.programs, snap.timestamp);
@@ -177,6 +195,7 @@ async function poll(): Promise<void> {
         bpftoolVersion: "demo",
         demoMode: true,
       });
+      latestMaps = buildMockMaps(snap.programs);
       ingestSnapshot(snap.programs, snap.timestamp);
       latestSnapshot = snap;
       for (const cb of Array.from(listeners)) {
@@ -219,6 +238,10 @@ export function stopPoller(): void {
 
 export function getLatestSnapshot(): EbpfSnapshot | null {
   return latestSnapshot;
+}
+
+export function getLatestMaps(): BpfMap[] {
+  return latestMaps;
 }
 
 export function isStatsEnabled(): boolean {

@@ -1,6 +1,7 @@
 import { useMemo } from "react";
 import type { Node, Edge } from "@xyflow/react";
-import type { EbpfSnapshot, BpfProgram, CgroupNode, NetworkInterface, KernelAttachmentZone } from "../../../shared/ebpf-types";
+import type { EbpfSnapshot, BpfProgram, BpfMap, CgroupNode, NetworkInterface, KernelAttachmentZone } from "../../../shared/ebpf-types";
+import type { MapNodeData } from "../components/osmap/OsMapNodes";
 
 // ─── Layout constants ────────────────────────────────────────────────────────
 
@@ -74,7 +75,8 @@ export type OsMapNodeType =
   | "cgroupNode"
   | "interfaceNode"
   | "programNode"
-  | "processNode";
+  | "processNode"
+  | "mapNode";
 
 export interface ZoneNodeData {
   zone: string;
@@ -180,7 +182,17 @@ export interface OsMapLayout {
   totalWidth: number;
 }
 
-export function buildOsMapLayout(snapshot: EbpfSnapshot): OsMapLayout {
+// ─── Map category colors ─────────────────────────────────────────────────────
+
+const MAP_CATEGORY_COLORS: Record<string, string> = {
+  data:    "#a78bfa",
+  event:   "#f97316",
+  control: "#10b981",
+  socket:  "#06b6d4",
+  other:   "#6b7280",
+};
+
+export function buildOsMapLayout(snapshot: EbpfSnapshot, maps: BpfMap[] = []): OsMapLayout {
   const nodes: Node[] = [];
   const edges: Edge[] = [];
 
@@ -453,7 +465,78 @@ export function buildOsMapLayout(snapshot: EbpfSnapshot): OsMapLayout {
     zIndex: -10,
   });
 
-  const totalHeight = NET_Y + netBandH + 60;
+  // ── 6. BPF Maps (below network band) ─────────────────────────────────────────────────────────────────────
+  const MAP_SECTION_TOP_MARGIN = 60;
+  const MAP_W = 180;
+  const MAP_H = 90;
+  const MAP_GAP_X = 20;
+  const MAP_GAP_Y = 16;
+  const MAP_COLS = Math.max(1, Math.floor((CANVAS_W - KERNEL_PADDING * 2 + MAP_GAP_X) / (MAP_W + MAP_GAP_X)));
+  const MAPS_Y = NET_Y + netBandH + MAP_SECTION_TOP_MARGIN;
+
+  let mapsMaxY = MAPS_Y;
+
+  if (maps.length > 0) {
+    // Section label
+    nodes.push({
+      id: "label-maps",
+      type: "zoneSectionLabel",
+      position: { x: KERNEL_PADDING, y: MAPS_Y - 36 },
+      data: { label: "BPF Maps", color: "#a78bfa" },
+      selectable: false,
+      draggable: false,
+    });
+
+    maps.forEach((map, idx) => {
+      const col = idx % MAP_COLS;
+      const row = Math.floor(idx / MAP_COLS);
+      const x = KERNEL_PADDING + col * (MAP_W + MAP_GAP_X);
+      const y = MAPS_Y + row * (MAP_H + MAP_GAP_Y);
+      const nodeId = `map-${map.id}`;
+      const color = MAP_CATEGORY_COLORS[map.category] ?? "#6b7280";
+
+      nodes.push({
+        id: nodeId,
+        type: "mapNode",
+        position: { x, y },
+        data: {
+          mapId: map.id,
+          name: map.name,
+          rawType: map.rawType,
+          category: map.category,
+          color,
+          bytesKey: map.bytesKey,
+          bytesValue: map.bytesValue,
+          maxEntries: map.maxEntries,
+          bytesMemlock: map.bytesMemlock,
+          isShared: map.usedByProgIds.length > 1,
+          frozen: map.frozen,
+          pinned: map.pinnedPaths.length > 0,
+        } satisfies MapNodeData,
+        style: { width: MAP_W, height: MAP_H },
+      });
+
+      mapsMaxY = Math.max(mapsMaxY, y + MAP_H);
+
+      // Edges from programs to this map
+      map.usedByProgIds.forEach(progId => {
+        const prog = snapshot.programs.find(p => p.id === progId);
+        if (!prog) return;
+        const zoneKey = progTypeToZone(prog.rawType);
+        edges.push({
+          id: `e-prog-${progId}-map-${map.id}`,
+          source: `zone-${zoneKey}`,
+          target: nodeId,
+          type: "smoothstep",
+          style: { stroke: `${color}40`, strokeWidth: 1, strokeDasharray: "3 4" },
+          animated: false,
+          markerEnd: { type: "arrowclosed" as any, color, width: 8, height: 8 },
+        });
+      });
+    });
+  }
+
+  const totalHeight = (maps.length > 0 ? mapsMaxY + 60 : NET_Y + netBandH + 60);
 
   return { nodes, edges, totalHeight, totalWidth: CANVAS_W };
 }
@@ -472,9 +555,9 @@ function progTypeToZone(rawType: string): string {
   return "other";
 }
 
-export function useOsMapLayout(snapshot: EbpfSnapshot | null): OsMapLayout {
+export function useOsMapLayout(snapshot: EbpfSnapshot | null, maps: BpfMap[] = []): OsMapLayout {
   return useMemo(() => {
     if (!snapshot) return { nodes: [], edges: [], totalHeight: 1200, totalWidth: CANVAS_W };
-    return buildOsMapLayout(snapshot);
-  }, [snapshot]);
+    return buildOsMapLayout(snapshot, maps);
+  }, [snapshot, maps]);
 }

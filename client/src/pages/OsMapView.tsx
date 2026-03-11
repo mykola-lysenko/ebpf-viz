@@ -28,6 +28,7 @@ import {
   Eye, EyeOff, Info, Cpu
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { trpc } from "@/lib/trpc";
 
 // ─── Styles injected once ─────────────────────────────────────────────────────
 
@@ -202,6 +203,8 @@ function MapLegend() {
     { color: "#10b981", label: "Network interfaces" },
     { color: "#ffffff30", label: "Dashed = ownership edge" },
     { color: "#00d4ff50", label: "Animated = active attachment" },
+    { color: "#a78bfa",   label: "BPF maps (data/event/control)" },
+    { color: "#a78bfa40", label: "Dashed = program → map edge" },
   ];
 
   return (
@@ -264,7 +267,9 @@ function MapLegend() {
 
 function OsMapCanvas() {
   const { snapshot, searchQuery, setSelectedProgram } = useEbpf();
-  const layout = useOsMapLayout(snapshot);
+  const mapsQuery = trpc.ebpf.maps.useQuery(undefined, { refetchInterval: 10000 });
+  const maps = mapsQuery.data ?? [];
+  const layout = useOsMapLayout(snapshot, maps);
   const { fitView, getViewport } = useReactFlow();
   const [nodes, setNodes, onNodesChange] = useNodesState(layout.nodes);
   const [edges, setEdges, onEdgesChange] = useEdgesState(layout.edges);
@@ -470,6 +475,7 @@ function OsMapCanvas() {
             if (n.type === "cgroupNode") return "#3b82f680";
             if (n.type === "interfaceNode") return "#10b98180";
             if (n.type === "processNode") return "#f59e0b80";
+            if (n.type === "mapNode") return "#a78bfa80";
             return "oklch(0.25 0.01 240)";
           }}
           style={{ width: 160, height: 100 }}

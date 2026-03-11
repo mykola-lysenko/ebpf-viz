@@ -547,6 +547,138 @@ export function ProcessNode({ data, selected }: { data: ProcessNodeData; selecte
   );
 }
 
+// ─── Map node ───────────────────────────────────────────────────────────────────
+
+export type MapNodeData = {
+  mapId: number;
+  name: string;
+  rawType: string;
+  category: string;
+  color: string;
+  bytesKey: number;
+  bytesValue: number;
+  maxEntries: number;
+  bytesMemlock: number;
+  isShared: boolean;
+  frozen: boolean;
+  pinned: boolean;
+};
+
+export function MapNode({ data, selected }: { data: MapNodeData; selected?: boolean }) {
+  const lod = useLod();
+  const { color, name, rawType, isShared, frozen, pinned, bytesKey, bytesValue, maxEntries } = data;
+
+  const formatEntries = (n: number) => {
+    if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
+    if (n >= 1_000) return `${(n / 1_000).toFixed(0)}K`;
+    return String(n);
+  };
+
+  return (
+    <div
+      style={{
+        width: "100%",
+        height: "100%",
+        background: `${color}12`,
+        border: `1.5px solid ${selected ? color : `${color}45`}`,
+        borderRadius: 10,
+        padding: lod === "minimal" ? 6 : 10,
+        display: "flex",
+        flexDirection: "column",
+        gap: 4,
+        boxShadow: selected
+          ? `0 0 0 2px ${color}60, 0 0 16px ${color}30`
+          : isShared
+          ? `0 0 10px ${color}20`
+          : undefined,
+        cursor: "default",
+        overflow: "hidden",
+      }}
+    >
+      <Handle type="target" position={Position.Top} style={{ opacity: 0 }} />
+      <Handle type="source" position={Position.Bottom} style={{ opacity: 0 }} />
+
+      {/* Header */}
+      <div style={{ display: "flex", alignItems: "center", gap: 5 }}>
+        <span style={{ fontSize: lod === "minimal" ? 12 : 14 }}>🗄</span>
+        {lod !== "minimal" && (
+          <span style={{
+            fontSize: 10,
+            fontWeight: 700,
+            fontFamily: "monospace",
+            color,
+            flex: 1,
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+            whiteSpace: "nowrap",
+          }}>
+            {name}
+          </span>
+        )}
+        {isShared && (
+          <div style={{
+            fontSize: 8,
+            fontWeight: 700,
+            fontFamily: "monospace",
+            color: "#f59e0b",
+            background: "#f59e0b18",
+            border: "1px solid #f59e0b40",
+            borderRadius: 4,
+            padding: "1px 4px",
+          }}>
+            shared
+          </div>
+        )}
+      </div>
+
+      {/* Type */}
+      {lod !== "minimal" && (
+        <span style={{
+          fontSize: 9,
+          fontFamily: "monospace",
+          color: "oklch(0.55 0.01 240)",
+        }}>
+          {rawType}
+        </span>
+      )}
+
+      {/* Schema (full LOD) */}
+      {lod === "full" && (
+        <div style={{ display: "flex", gap: 4 }}>
+          {[
+            { label: "key", value: `${bytesKey}B` },
+            { label: "val", value: `${bytesValue}B` },
+            { label: "max", value: formatEntries(maxEntries) },
+          ].map(({ label, value }) => (
+            <div key={label} style={{
+              flex: 1,
+              background: "oklch(0.10 0.01 240 / 0.8)",
+              borderRadius: 4,
+              padding: "2px 4px",
+              textAlign: "center",
+            }}>
+              <div style={{ fontSize: 7.5, color: "oklch(0.45 0.01 240)", textTransform: "uppercase" }}>{label}</div>
+              <div style={{ fontSize: 9, fontFamily: "monospace", color: "oklch(0.75 0.01 240)" }}>{value}</div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Flags */}
+      {lod === "full" && (frozen || pinned) && (
+        <div style={{ display: "flex", gap: 3 }}>
+          {frozen && (
+            <span style={{ fontSize: 8, color: "#60a5fa", background: "#60a5fa15", border: "1px solid #60a5fa30", borderRadius: 3, padding: "1px 4px" }}>frozen</span>
+          )}
+          {pinned && (
+            <span style={{ fontSize: 8, color: "#34d399", background: "#34d39915", border: "1px solid #34d39930", borderRadius: 3, padding: "1px 4px" }}>pinned</span>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ─── Node type map (export for ReactFlow) ─────────────────────────────────────
 
 export const OS_MAP_NODE_TYPES = {
@@ -559,4 +691,5 @@ export const OS_MAP_NODE_TYPES = {
   cgroupNode: CgroupNode,
   interfaceNode: InterfaceNode,
   processNode: ProcessNode,
+  mapNode: MapNode,
 } as const;
