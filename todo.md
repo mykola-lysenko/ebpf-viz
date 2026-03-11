@@ -211,3 +211,14 @@
 - [x] Create server/polyfill.ts that installs globals when missing
 - [x] Import polyfill as first import in server/_core/index.ts
 - [x] Rebuild standalone package and verify tRPC calls work
+
+## Node 16 Crash Fixes
+- [ ] Fix ERR_STREAM_WRITE_AFTER_END: tRPC adapter calls res.end() twice on Node 16 (once via undici Response, once via Express)
+- [ ] Suppress OAuth ERROR log when OAUTH_SERVER_URL is not set (standalone mode has no OAuth)
+- [ ] Rebuild standalone package and verify code dump works end-to-end on Node 16
+
+## Network Tab: NIC vs Sockmap Split
+- [x] Split NetworkView into two sections: "Network Interfaces" (kind=nic) and "Sockmap Interfaces" (kind=sockmap)
+- [x] Add section headers with interface count and description
+- [x] Hide sockmap section when no sockmap interfaces exist (live mode)
+- [x] Update tests if needed

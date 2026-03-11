@@ -1,7 +1,7 @@
 import React, { useState } from "react";
 import { useEbpf } from "@/contexts/EbpfContext";
 import { ProgList } from "@/components/ProgBadge";
-import { Network, ChevronDown, ChevronRight, Wifi } from "lucide-react";
+import { Network, ChevronDown, ChevronRight, Wifi, Share2 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
 import type { NetworkInterface } from "../../../shared/ebpf-types";
@@ -37,9 +37,14 @@ const OSI_LAYERS = [
   },
 ];
 
+// Layers shown for NIC interfaces
+const NIC_LAYERS = OSI_LAYERS.filter(l => l.key === "L2" || l.key === "L3");
+// Layers shown for sockmap interfaces
+const SOCKMAP_LAYERS = OSI_LAYERS.filter(l => l.key === "L4" || l.key === "L7");
+
 function OsiLayerRow({ layerDef, programs }: {
   layerDef: typeof OSI_LAYERS[0];
-  programs: ReturnType<typeof useEbpf>["snapshot"] extends null ? never : NetworkInterface["layers"]["L2"];
+  programs: NetworkInterface["layers"]["L2"];
 }) {
   const hasProgs = programs.length > 0;
   return (
@@ -77,6 +82,20 @@ function OsiLayerRow({ layerDef, programs }: {
 function InterfaceCard({ iface }: { iface: NetworkInterface }) {
   const [expanded, setExpanded] = useState(iface.allPrograms.length > 0);
   const totalProgs = iface.allPrograms.length;
+  const isSockmap = iface.kind === "sockmap";
+
+  // NIC cards show L2+L3; sockmap cards show L4+L7
+  const visibleLayers = isSockmap ? SOCKMAP_LAYERS : NIC_LAYERS;
+
+  const iconBg = isSockmap
+    ? "oklch(0.65 0.18 290 / 0.15)"
+    : "oklch(0.70 0.18 160 / 0.15)";
+  const iconBorder = isSockmap
+    ? "1px solid oklch(0.65 0.18 290 / 0.3)"
+    : "1px solid oklch(0.70 0.18 160 / 0.3)";
+  const iconColor = isSockmap
+    ? "oklch(0.65 0.18 290)"
+    : "oklch(0.70 0.18 160)";
 
   return (
     <div className="glass rounded-xl overflow-hidden">
@@ -86,13 +105,18 @@ function InterfaceCard({ iface }: { iface: NetworkInterface }) {
         onClick={() => setExpanded(e => !e)}
       >
         <div className="w-9 h-9 rounded-xl flex items-center justify-center shrink-0"
-          style={{ background: "oklch(0.70 0.18 160 / 0.15)", border: "1px solid oklch(0.70 0.18 160 / 0.3)" }}>
-          <Wifi size={16} style={{ color: "oklch(0.70 0.18 160)" }} />
+          style={{ background: iconBg, border: iconBorder }}>
+          {isSockmap
+            ? <Share2 size={16} style={{ color: iconColor }} />
+            : <Wifi size={16} style={{ color: iconColor }} />
+          }
         </div>
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2">
             <span className="text-sm font-semibold font-mono text-foreground">{iface.name}</span>
-            <span className="text-xs text-muted-foreground">ifindex {iface.ifindex}</span>
+            {iface.ifindex > 0 && (
+              <span className="text-xs text-muted-foreground">ifindex {iface.ifindex}</span>
+            )}
           </div>
           <div className="flex gap-2 mt-1">
             {OSI_LAYERS.map(l => {
@@ -128,7 +152,7 @@ function InterfaceCard({ iface }: { iface: NetworkInterface }) {
       {expanded && (
         <div className="px-5 pb-5 space-y-2 border-t border-border/50">
           <div className="pt-4 space-y-2">
-            {OSI_LAYERS.map(layerDef => (
+            {visibleLayers.map(layerDef => (
               <OsiLayerRow
                 key={layerDef.key}
                 layerDef={layerDef}
@@ -138,6 +162,58 @@ function InterfaceCard({ iface }: { iface: NetworkInterface }) {
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+interface SectionProps {
+  title: string;
+  description: string;
+  icon: React.ReactNode;
+  interfaces: NetworkInterface[];
+  emptyMessage: string;
+  emptyHint?: string;
+  accentColor?: string;
+}
+
+function InterfaceSection({ title, description, icon, interfaces, emptyMessage, emptyHint, accentColor }: SectionProps) {
+  return (
+    <div className="space-y-3">
+      {/* Section header */}
+      <div className="flex items-center gap-3">
+        <div
+          className="w-8 h-8 rounded-lg flex items-center justify-center shrink-0"
+          style={{
+            background: accentColor ? `${accentColor}15` : "oklch(0.70 0.18 160 / 0.1)",
+            border: `1px solid ${accentColor ?? "oklch(0.70 0.18 160)"}30`,
+          }}
+        >
+          {icon}
+        </div>
+        <div>
+          <h2 className="text-sm font-semibold text-foreground">{title}</h2>
+          <p className="text-xs text-muted-foreground">{description}</p>
+        </div>
+        <Badge variant="outline" className="ml-auto text-xs text-muted-foreground">
+          {interfaces.length}
+        </Badge>
+      </div>
+
+      {/* Cards */}
+      <div className="space-y-3 pl-11">
+        {interfaces.length > 0 ? (
+          interfaces.map(iface => (
+            <InterfaceCard key={iface.name} iface={iface} />
+          ))
+        ) : (
+          <div className="glass rounded-xl p-6 text-center">
+            <p className="text-sm text-muted-foreground">{emptyMessage}</p>
+            {emptyHint && (
+              <p className="text-xs text-muted-foreground/60 mt-1">{emptyHint}</p>
+            )}
+          </div>
+        )}
+      </div>
     </div>
   );
 }
@@ -163,10 +239,13 @@ export default function NetworkView() {
       })).filter(i => i.allPrograms.length > 0)
     : snapshot.networkInterfaces;
 
+  const nicInterfaces = interfaces.filter(i => i.kind === "nic");
+  const sockmapInterfaces = interfaces.filter(i => i.kind === "sockmap");
   const totalNetProgs = snapshot.networkInterfaces.reduce((a, i) => a + i.allPrograms.length, 0);
 
   return (
     <div className="p-6 space-y-6 max-w-5xl mx-auto">
+      {/* Page header */}
       <div>
         <h1 className="text-xl font-bold text-foreground flex items-center gap-2">
           <Network size={20} className="text-primary" />
@@ -198,26 +277,40 @@ export default function NetworkView() {
         </div>
       </div>
 
-      {/* Interface cards */}
-      <div className="space-y-4">
-        {interfaces.length > 0 ? (
-          interfaces.map(iface => (
-            <InterfaceCard key={iface.name} iface={iface} />
-          ))
-        ) : (
-          <div className="glass rounded-xl p-8 text-center">
-            <Network size={32} className="text-muted-foreground mx-auto mb-3" />
-            <p className="text-sm text-muted-foreground">
-              {searchQuery ? "No interfaces match the current filter." : "No BPF programs attached to network interfaces."}
-            </p>
-            {!searchQuery && (
-              <p className="text-xs text-muted-foreground/60 mt-1">
-                XDP, TC, and netfilter programs will appear here when attached to interfaces.
-              </p>
-            )}
-          </div>
-        )}
-      </div>
+      {/* ── NIC section ─────────────────────────────────────────────────── */}
+      <InterfaceSection
+        title="Network Interfaces"
+        description="Physical and virtual NICs — XDP, TC, netfilter, and netkit hooks"
+        icon={<Wifi size={15} style={{ color: "oklch(0.70 0.18 160)" }} />}
+        interfaces={nicInterfaces}
+        accentColor="#10b981"
+        emptyMessage={searchQuery ? "No NIC interfaces match the current filter." : "No BPF programs attached to network interfaces."}
+        emptyHint={!searchQuery ? "XDP, TC, and netfilter programs will appear here when attached to interfaces." : undefined}
+      />
+
+      {/* ── Sockmap section (hidden when empty in live mode) ─────────────── */}
+      {(sockmapInterfaces.length > 0 || searchQuery) && (
+        <InterfaceSection
+          title="Sockmap Interfaces"
+          description="Socket-level BPF programs — sk_msg, sk_skb, sock_ops, sk_lookup"
+          icon={<Share2 size={15} style={{ color: "oklch(0.65 0.18 290)" }} />}
+          interfaces={sockmapInterfaces}
+          accentColor="#8b5cf6"
+          emptyMessage={searchQuery ? "No sockmap interfaces match the current filter." : "No sockmap programs loaded."}
+          emptyHint={!searchQuery ? "sk_msg, sk_skb, sock_ops, and sk_lookup programs will appear here." : undefined}
+        />
+      )}
+
+      {/* Fallback when everything is empty and not searching */}
+      {interfaces.length === 0 && !searchQuery && (
+        <div className="glass rounded-xl p-8 text-center">
+          <Network size={32} className="text-muted-foreground mx-auto mb-3" />
+          <p className="text-sm text-muted-foreground">No BPF programs attached to any network interface.</p>
+          <p className="text-xs text-muted-foreground/60 mt-1">
+            XDP, TC, netfilter, and sockmap programs will appear here when loaded.
+          </p>
+        </div>
+      )}
     </div>
   );
 }
