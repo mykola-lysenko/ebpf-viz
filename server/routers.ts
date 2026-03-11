@@ -10,8 +10,10 @@ import {
   getHistory,
   buildActivitySummary,
   isStatsEnabled,
+  getBpftoolPath,
 } from "./ebpf-poller";
 import { fetchProgDump } from "./ebpf-dump";
+import { dumpMapEntries } from "./ebpf-map-dump";
 
 export const appRouter = router({
   ebpf: router({
@@ -71,11 +73,13 @@ export const appRouter = router({
         kernelVersion: snap.kernelVersion,
       };
     }),
-    // ── BPF Maps ───────────────────────────────────────────────────────────────────
+
+    // ── BPF Maps ───────────────────────────────────────────────────────────
     /** All BPF maps with program relationships */
     maps: publicProcedure.query(() => {
       return getLatestMaps();
     }),
+
     /** Single map by ID */
     map: publicProcedure
       .input(z.object({ id: z.number() }))
@@ -83,7 +87,23 @@ export const appRouter = router({
         return getLatestMaps().find(m => m.id === input.id) ?? null;
       }),
 
-    // ── Code Inspector ─────────────────────────────────────────────────────────
+    /**
+     * Dump entries from a BPF map by ID.
+     * Calls `bpftool -jp map dump id N` and returns parsed key-value pairs.
+     * Returns up to 1000 entries; truncated flag is set if more exist.
+     */
+    mapDump: publicProcedure
+      .input(z.object({ id: z.number() }))
+      .query(async ({ input }) => {
+        const maps = getLatestMaps();
+        const map = maps.find(m => m.id === input.id);
+        const mapType = map?.rawType ?? "unknown";
+        const mapName = map?.name ?? `map#${input.id}`;
+        const bpftoolPath = getBpftoolPath();
+        return dumpMapEntries(input.id, mapType, mapName, bpftoolPath);
+      }),
+
+    // ── Code Inspector ─────────────────────────────────────────────────────
     /**
      * Fetch the full code dump for a single BPF program:
      * xlated bytecode, CFG DOT, jited assembly (when available),

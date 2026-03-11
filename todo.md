@@ -97,3 +97,11 @@
 - [ ] Write Dockerfile for containerized deployment
 - [ ] Write INSTALL.md with step-by-step instructions
 - [ ] Update tests to reflect no-auth context
+
+## Map Entries Inspector
+- [x] bpftool map dump output parsing (hash, array, lpm_trie, per-cpu variants)
+- [x] mapDump tRPC procedure with error handling for unsupported map types
+- [x] MapEntriesModal component: paginated table, hex/decimal/BTF view modes, copy-to-clipboard
+- [x] Per-CPU value expansion (percpu_hash, percpu_array)
+- [x] "Dump entries" button on map cards and detail panel in MapsView
+- [x] Tests for map dump parser (36 tests, all passing)

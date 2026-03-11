@@ -371,3 +371,66 @@ export const MAP_TYPE_META: Record<string, { category: BpfMap["category"]; color
   task_storage:          { category: "other",   color: "#0f766e", description: "Per-task local storage" },
   unknown:               { category: "other",   color: "#6b7280", description: "Unknown map type" },
 };
+
+// ─── Map Entries Inspector ────────────────────────────────────────────────────
+
+/**
+ * A single raw entry from `bpftool -jp map dump id N`.
+ * Both key and value can be:
+ *   - string[] — hex byte array like ["0x00","0x01",...]
+ *   - Record<string,unknown> — BTF-decoded struct/primitive
+ *   - { error: string } — when bpftool cannot read the value (e.g. perf_event_array)
+ */
+export interface RawMapEntry {
+  key: string[] | Record<string, unknown>;
+  value: string[] | Record<string, unknown> | { error: string };
+  /** Present for per-cpu maps: one value per CPU */
+  values?: Array<{ cpu: number; value: string[] | Record<string, unknown> }>;
+  /** Formatted key string (hex, decimal, or BTF) */
+  formatted?: {
+    key: string | Record<string, unknown>;
+    value: string | Record<string, unknown>;
+  };
+}
+
+/** Parsed and normalized map entry for the UI */
+export interface MapEntry {
+  /** Zero-based row index */
+  index: number;
+  /** Key as hex string, e.g. "00 01 02 03" */
+  keyHex: string;
+  /** Key interpreted as little-endian decimal (for small keys ≤ 8 bytes) */
+  keyDecimal: string | null;
+  /** Key as BTF-decoded JSON string (when BTF info available) */
+  keyBtf: string | null;
+  /** Value as hex string */
+  valueHex: string;
+  /** Value interpreted as little-endian decimal (for small values ≤ 8 bytes) */
+  valueDecimal: string | null;
+  /** Value as BTF-decoded JSON string (when BTF info available) */
+  valueBtf: string | null;
+  /** True when bpftool returned an error reading this value */
+  valueError: string | null;
+  /** Per-CPU values (only for percpu_hash / percpu_array maps) */
+  perCpuValues?: Array<{ cpu: number; hex: string; decimal: string | null }>;
+}
+
+/** Result of a map dump operation */
+export interface MapDumpResult {
+  mapId: number;
+  mapType: string;
+  mapName: string;
+  /** Total number of entries returned */
+  totalEntries: number;
+  /** Whether the dump was truncated (> MAX_ENTRIES limit) */
+  truncated: boolean;
+  /** Maximum entries returned in one dump call */
+  maxReturned: number;
+  entries: MapEntry[];
+  /** True when BTF info was used to decode keys/values */
+  btfDecoded: boolean;
+  /** Error message if the dump failed entirely */
+  error: string | null;
+  /** Map types that cannot be dumped (perf_event_array, ringbuf, etc.) */
+  unsupported: boolean;
+}

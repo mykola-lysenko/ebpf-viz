@@ -6,6 +6,7 @@ import type { BpfMap } from "../../../shared/ebpf-types";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { MapEntriesModal } from "@/components/MapEntriesModal";
 import {
   Database,
   Zap,
@@ -15,10 +16,10 @@ import {
   Search,
   Pin,
   Lock,
-  ChevronRight,
   Copy,
   X,
   Share2,
+  List,
 } from "lucide-react";
 
 // ─── Helpers ───────────────────────────────────────────────────────────────
@@ -38,6 +39,13 @@ const CATEGORY_LABELS: Record<string, string> = {
   socket:  "Socket",
   other:   "Other",
 };
+
+// Map types that cannot be dumped (kernel-internal or write-only)
+const UNSUPPORTED_DUMP_TYPES = new Set([
+  "perf_event_array", "ringbuf", "user_ringbuf", "cgroup_array",
+  "prog_array", "devmap", "devmap_hash", "cpumap", "xskmap",
+  "sockmap", "sockhash", "reuseport_sockarray",
+]);
 
 function formatBytes(bytes: number): string {
   if (bytes === 0) return "0 B";
@@ -60,14 +68,17 @@ function MapCard({
   programs,
   selected,
   onClick,
+  onDumpEntries,
 }: {
   map: BpfMap;
   programs: Array<{ id: number; name: string; color: string; rawType: string }>;
   selected: boolean;
   onClick: () => void;
+  onDumpEntries: (e: React.MouseEvent) => void;
 }) {
   const meta = MAP_TYPE_META[map.type] ?? MAP_TYPE_META["unknown"]!;
   const isShared = map.usedByProgIds.length > 1;
+  const canDump = !UNSUPPORTED_DUMP_TYPES.has(map.rawType);
 
   return (
     <div
@@ -152,7 +163,7 @@ function MapCard({
 
       {/* Programs using this map */}
       {programs.length > 0 ? (
-        <div className="flex flex-wrap gap-1">
+        <div className="flex flex-wrap gap-1 mb-3">
           {programs.slice(0, 3).map(p => (
             <div
               key={p.id}
@@ -169,7 +180,29 @@ function MapCard({
           )}
         </div>
       ) : (
-        <div className="text-[10px] text-white/20 italic">No programs attached</div>
+        <div className="text-[10px] text-white/20 italic mb-3">No programs attached</div>
+      )}
+
+      {/* Dump Entries button */}
+      {canDump && (
+        <button
+          onClick={onDumpEntries}
+          className="w-full flex items-center justify-center gap-1.5 py-1.5 rounded-lg text-xs font-medium transition-all
+            bg-[var(--accent)]/10 border border-[var(--accent)]/30 text-[var(--accent)]/80
+            hover:bg-[var(--accent)]/20 hover:border-[var(--accent)]/50 hover:text-[var(--accent)]"
+        >
+          <List className="w-3 h-3" />
+          Dump Entries
+        </button>
+      )}
+      {!canDump && (
+        <div className="w-full flex items-center justify-center gap-1.5 py-1.5 rounded-lg text-xs
+          bg-white/3 border border-white/5 text-white/20 cursor-default"
+          title={`${map.rawType} maps cannot be enumerated`}
+        >
+          <List className="w-3 h-3" />
+          Not dumpable
+        </div>
       )}
 
       {/* Map ID */}
@@ -186,13 +219,16 @@ function MapDetailPanel({
   map,
   programs,
   onClose,
+  onDumpEntries,
 }: {
   map: BpfMap;
   programs: Array<{ id: number; name: string; color: string; rawType: string; type: string }>;
   onClose: () => void;
+  onDumpEntries: () => void;
 }) {
   const meta = MAP_TYPE_META[map.type] ?? MAP_TYPE_META["unknown"]!;
   const [copied, setCopied] = useState<string | null>(null);
+  const canDump = !UNSUPPORTED_DUMP_TYPES.has(map.rawType);
 
   const copy = (text: string, key: string) => {
     navigator.clipboard.writeText(text).then(() => {
@@ -228,6 +264,23 @@ function MapDetailPanel({
           <div className="text-xs text-white/50 mb-1">Description</div>
           <div className="text-sm text-white/80">{meta.description}</div>
         </div>
+
+        {/* Dump Entries CTA */}
+        <button
+          onClick={onDumpEntries}
+          disabled={!canDump}
+          className={`
+            w-full flex items-center justify-center gap-2 py-2.5 rounded-xl text-sm font-medium transition-all
+            ${canDump
+              ? "bg-[var(--accent)]/15 border border-[var(--accent)]/40 text-[var(--accent)] hover:bg-[var(--accent)]/25 hover:border-[var(--accent)]/60"
+              : "bg-white/5 border border-white/10 text-white/25 cursor-not-allowed"
+            }
+          `}
+          title={!canDump ? `${map.rawType} maps cannot be enumerated` : undefined}
+        >
+          <List className="w-4 h-4" />
+          {canDump ? "Inspect Map Entries" : "Entries not available"}
+        </button>
 
         {/* Identity */}
         <div className="space-y-2">
@@ -352,6 +405,7 @@ export default function MapsView() {
   const [search, setSearch] = useState("");
   const [category, setCategory] = useState<string>("all");
   const [selectedMap, setSelectedMap] = useState<BpfMap | null>(null);
+  const [dumpMap, setDumpMap] = useState<BpfMap | null>(null);
 
   // Build a quick lookup of program info by id
   const progById = useMemo(() => {
@@ -394,6 +448,8 @@ export default function MapsView() {
       .map(id => progById.get(id))
       .filter((p): p is NonNullable<typeof p> => p !== undefined);
   }, [selectedMap, progById]);
+
+  const meta = dumpMap ? (MAP_TYPE_META[dumpMap.type] ?? MAP_TYPE_META["unknown"]!) : null;
 
   return (
     <div className="flex h-full">
@@ -484,6 +540,10 @@ export default function MapsView() {
                     .filter((p): p is NonNullable<typeof p> => p !== undefined)}
                   selected={selectedMap?.id === map.id}
                   onClick={() => setSelectedMap(prev => prev?.id === map.id ? null : map)}
+                  onDumpEntries={e => {
+                    e.stopPropagation();
+                    setDumpMap(map);
+                  }}
                 />
               ))}
             </div>
@@ -497,6 +557,18 @@ export default function MapsView() {
           map={selectedMap}
           programs={selectedPrograms}
           onClose={() => setSelectedMap(null)}
+          onDumpEntries={() => setDumpMap(selectedMap)}
+        />
+      )}
+
+      {/* Map Entries Modal */}
+      {dumpMap && meta && (
+        <MapEntriesModal
+          mapId={dumpMap.id}
+          mapName={dumpMap.name}
+          mapType={dumpMap.rawType}
+          mapColor={meta.color}
+          onClose={() => setDumpMap(null)}
         />
       )}
     </div>
