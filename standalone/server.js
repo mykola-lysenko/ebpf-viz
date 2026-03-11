@@ -78488,7 +78488,7 @@ async function getSystemInfo() {
 async function runBpftool(args) {
   const prefix = config2.sudo ? "sudo " : "";
   const cmd = `${prefix}${config2.bpftoolPath} -j ${args} 2>/dev/null`;
-  const { stdout } = await execAsync(cmd, { timeout: 1e4 });
+  const { stdout } = await execAsync(cmd, { timeout: 1e4, maxBuffer: 32 * 1024 * 1024 });
   return stdout.trim();
 }
 function stripNonJson(raw) {

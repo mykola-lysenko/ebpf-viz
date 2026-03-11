@@ -228,3 +228,9 @@
 - [x] Diagnose: on Node 16, 'close' fires synchronously inside res.end(), triggering abort mid-stream via tRPC's incomingMessageToRequest signal
 - [x] Fix: defer res.once('close', cb) by one setImmediate tick so pipeTo() resolves before abort fires
 - [x] Rebuild standalone and verify full JSON responses are delivered
+
+## Maps View: No Maps Shown (200+ BPF programs)
+- [x] Diagnose: maps were delivered via SSE stream but EbpfContext never exposed them; MapsView used a stale tRPC query with staleTime:Infinity
+- [x] Fix: expose maps from SSE stream through EbpfContext; MapsView now reads from context
+- [x] Fix: increase maxBuffer from 1MB to 32MB in runBpftool to prevent silent truncation on large systems
+- [x] Rebuild standalone and verify

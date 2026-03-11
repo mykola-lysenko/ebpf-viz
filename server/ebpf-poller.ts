@@ -79,7 +79,11 @@ async function getSystemInfo(): Promise<void> {
 async function runBpftool(args: string): Promise<string> {
   const prefix = config.sudo ? "sudo " : "";
   const cmd = `${prefix}${config.bpftoolPath} -j ${args} 2>/dev/null`;
-  const { stdout } = await execAsync(cmd, { timeout: 10000 });
+  // Raise maxBuffer from the Node default (1 MB) to 32 MB.
+  // On systems with 200+ BPF programs, bpftool map list / prog list JSON output
+  // can easily exceed 1 MB, causing exec() to throw ERR_CHILD_PROCESS_STDIO_MAXBUFFER
+  // and silently returning an empty result.
+  const { stdout } = await execAsync(cmd, { timeout: 10000, maxBuffer: 32 * 1024 * 1024 });
   return stdout.trim();
 }
 

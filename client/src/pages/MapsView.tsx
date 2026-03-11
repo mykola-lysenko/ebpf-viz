@@ -1,5 +1,4 @@
 import { useState, useMemo } from "react";
-import { trpc } from "@/lib/trpc";
 import { useEbpf } from "@/contexts/EbpfContext";
 import { MAP_TYPE_META } from "../../../shared/ebpf-types";
 import type { BpfMap } from "../../../shared/ebpf-types";
@@ -397,13 +396,9 @@ function MapDetailPanel({
 // ─── Main page ─────────────────────────────────────────────────────────────
 
 export default function MapsView() {
-  const { snapshot } = useEbpf();
-  // Maps are pushed via SSE stream — no polling needed.
-  // Fall back to a single tRPC fetch on first load if SSE hasn't delivered yet.
-  const { data: maps = [] } = trpc.ebpf.maps.useQuery(undefined, {
-    staleTime: Infinity,
-    refetchOnWindowFocus: false,
-  });
+  const { snapshot, maps } = useEbpf();
+  // Maps are delivered live via the SSE stream (EbpfContext.maps).
+  // They update on every poller tick — no tRPC polling needed.
 
   const [search, setSearch] = useState("");
   const [category, setCategory] = useState<string>("all");

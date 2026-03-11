@@ -1,7 +1,7 @@
 import React, { createContext, useContext, useState, useCallback, useMemo } from "react";
 import { trpc } from "@/lib/trpc";
 import { useEbpfStream } from "@/hooks/useEbpfStream";
-import type { BpfProgram, EbpfSnapshot, ProgHistory, ActivitySummary } from "../../../shared/ebpf-types";
+import type { BpfProgram, BpfMap, EbpfSnapshot, ProgHistory, ActivitySummary } from "../../../shared/ebpf-types";
 
 export type { StreamStatus } from "@/hooks/useEbpfStream";
 
@@ -30,6 +30,8 @@ interface EbpfContextValue {
   /** Activity summary — top programs by calls/sec */
   activity: ActivitySummary | null;
   statsEnabled: boolean;
+  /** BPF maps — pushed via SSE stream, updated on every poller tick */
+  maps: BpfMap[];
 }
 
 const EbpfContext = createContext<EbpfContextValue | null>(null);
@@ -44,6 +46,7 @@ export function EbpfProvider({ children }: { children: React.ReactNode }) {
   // ── SSE live stream ────────────────────────────────────────────────────────
   const {
     snapshot,
+    maps,
     allHistories,
     activity,
     status: streamStatus,
@@ -126,6 +129,7 @@ export function EbpfProvider({ children }: { children: React.ReactNode }) {
       historyMap,
       activity: activity ?? null,
       statsEnabled: pollerStatus?.statsEnabled ?? false,
+      maps,
     }}>
       {children}
     </EbpfContext.Provider>
