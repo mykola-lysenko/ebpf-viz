@@ -2,6 +2,7 @@ import { useMemo } from "react";
 import type { Node, Edge } from "@xyflow/react";
 import type { EbpfSnapshot, BpfProgram, BpfMap, CgroupNode, NetworkInterface, KernelAttachmentZone } from "../../../shared/ebpf-types";
 import type { MapNodeData } from "../components/osmap/OsMapNodes";
+import { estimateInterfaceNodeHeight } from "../components/osmap/OsMapNodes";
 
 // ─── Layout constants ────────────────────────────────────────────────────────
 
@@ -32,8 +33,8 @@ const KERNEL_H_DYNAMIC = true; // computed from content
 // Network band (below kernel)
 const NET_BAND_TOP_MARGIN = 60;
 const IFACE_W = 220;
-const IFACE_H = 200;
 const IFACE_GAP = 32;
+// IFACE_H is now computed dynamically per interface — see estimateInterfaceNodeHeight
 
 // Program node dimensions
 const PROG_W = 180;
@@ -343,9 +344,21 @@ export function buildOsMapLayout(snapshot: EbpfSnapshot, maps: BpfMap[] = []): O
   // ── 4. Network interfaces ───────────────────────────────────────────────────
   const NET_Y = KERNEL_Y + kernelH + NET_BAND_TOP_MARGIN;
 
+  // Compute the tallest interface node height so the band never clips any node.
+  // We use the "compact" LOD estimate (the default zoom level) with a generous
+  // 40px safety margin to account for sub-pixel rounding and border widths.
+  const IFACE_NODE_PADDING_TOP = 60; // distance from band top to first node
+  const IFACE_SAFETY_MARGIN = 40;
+
+  let maxIfaceH = 200; // fallback minimum
+  snapshot.networkInterfaces.forEach(iface => {
+    const h = estimateInterfaceNodeHeight(iface.layers, "compact");
+    if (h > maxIfaceH) maxIfaceH = h;
+  });
+
   snapshot.networkInterfaces.forEach((iface, idx) => {
     const x = KERNEL_PADDING + idx * (IFACE_W + IFACE_GAP);
-    const y = NET_Y + 60;
+    const y = NET_Y + IFACE_NODE_PADDING_TOP;
 
     nodes.push({
       id: `iface-${iface.name}`,
@@ -364,8 +377,8 @@ export function buildOsMapLayout(snapshot: EbpfSnapshot, maps: BpfMap[] = []): O
     // (Previously there were edges from zone-xdp and zone-tc_ingress to each iface.)
   });
 
-  // Network band
-  const netBandH = IFACE_H + 120;
+  // Network band — height is driven by the tallest interface node
+  const netBandH = IFACE_NODE_PADDING_TOP + maxIfaceH + IFACE_SAFETY_MARGIN;
   nodes.push({
     id: "band-network",
     type: "networkBand",

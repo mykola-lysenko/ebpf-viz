@@ -152,3 +152,6 @@
 - [x] ProgBadge reads first TC/TCx attachment direction and renders → (blue) or ← (amber) badge
 - [x] Badge has title tooltip: "Ingress (incoming packets)" / "Egress (outgoing packets)"
 - [x] 5 new direction tests (177 total, all passing)
+
+## Bug Fixes (continued)
+- [x] BPF Maps band overlaps Network Layer band: network band height now computed dynamically from estimateInterfaceNodeHeight() instead of hardcoded IFACE_H=200; 3 new layout tests assert no overlap (180 total, all passing)

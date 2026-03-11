@@ -10,7 +10,7 @@ import type {
   SectionLabelData,
 } from "../../hooks/useOsMapLayout";
 import { cn } from "@/lib/utils";
-import type { BpfProgram } from "../../../../shared/ebpf-types";
+import type { BpfProgram, NetworkInterface } from "../../../../shared/ebpf-types";
 
 // ─── LOD thresholds ───────────────────────────────────────────────────────────
 // zoom < 0.35 → minimal (count only)
@@ -397,6 +397,61 @@ const PACKET_PATH_LAYERS = [
     icon: "⚡",
   },
 ];
+
+/**
+ * Estimate the rendered pixel height of an InterfaceNode given its layer data.
+ * This mirrors the render logic in InterfaceNode so the layout hook can size
+ * the Network Layer band correctly without relying on the hardcoded IFACE_H.
+ *
+ * Heights (approximate, matching the CSS in InterfaceNode):
+ *   Header row:        32px
+ *   Outer padding:     14px  (8px top + 6px bottom)
+ *   Per active layer:  ~30px base + 14px per badge row (max 3 badges/row in compact)
+ *   FlowArrow:         10px each
+ *   NicHardwareBase:   30px
+ */
+export function estimateInterfaceNodeHeight(
+  layers: NetworkInterface["layers"],
+  lod: "minimal" | "compact" | "full" = "compact"
+): number {
+  if (lod === "minimal") return 52; // header + one-liner
+
+  const HEADER_H = 32;
+  const OUTER_PAD = 14;
+  const LAYER_BASE_H = 28;   // label row + padding
+  const BADGE_ROW_H = 18;    // one row of badges
+  const BADGES_PER_ROW = lod === "full" ? 6 : 3;
+  const ARROW_H = 10;
+  const NIC_HW_H = 30;
+
+  const PACKET_PATH_KEYS: Array<keyof NetworkInterface["layers"]> = ["L7", "L4", "L3", "L2"];
+
+  let contentH = 0;
+  let visibleLayerCount = 0;
+
+  for (const key of PACKET_PATH_KEYS) {
+    const progs = layers[key] ?? [];
+    const active = progs.length > 0;
+    if (!active && lod !== "full") continue; // hidden in compact
+
+    visibleLayerCount++;
+    let layerH = LAYER_BASE_H;
+    if (active) {
+      const rows = Math.ceil(Math.min(progs.length, lod === "full" ? 6 : 3) / BADGES_PER_ROW);
+      layerH += rows * BADGE_ROW_H;
+    } else if (lod === "full") {
+      layerH += 14; // description text
+    }
+    contentH += layerH;
+  }
+
+  // Arrows between visible layers + arrow before NIC HW
+  const arrowCount = Math.max(0, visibleLayerCount); // one between each pair + one before NIC
+  contentH += arrowCount * ARROW_H;
+  contentH += NIC_HW_H;
+
+  return HEADER_H + OUTER_PAD + contentH;
+}
 
 /** Tooltip shown when hovering a program badge inside the stack */
 function ProgramTooltip({ prog, color, onClose }: {

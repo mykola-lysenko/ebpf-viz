@@ -423,4 +423,65 @@ describe("buildOsMapLayout", () => {
     );
     expect(badEdge).toBeUndefined();
   });
+
+  // ── Dynamic network band height ───────────────────────────────────────────────
+
+  it("network band bottom edge is below all interface nodes (no overlap)", () => {
+    const snap = makeSnapshot();
+    // Give eth0 programs in all four layers to maximise node height
+    const prog = snap.programs[0];
+    snap.networkInterfaces[0].layers = {
+      L2: [prog],
+      L3: [prog],
+      L4: [prog],
+      L7: [prog],
+    };
+    snap.networkInterfaces[0].allPrograms = [prog];
+    const layout = buildOsMapLayout(snap);
+
+    const netBand = layout.nodes.find(n => n.id === "band-network")!;
+    const ifaceNode = layout.nodes.find(n => n.id === "iface-eth0")!;
+
+    const netBandBottom = netBand.position.y + (netBand.data as any).height;
+    // The interface node does not have a fixed height in the style (it's auto),
+    // so we just verify the band bottom is well below the node top + a minimum height.
+    expect(netBandBottom).toBeGreaterThan(ifaceNode.position.y + 150);
+  });
+
+  it("network band is taller when interfaces have more programs", () => {
+    const prog = makeSnapshot().programs[0];
+
+    const snapFew = makeSnapshot();
+    snapFew.networkInterfaces[0].layers = { L2: [prog], L3: [], L4: [], L7: [] };
+    const layoutFew = buildOsMapLayout(snapFew);
+    const bandFew = layoutFew.nodes.find(n => n.id === "band-network")!;
+
+    const snapMany = makeSnapshot();
+    snapMany.networkInterfaces[0].layers = { L2: [prog], L3: [prog], L4: [prog], L7: [prog] };
+    const layoutMany = buildOsMapLayout(snapMany);
+    const bandMany = layoutMany.nodes.find(n => n.id === "band-network")!;
+
+    expect((bandMany.data as any).height).toBeGreaterThan((bandFew.data as any).height);
+  });
+
+  it("BPF Maps section starts below the network band bottom edge", () => {
+    const prog = makeSnapshot().programs[0];
+    const snap = makeSnapshot();
+    snap.networkInterfaces[0].layers = { L2: [prog], L3: [prog], L4: [prog], L7: [prog] };
+    snap.networkInterfaces[0].allPrograms = [prog];
+    const maps = [{
+      id: 10, type: "hash", rawType: "hash", name: "test_map",
+      flags: 0, bytesKey: 4, bytesValue: 8, maxEntries: 128,
+      bytesMemlock: 4096, frozen: false, pinnedPaths: [], btfId: null,
+      usedByProgIds: [], color: "#a78bfa", category: "data",
+    }];
+    const layout = buildOsMapLayout(snap, maps as any);
+
+    const netBand = layout.nodes.find(n => n.id === "band-network")!;
+    const mapLabel = layout.nodes.find(n => n.id === "label-maps")!;
+    const netBandBottom = netBand.position.y + (netBand.data as any).height;
+
+    // The maps label should start below the network band
+    expect(mapLabel.position.y).toBeGreaterThan(netBandBottom - 1);
+  });
 });
