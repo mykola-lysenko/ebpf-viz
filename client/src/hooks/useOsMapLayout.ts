@@ -116,6 +116,7 @@ export interface CgroupNodeData {
 export interface InterfaceNodeData {
   name: string;
   ifindex: number;
+  kind: NetworkInterface["kind"];
   layers: NetworkInterface["layers"];
   allPrograms: BpfProgram[];
 }
@@ -371,6 +372,7 @@ export function buildOsMapLayout(
       data: {
         name: iface.name,
         ifindex: iface.ifindex,
+        kind: iface.kind,
         layers: iface.layers,
         allPrograms: iface.allPrograms,
       } satisfies InterfaceNodeData,

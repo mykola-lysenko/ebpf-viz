@@ -171,3 +171,11 @@
 - [x] User sessions (session-1, session-2) and user@1000.service at depth 3 under user-1000.slice
 - [x] Fixed buildCgroupTree to correctly handle root /sys/fs/cgroup node and proper parent-child wiring
 - [x] 5 new cgroup tree tests covering 4-level wiring, structural nodes, alphabetical sort, session depth, node count (191 total, all passing)
+
+## NIC/Sockmap Layer Filtering
+- [x] Added kind: "nic" | "sockmap" field to NetworkInterface type and InterfaceNodeData
+- [x] Parser sets kind="nic" for all device-level entries (XDP/TC/netfilter/netkit) and kind="sockmap" for sockmap entries
+- [x] InterfaceNode uses visibleLayers filtered by kind: NIC shows only L2+L3, sockmap shows only L4+L7
+- [x] NicHardwareBase and L2→NIC FlowArrow hidden on sockmap nodes
+- [x] Sockmap node uses purple (#8b5cf6) accent colour and map icon (🗺) instead of green plug (🔌)
+- [x] 4 kind-field assertions added to existing buildNetworkInterfaces tests (191 total, all passing)

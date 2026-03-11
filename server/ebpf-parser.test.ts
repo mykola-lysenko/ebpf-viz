@@ -278,6 +278,7 @@ describe("buildNetworkInterfaces", () => {
     enrichWithNetAttachments(progs, net);
     const interfaces = buildNetworkInterfaces(progs, net);
     const eth0 = interfaces.find(i => i.name === "eth0")!;
+    expect(eth0.kind).toBe("nic");
     expect(eth0.layers.L2[0].id).toBe(1);
     expect(eth0.layers.L3).toHaveLength(0);
   });
@@ -340,6 +341,7 @@ describe("buildNetworkInterfaces", () => {
     const interfaces = buildNetworkInterfaces(progs, net);
     const sm = interfaces.find(i => i.name === "sockmap0")!;
     expect(sm).toBeDefined();
+    expect(sm.kind).toBe("sockmap");
     expect(sm.layers.L4).toHaveLength(2);
     expect(sm.layers.L4.map(p => p.id)).toEqual(expect.arrayContaining([52, 53]));
     expect(sm.layers.L7).toHaveLength(0);
@@ -367,6 +369,7 @@ describe("buildNetworkInterfaces", () => {
     const interfaces = buildNetworkInterfaces(progs, net);
     const sm = interfaces.find(i => i.name === "sockmap0")!;
     expect(sm).toBeDefined();
+    expect(sm.kind).toBe("sockmap");
     expect(sm.layers.L7).toHaveLength(2);
     expect(sm.layers.L7.map(p => p.id)).toEqual(expect.arrayContaining([54, 55]));
     expect(sm.layers.L4).toHaveLength(0);
@@ -389,14 +392,16 @@ describe("buildNetworkInterfaces", () => {
     }];
     enrichWithNetAttachments(progs, net);
     const interfaces = buildNetworkInterfaces(progs, net);
-    // eth0 has L2 (XDP) and L3 (TC)
+    // eth0 has kind=nic, L2 (XDP) and L3 (TC)
     const eth0 = interfaces.find(i => i.name === "eth0")!;
+    expect(eth0.kind).toBe("nic");
     expect(eth0.layers.L2).toHaveLength(1);
     expect(eth0.layers.L3).toHaveLength(1);
     expect(eth0.layers.L4).toHaveLength(0);
     expect(eth0.layers.L7).toHaveLength(0);
-    // sockmap0 has L4 (sk_skb) and L7 (sk_msg)
+    // sockmap0 has kind=sockmap, L4 (sk_skb) and L7 (sk_msg)
     const sm = interfaces.find(i => i.name === "sockmap0")!;
+    expect(sm.kind).toBe("sockmap");
     expect(sm.layers.L4).toHaveLength(1);
     expect(sm.layers.L7).toHaveLength(1);
     expect(sm.layers.L2).toHaveLength(0);

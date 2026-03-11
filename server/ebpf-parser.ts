@@ -283,11 +283,12 @@ export function buildNetworkInterfaces(
   const snapshot = net[0] ?? {};
   const ifaceMap = new Map<string, NetworkInterface>();
 
-  const getOrCreate = (name: string, ifindex: number): NetworkInterface => {
+  const getOrCreate = (name: string, ifindex: number, kind: "nic" | "sockmap" = "nic"): NetworkInterface => {
     if (!ifaceMap.has(name)) {
       ifaceMap.set(name, {
         name,
         ifindex,
+        kind,
         layers: { L2: [], L3: [], L4: [], L7: [] },
         allPrograms: [],
       });
@@ -298,7 +299,7 @@ export function buildNetworkInterfaces(
   for (const entry of snapshot.xdp ?? []) {
     const p = progs.get(entry.id);
     if (!p) continue;
-    const iface = getOrCreate(entry.devname, entry.ifindex);
+    const iface = getOrCreate(entry.devname, entry.ifindex, "nic");
     iface.layers.L2.push(p);
     iface.allPrograms.push(p);
   }
@@ -306,7 +307,7 @@ export function buildNetworkInterfaces(
   for (const entry of [...(snapshot.tc ?? []), ...(snapshot.tcx ?? [])]) {
     const p = progs.get(entry.id);
     if (!p) continue;
-    const iface = getOrCreate(entry.devname, entry.ifindex);
+    const iface = getOrCreate(entry.devname, entry.ifindex, "nic");
     iface.layers.L3.push(p);
     iface.allPrograms.push(p);
   }
@@ -314,7 +315,7 @@ export function buildNetworkInterfaces(
   for (const entry of [...(snapshot.netfilter ?? []), ...(snapshot.flow_dissector ?? [])]) {
     const p = progs.get(entry.id);
     if (!p) continue;
-    const iface = getOrCreate(entry.devname, entry.ifindex);
+    const iface = getOrCreate(entry.devname, entry.ifindex, "nic");
     iface.layers.L3.push(p);
     iface.allPrograms.push(p);
   }
@@ -322,7 +323,7 @@ export function buildNetworkInterfaces(
   for (const entry of snapshot.netkit ?? []) {
     const p = progs.get(entry.id);
     if (!p) continue;
-    const iface = getOrCreate(entry.devname, entry.ifindex);
+    const iface = getOrCreate(entry.devname, entry.ifindex, "nic");
     iface.layers.L2.push(p);
     iface.allPrograms.push(p);
   }
@@ -333,7 +334,7 @@ export function buildNetworkInterfaces(
   for (const entry of snapshot.sockmap ?? []) {
     const p = progs.get(entry.id);
     if (!p) continue;
-    const iface = getOrCreate(entry.devname, entry.ifindex);
+    const iface = getOrCreate(entry.devname, entry.ifindex, "sockmap");
     const layer = (p.type === "sk_msg" || p.type === "sock_ops") ? "L7" : "L4";
     iface.layers[layer].push(p);
     iface.allPrograms.push(p);

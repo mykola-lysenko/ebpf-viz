@@ -680,12 +680,21 @@ function NicHardwareBase({ name, color }: { name: string; color: string }) {
 
 export function InterfaceNode({ data, selected }: { data: InterfaceNodeData; selected?: boolean }) {
   const lod = useLod();
-  const { name, layers, allPrograms } = data;
+  const { name, kind, layers, allPrograms } = data;
   const hasProgs = allPrograms.length > 0;
-  const color = "#10b981";
+  const isSockmap = kind === "sockmap";
+  const color = isSockmap ? "#8b5cf6" : "#10b981";
+
+  // Each node type only shows the layers that are semantically meaningful for it:
+  //   NIC nodes:     L2 (XDP/netkit) and L3 (TC/netfilter/flow_dissector)
+  //   Sockmap nodes: L4 (sk_skb/sk_lookup) and L7 (sk_msg/sock_ops)
+  const NIC_LAYER_KEYS = new Set(["L2", "L3"]);
+  const SOCKMAP_LAYER_KEYS = new Set(["L4", "L7"]);
+  const allowedKeys = isSockmap ? SOCKMAP_LAYER_KEYS : NIC_LAYER_KEYS;
+  const visibleLayers = PACKET_PATH_LAYERS.filter(l => allowedKeys.has(l.key));
 
   // Determine which layers are active (have programs)
-  const activeLayers = PACKET_PATH_LAYERS.filter(
+  const activeLayers = visibleLayers.filter(
     l => (layers[l.key] ?? []).length > 0
   );
 
@@ -714,7 +723,7 @@ export function InterfaceNode({ data, selected }: { data: InterfaceNodeData; sel
         gap: 6,
         borderRadius: "10px 10px 0 0",
       }}>
-        <span style={{ fontSize: 12 }}>🔌</span>
+        <span style={{ fontSize: 12 }}>{isSockmap ? "🗺" : "🔌"}</span>
         <span style={{
           fontSize: 11,
           fontWeight: 700,
@@ -739,14 +748,16 @@ export function InterfaceNode({ data, selected }: { data: InterfaceNodeData; sel
       {lod !== "minimal" && (
         <div style={{ padding: "8px 8px 6px", display: "flex", flexDirection: "column", gap: 0 }}>
 
-          {/* Layers rendered top-to-bottom: L7 → L4 → L3 → L2 → NIC HW
+          {/* Layers rendered top-to-bottom.
+               NIC nodes:     L3 (TC/netfilter) → L2 (XDP) → NIC HW base
+               Sockmap nodes: L7 (sk_msg/sock_ops) → L4 (sk_skb/sk_lookup)
                In compact LOD, empty layers are hidden to reduce visual noise.
-               In full LOD, all layers are shown with their descriptions. */}
-          {PACKET_PATH_LAYERS.map((layer, idx) => {
+               In full LOD, all allowed layers are shown with their descriptions. */}
+          {visibleLayers.map((layer, idx) => {
             const progs = layers[layer.key] ?? [];
             const active = progs.length > 0;
-            const isLast = idx === PACKET_PATH_LAYERS.length - 1;
-            const nextProgs = isLast ? [] : (layers[PACKET_PATH_LAYERS[idx + 1].key] ?? []);
+            const isLast = idx === visibleLayers.length - 1;
+            const nextProgs = isLast ? [] : (layers[visibleLayers[idx + 1].key] ?? []);
 
             // In compact LOD, skip empty layers entirely to avoid phantom arrows
             if (!active && lod !== "full") {
@@ -842,11 +853,11 @@ export function InterfaceNode({ data, selected }: { data: InterfaceNodeData; sel
             );
           })}
 
-          {/* Arrow from L2 to NIC HW — always shown since NIC HW base is always rendered */}
-          <FlowArrow color="#00d4ff" active={(layers.L2 ?? []).length > 0} />
+          {/* Arrow from L2 to NIC HW — only for NIC nodes */}
+          {!isSockmap && <FlowArrow color="#00d4ff" active={(layers.L2 ?? []).length > 0} />}
 
-          {/* NIC hardware base */}
-          <NicHardwareBase name={name} color={color} />
+          {/* NIC hardware base — only for NIC nodes */}
+          {!isSockmap && <NicHardwareBase name={name} color={color} />}
         </div>
       )}
 

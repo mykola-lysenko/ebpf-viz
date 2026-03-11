@@ -131,11 +131,14 @@ export interface BpfAttachment {
 export interface NetworkInterface {
   name: string;
   ifindex: number;
+  /** "nic" = physical/virtual network device (XDP, TC, netfilter, flow_dissector);
+   *  "sockmap" = synthetic socket-level attachment point (sk_msg, sk_skb, sk_lookup, sock_ops) */
+  kind: "nic" | "sockmap";
   layers: {
-    L2: BpfProgram[];  // XDP, TC ingress/egress
-    L3: BpfProgram[];  // TC, netfilter
-    L4: BpfProgram[];  // sk_filter, sock_ops
-    L7: BpfProgram[];  // sk_msg, sockops application level
+    L2: BpfProgram[];  // XDP, netkit (NIC only)
+    L3: BpfProgram[];  // TC, netfilter, flow_dissector (NIC only)
+    L4: BpfProgram[];  // sk_skb, sk_lookup (sockmap only)
+    L7: BpfProgram[];  // sk_msg, sock_ops (sockmap only)
   };
   allPrograms: BpfProgram[];
 }
