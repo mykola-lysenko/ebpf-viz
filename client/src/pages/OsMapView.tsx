@@ -272,14 +272,15 @@ function OsMapCanvas() {
   // Stabilize the maps array reference — a new [] on every render would cause
   // useOsMapLayout's useMemo to recompute every render, creating an infinite loop.
   const maps = useMemo(() => mapsQuery.data ?? [], [mapsQuery.data]);
-  const layout = useOsMapLayout(snapshot, maps);
+  // zoom must be declared before useOsMapLayout so the LOD can be derived from it
+  const [zoom, setZoom] = useState(0.35);
+  const layout = useOsMapLayout(snapshot, maps, zoom);
   const { fitView, getViewport } = useReactFlow();
   // Keep a stable ref to fitView so it never appears in useEffect deps
   const fitViewRef = useRef(fitView);
   useEffect(() => { fitViewRef.current = fitView; });
   const [nodes, setNodes, onNodesChange] = useNodesState(layout.nodes);
   const [edges, setEdges, onEdgesChange] = useEdgesState(layout.edges);
-  const [zoom, setZoom] = useState(0.35);
   const [showLabels, setShowLabels] = useState(true);
   const didFit = useRef(false);
   const fitAttempts = useRef(0);

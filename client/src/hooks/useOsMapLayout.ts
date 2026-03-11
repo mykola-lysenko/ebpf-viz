@@ -207,7 +207,11 @@ const MAP_CATEGORY_COLORS: Record<string, string> = {
   other:   "#6b7280",
 };
 
-export function buildOsMapLayout(snapshot: EbpfSnapshot, maps: BpfMap[] = []): OsMapLayout {
+export function buildOsMapLayout(
+  snapshot: EbpfSnapshot,
+  maps: BpfMap[] = [],
+  lod: "minimal" | "compact" | "full" = "compact"
+): OsMapLayout {
   const nodes: Node[] = [];
   const edges: Edge[] = [];
 
@@ -352,7 +356,7 @@ export function buildOsMapLayout(snapshot: EbpfSnapshot, maps: BpfMap[] = []): O
 
   let maxIfaceH = 200; // fallback minimum
   snapshot.networkInterfaces.forEach(iface => {
-    const h = estimateInterfaceNodeHeight(iface.layers, "compact");
+    const h = estimateInterfaceNodeHeight(iface.layers, lod);
     if (h > maxIfaceH) maxIfaceH = h;
   });
 
@@ -588,9 +592,24 @@ function progTypeToZone(rawType: string): string {
   return "other";
 }
 
-export function useOsMapLayout(snapshot: EbpfSnapshot | null, maps: BpfMap[] = []): OsMapLayout {
+/** Derive the LOD tier from a raw zoom value — mirrors the thresholds in OsMapNodes.tsx */
+export function zoomToLod(zoom: number): "minimal" | "compact" | "full" {
+  if (zoom < 0.35) return "minimal";
+  if (zoom < 0.65) return "compact";
+  return "full";
+}
+
+export function useOsMapLayout(
+  snapshot: EbpfSnapshot | null,
+  maps: BpfMap[] = [],
+  zoom = 0.35
+): OsMapLayout {
+  const lod = zoomToLod(zoom);
   return useMemo(() => {
     if (!snapshot) return { nodes: [], edges: [], totalHeight: 1200, totalWidth: CANVAS_W };
-    return buildOsMapLayout(snapshot, maps);
-  }, [snapshot, maps]);
+    return buildOsMapLayout(snapshot, maps, lod);
+    // lod is derived from zoom but we only want to recompute when the LOD tier
+    // changes (not on every sub-threshold zoom tick), so depend on lod not zoom.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [snapshot, maps, lod]);
 }

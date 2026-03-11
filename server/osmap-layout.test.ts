@@ -10,7 +10,7 @@
  *     rendered as zone nodes — but only when they have at least one program.
  */
 import { describe, it, expect } from "vitest";
-import { buildOsMapLayout } from "../client/src/hooks/useOsMapLayout";
+import { buildOsMapLayout, zoomToLod } from "../client/src/hooks/useOsMapLayout";
 import type { EbpfSnapshot } from "../shared/ebpf-types";
 
 // ─── Minimal snapshot fixture ─────────────────────────────────────────────────
@@ -482,6 +482,79 @@ describe("buildOsMapLayout", () => {
     const netBandBottom = netBand.position.y + (netBand.data as any).height;
 
     // The maps label should start below the network band
+    expect(mapLabel.position.y).toBeGreaterThan(netBandBottom - 1);
+  });
+
+  // ── Zoom-adaptive LOD ─────────────────────────────────────────────────────────
+
+  it("zoomToLod returns minimal for zoom < 0.35", () => {
+    expect(zoomToLod(0.1)).toBe("minimal");
+    expect(zoomToLod(0.34)).toBe("minimal");
+  });
+
+  it("zoomToLod returns compact for 0.35 ≤ zoom < 0.65", () => {
+    expect(zoomToLod(0.35)).toBe("compact");
+    expect(zoomToLod(0.5)).toBe("compact");
+    expect(zoomToLod(0.64)).toBe("compact");
+  });
+
+  it("zoomToLod returns full for zoom ≥ 0.65", () => {
+    expect(zoomToLod(0.65)).toBe("full");
+    expect(zoomToLod(1.0)).toBe("full");
+    expect(zoomToLod(2.0)).toBe("full");
+  });
+
+  it("network band is taller in full LOD than compact LOD (empty layers shown in full)", () => {
+    // With no programs, compact hides all layers but full shows them with descriptions
+    const snap = makeSnapshot();
+    // Clear all programs from the interface so compact LOD hides all layers
+    snap.networkInterfaces[0].layers = { L2: [], L3: [], L4: [], L7: [] };
+    snap.networkInterfaces[0].allPrograms = [];
+
+    const layoutCompact = buildOsMapLayout(snap, [], "compact");
+    const layoutFull = buildOsMapLayout(snap, [], "full");
+
+    const bandCompact = layoutCompact.nodes.find(n => n.id === "band-network")!;
+    const bandFull = layoutFull.nodes.find(n => n.id === "band-network")!;
+
+    // Full LOD shows all 4 empty layers with descriptions → taller band
+    expect((bandFull.data as any).height).toBeGreaterThan((bandCompact.data as any).height);
+  });
+
+  it("network band is shorter in minimal LOD than compact LOD", () => {
+    const snap = makeSnapshot();
+    const prog = snap.programs[0];
+    // Use all 4 layers so compact LOD produces a tall node that exceeds the 200px floor
+    snap.networkInterfaces[0].layers = { L2: [prog], L3: [prog], L4: [prog], L7: [prog] };
+    snap.networkInterfaces[0].allPrograms = [prog];
+
+    const layoutMinimal = buildOsMapLayout(snap, [], "minimal");
+    const layoutCompact = buildOsMapLayout(snap, [], "compact");
+
+    const bandMinimal = layoutMinimal.nodes.find(n => n.id === "band-network")!;
+    const bandCompact = layoutCompact.nodes.find(n => n.id === "band-network")!;
+
+    // Minimal LOD shows only a count line → much shorter than compact with 4 active layers
+    expect((bandMinimal.data as any).height).toBeLessThan((bandCompact.data as any).height);
+  });
+
+  it("BPF Maps section stays below network band at full LOD", () => {
+    const prog = makeSnapshot().programs[0];
+    const snap = makeSnapshot();
+    snap.networkInterfaces[0].layers = { L2: [prog], L3: [prog], L4: [prog], L7: [prog] };
+    snap.networkInterfaces[0].allPrograms = [prog];
+    const maps = [{
+      id: 10, type: "hash", rawType: "hash", name: "test_map",
+      flags: 0, bytesKey: 4, bytesValue: 8, maxEntries: 128,
+      bytesMemlock: 4096, frozen: false, pinnedPaths: [], btfId: null,
+      usedByProgIds: [], color: "#a78bfa", category: "data",
+    }];
+    const layout = buildOsMapLayout(snap, maps as any, "full");
+
+    const netBand = layout.nodes.find(n => n.id === "band-network")!;
+    const mapLabel = layout.nodes.find(n => n.id === "label-maps")!;
+    const netBandBottom = netBand.position.y + (netBand.data as any).height;
+
     expect(mapLabel.position.y).toBeGreaterThan(netBandBottom - 1);
   });
 });

@@ -155,3 +155,10 @@
 
 ## Bug Fixes (continued)
 - [x] BPF Maps band overlaps Network Layer band: network band height now computed dynamically from estimateInterfaceNodeHeight() instead of hardcoded IFACE_H=200; 3 new layout tests assert no overlap (180 total, all passing)
+
+## Zoom-Adaptive Network Band Height
+- [x] Exported zoomToLod() helper derives LOD tier from raw zoom value (mirrors OsMapNodes thresholds)
+- [x] buildOsMapLayout accepts optional lod param; estimateInterfaceNodeHeight called with correct LOD
+- [x] useOsMapLayout accepts zoom param, derives lod, adds lod to useMemo deps (recomputes only on tier change)
+- [x] OsMapCanvas passes zoom state into useOsMapLayout; zoom declared before the hook call
+- [x] 5 new tests: zoomToLod thresholds, full>compact>minimal band heights, no-overlap at full LOD (186 total, all passing)
