@@ -39,6 +39,9 @@ export interface RawNetSnapshot {
   netkit?: RawNetEntry[];
   flow_dissector?: RawNetEntry[];
   netfilter?: RawNetEntry[];
+  /** Synthetic sockmap/sockhash entries (not from bpftool net, but from bpftool prog show).
+   *  devname is a virtual name like "sockmap0"; ifindex is 0 for synthetic entries. */
+  sockmap?: RawNetEntry[];
 }
 
 export interface RawCgroupEntry {

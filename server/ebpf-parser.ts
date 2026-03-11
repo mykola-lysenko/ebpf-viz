@@ -320,6 +320,18 @@ export function buildNetworkInterfaces(
     iface.allPrograms.push(p);
   }
 
+  // Sockmap/sockhash entries: route to L4 or L7 based on program type.
+  // sk_skb and sk_lookup operate at the transport layer (L4).
+  // sk_msg and sock_ops operate at the application/socket layer (L7).
+  for (const entry of snapshot.sockmap ?? []) {
+    const p = progs.get(entry.id);
+    if (!p) continue;
+    const iface = getOrCreate(entry.devname, entry.ifindex);
+    const layer = (p.type === "sk_msg" || p.type === "sock_ops") ? "L7" : "L4";
+    iface.layers[layer].push(p);
+    iface.allPrograms.push(p);
+  }
+
   return Array.from(ifaceMap.values() as Iterable<NetworkInterface>);
 }
 

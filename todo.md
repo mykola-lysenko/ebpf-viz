@@ -139,3 +139,9 @@
 - [x] netfilter programs were never pushed to iface.layers.L3 in buildNetworkInterfaces (now fixed)
 - [x] flow_dissector was incorrectly assigned to L4 (now correctly in L3 alongside netfilter)
 - [x] netkit programs now assigned to L2 in buildNetworkInterfaces
+
+## Sockmap Demo Interface
+- [x] Added sockmap field to RawNetSnapshot type (shared/ebpf-types.ts)
+- [x] Added synthetic sockmap0 interface to MOCK_NET with sock_ops/sk_skb/sk_msg/sk_lookup programs
+- [x] Extended buildNetworkInterfaces: sk_skb/sk_lookup → L4, sk_msg/sock_ops → L7
+- [x] 5 new tests for sockmap/netfilter/flow_dissector layer assignment (173 total, all passing)

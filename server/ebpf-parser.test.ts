@@ -233,6 +233,127 @@ describe("buildNetworkInterfaces", () => {
     expect(eth0.layers.L2[0].id).toBe(1);
     expect(eth0.layers.L3).toHaveLength(0);
   });
+
+  it("places netfilter programs in L3 layer", () => {
+    const nfProg: RawBpfProg = {
+      id: 50, type: "netfilter", name: "nf_hook", tag: "aabbccdd00000050",
+      gpl_compatible: true, loaded_at: 1700000010, orphaned: false,
+      bytes_xlated: 128, jited: false, bytes_memlock: 4096,
+    };
+    const progs = parseProgList([nfProg]);
+    const net: RawNetSnapshot[] = [{
+      netfilter: [{ devname: "eth0", ifindex: 2, id: 50 }],
+    }];
+    enrichWithNetAttachments(progs, net);
+    const interfaces = buildNetworkInterfaces(progs, net);
+    const eth0 = interfaces.find(i => i.name === "eth0")!;
+    expect(eth0.layers.L3).toHaveLength(1);
+    expect(eth0.layers.L3[0].id).toBe(50);
+    expect(eth0.layers.L4).toHaveLength(0);
+  });
+
+  it("places flow_dissector programs in L3 layer (not L4)", () => {
+    const fdProg: RawBpfProg = {
+      id: 51, type: "flow_dissector", name: "custom_dissector", tag: "aabbccdd00000051",
+      gpl_compatible: true, loaded_at: 1700000011, orphaned: false,
+      bytes_xlated: 192, jited: true, bytes_memlock: 4096,
+    };
+    const progs = parseProgList([fdProg]);
+    const net: RawNetSnapshot[] = [{
+      flow_dissector: [{ devname: "eth0", ifindex: 2, id: 51 }],
+    }];
+    enrichWithNetAttachments(progs, net);
+    const interfaces = buildNetworkInterfaces(progs, net);
+    const eth0 = interfaces.find(i => i.name === "eth0")!;
+    expect(eth0.layers.L3).toHaveLength(1);
+    expect(eth0.layers.L3[0].id).toBe(51);
+    expect(eth0.layers.L4).toHaveLength(0);
+  });
+
+  it("places sk_skb and sk_lookup sockmap programs in L4 layer", () => {
+    const skSkbProg: RawBpfProg = {
+      id: 52, type: "sk_skb", name: "sk_skb_verdict", tag: "aabbccdd00000052",
+      gpl_compatible: true, loaded_at: 1700000012, orphaned: false,
+      bytes_xlated: 256, jited: true, bytes_memlock: 4096,
+    };
+    const skLookupProg: RawBpfProg = {
+      id: 53, type: "sk_lookup", name: "sk_lookup_dispatch", tag: "aabbccdd00000053",
+      gpl_compatible: true, loaded_at: 1700000013, orphaned: false,
+      bytes_xlated: 192, jited: true, bytes_memlock: 4096,
+    };
+    const progs = parseProgList([skSkbProg, skLookupProg]);
+    const net: RawNetSnapshot[] = [{
+      sockmap: [
+        { devname: "sockmap0", ifindex: 0, kind: "sk_skb", id: 52 },
+        { devname: "sockmap0", ifindex: 0, kind: "sk_lookup", id: 53 },
+      ],
+    }];
+    enrichWithNetAttachments(progs, net);
+    const interfaces = buildNetworkInterfaces(progs, net);
+    const sm = interfaces.find(i => i.name === "sockmap0")!;
+    expect(sm).toBeDefined();
+    expect(sm.layers.L4).toHaveLength(2);
+    expect(sm.layers.L4.map(p => p.id)).toEqual(expect.arrayContaining([52, 53]));
+    expect(sm.layers.L7).toHaveLength(0);
+  });
+
+  it("places sk_msg and sock_ops sockmap programs in L7 layer", () => {
+    const skMsgProg: RawBpfProg = {
+      id: 54, type: "sk_msg", name: "sk_msg_redirect", tag: "aabbccdd00000054",
+      gpl_compatible: true, loaded_at: 1700000014, orphaned: false,
+      bytes_xlated: 320, jited: true, bytes_memlock: 4096,
+    };
+    const sockOpsProg: RawBpfProg = {
+      id: 55, type: "sock_ops", name: "sockops_rtt", tag: "aabbccdd00000055",
+      gpl_compatible: true, loaded_at: 1700000015, orphaned: false,
+      bytes_xlated: 448, jited: true, bytes_memlock: 4096,
+    };
+    const progs = parseProgList([skMsgProg, sockOpsProg]);
+    const net: RawNetSnapshot[] = [{
+      sockmap: [
+        { devname: "sockmap0", ifindex: 0, kind: "sk_msg", id: 54 },
+        { devname: "sockmap0", ifindex: 0, kind: "sockops", id: 55 },
+      ],
+    }];
+    enrichWithNetAttachments(progs, net);
+    const interfaces = buildNetworkInterfaces(progs, net);
+    const sm = interfaces.find(i => i.name === "sockmap0")!;
+    expect(sm).toBeDefined();
+    expect(sm.layers.L7).toHaveLength(2);
+    expect(sm.layers.L7.map(p => p.id)).toEqual(expect.arrayContaining([54, 55]));
+    expect(sm.layers.L4).toHaveLength(0);
+  });
+
+  it("sockmap interface with all 4 layers populated validates full stack", () => {
+    const progs = parseProgList([
+      { id: 60, type: "xdp",        name: "xdp_prog",   tag: "aa00000000000060", gpl_compatible: true, loaded_at: 1700000020, orphaned: false, bytes_xlated: 128, jited: true,  bytes_memlock: 4096 },
+      { id: 61, type: "sched_cls",  name: "tc_prog",    tag: "aa00000000000061", gpl_compatible: true, loaded_at: 1700000021, orphaned: false, bytes_xlated: 256, jited: true,  bytes_memlock: 4096 },
+      { id: 62, type: "sk_skb",     name: "sk_skb_prog", tag: "aa00000000000062", gpl_compatible: true, loaded_at: 1700000022, orphaned: false, bytes_xlated: 192, jited: true,  bytes_memlock: 4096 },
+      { id: 63, type: "sk_msg",     name: "sk_msg_prog", tag: "aa00000000000063", gpl_compatible: true, loaded_at: 1700000023, orphaned: false, bytes_xlated: 160, jited: true,  bytes_memlock: 4096 },
+    ]);
+    const net: RawNetSnapshot[] = [{
+      xdp:     [{ devname: "eth0",     ifindex: 2, id: 60 }],
+      tc:      [{ devname: "eth0",     ifindex: 2, id: 61 }],
+      sockmap: [
+        { devname: "sockmap0", ifindex: 0, kind: "sk_skb", id: 62 },
+        { devname: "sockmap0", ifindex: 0, kind: "sk_msg", id: 63 },
+      ],
+    }];
+    enrichWithNetAttachments(progs, net);
+    const interfaces = buildNetworkInterfaces(progs, net);
+    // eth0 has L2 (XDP) and L3 (TC)
+    const eth0 = interfaces.find(i => i.name === "eth0")!;
+    expect(eth0.layers.L2).toHaveLength(1);
+    expect(eth0.layers.L3).toHaveLength(1);
+    expect(eth0.layers.L4).toHaveLength(0);
+    expect(eth0.layers.L7).toHaveLength(0);
+    // sockmap0 has L4 (sk_skb) and L7 (sk_msg)
+    const sm = interfaces.find(i => i.name === "sockmap0")!;
+    expect(sm.layers.L4).toHaveLength(1);
+    expect(sm.layers.L7).toHaveLength(1);
+    expect(sm.layers.L2).toHaveLength(0);
+    expect(sm.layers.L3).toHaveLength(0);
+  });
 });
 
 // ─── buildCgroupTree ──────────────────────────────────────────────────────────

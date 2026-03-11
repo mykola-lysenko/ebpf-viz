@@ -70,6 +70,25 @@ export const MOCK_NET: RawNetSnapshot[] = [
     ],
     tcx: [],
     netkit: [],
+    /**
+     * Synthetic sockmap interface — represents programs attached to a BPF sockmap/sockhash.
+     * In real usage these would be discovered by scanning `bpftool prog show` for sk_msg,
+     * sk_skb, sk_lookup, and sock_ops programs and grouping them by their sockmap map id.
+     * Here we use a virtual devname "sockmap0" (ifindex 0) so the OS Map renders a
+     * dedicated NIC node that exercises the full L4 + L7 stack layers.
+     *
+     * Programs:
+     *   id 18 — sock_ops / sockops_tcp_rtt  → L7 (sock_ops)
+     *   id 19 — sk_skb  / sk_skb_verdict    → L4 (sk_skb)
+     *   id 20 — sk_msg  / sk_msg_redirect   → L7 (sk_msg)
+     *   id 21 — sk_lookup / sk_lookup_dispatch → L4 (sk_lookup)
+     */
+    sockmap: [
+      { devname: "sockmap0", ifindex: 0, kind: "sockops",  id: 18 },
+      { devname: "sockmap0", ifindex: 0, kind: "sk_skb",   id: 19 },
+      { devname: "sockmap0", ifindex: 0, kind: "sk_msg",   id: 20 },
+      { devname: "sockmap0", ifindex: 0, kind: "sk_lookup", id: 21 },
+    ],
   },
 ];
 
