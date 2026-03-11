@@ -239,3 +239,9 @@
 - [x] Found in sdk.ts verifySession() — fires on every tRPC call when no cookie is present
 - [x] Guard with ENV.oAuthServerUrl check: only log when OAuth is configured
 - [x] Rebuilt standalone and verified guard is present in bundle
+
+## Code Dump: Persistent Truncated JSON on Node 16
+- [x] Root cause: req.once('aborted', onAbort) also triggers the AbortController, bypassing the setImmediate res.once('close') patch
+- [x] Fix: patch ReadableStream.prototype.pipeTo in polyfill.ts to strip the signal option on Node 16, preventing any abort from truncating the body
+- [x] Also install ReadableStream/WritableStream/TransformStream globals from stream/web for correct instanceof checks
+- [x] Rebuilt and verified: 22KB response delivered as valid JSON, server stays alive

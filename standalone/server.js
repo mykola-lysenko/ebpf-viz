@@ -62147,7 +62147,24 @@ if (nodeMajor < 18) {
   if (!g.Request) g.Request = undici.Request;
   if (!g.Response) g.Response = undici.Response;
   if (!g.FormData) g.FormData = undici.FormData;
-  console.log(`[polyfill] Installed Web API globals from undici (Node ${process.versions.node})`);
+  try {
+    const { ReadableStream: ReadableStream3 } = __require("stream/web");
+    if (!g.ReadableStream) g.ReadableStream = ReadableStream3;
+    const { WritableStream: WritableStream2, TransformStream: TransformStream2 } = __require("stream/web");
+    if (!g.WritableStream) g.WritableStream = WritableStream2;
+    if (!g.TransformStream) g.TransformStream = TransformStream2;
+    const origPipeTo = ReadableStream3.prototype.pipeTo;
+    ReadableStream3.prototype.pipeTo = function patchedPipeTo(dest, options) {
+      if (options && "signal" in options) {
+        const { signal: _signal, ...rest } = options;
+        return origPipeTo.call(this, dest, rest);
+      }
+      return origPipeTo.call(this, dest, options);
+    };
+    console.log(`[polyfill] Installed Web API globals + pipeTo abort-signal fix (Node ${process.versions.node})`);
+  } catch {
+    console.log(`[polyfill] Installed Web API globals from undici (Node ${process.versions.node})`);
+  }
 }
 
 // node_modules/.pnpm/dotenv@17.2.3/node_modules/dotenv/config.js
