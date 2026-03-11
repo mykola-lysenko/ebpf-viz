@@ -124,3 +124,12 @@
 - [x] Process→NIC-type program edges now point to the NIC interface node
 - [x] Map→NIC-type program edges now originate from the NIC interface node
 - [x] Updated osmap-layout tests (19 tests, all passing; 145 total)
+
+## NIC Packet Path Stack Diagram
+- [x] Packet path stack: L7→L4→L3→L2→NIC HW layers rendered top-to-bottom in InterfaceNode
+- [x] Dynamic height: node expands based on number of programs per layer
+- [x] Hover tooltip on each program badge (name, rawType, id, attachment detail, JIT/GPL/orphaned badges)
+- [x] SVG flow arrows between layers (active/inactive state based on adjacent layer occupancy)
+- [x] NIC hardware base node at bottom of stack with custom SVG icon
+- [x] Layer descriptions shown in full LOD for inactive layers
+- [x] 23 new tests for packet path logic (168 total, all passing)
