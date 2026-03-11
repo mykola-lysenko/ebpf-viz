@@ -373,25 +373,25 @@ export function buildCgroupTree(
   }
 
   // Wire up parent-child relationships
+  const CGROUP_ROOT = "/sys/fs/cgroup";
   const roots: CgroupNode[] = [];
   for (const [path, node] of Array.from(nodeMap.entries())) {
-    // Find parent: strip last segment
+    if (path === CGROUP_ROOT) {
+      // The cgroup root itself is always a top-level root
+      roots.push(node);
+      continue;
+    }
+    // Find parent: strip last path segment
     const parentPath = path.substring(0, path.lastIndexOf("/"));
     const parent = nodeMap.get(parentPath);
     if (parent) {
       parent.children.push(node);
+    } else if (parentPath === CGROUP_ROOT) {
+      // Parent is the cgroup root but it wasn't included in the entries
+      roots.push(node);
     } else {
-      // Try the cgroup root
-      const cgroupRoot = "/sys/fs/cgroup";
-      if (path !== cgroupRoot) {
-        // Check if parent is the root
-        const relPath = path.replace(/^\/sys\/fs\/cgroup\//, "");
-        if (!relPath.includes("/")) {
-          roots.push(node);
-        } else {
-          roots.push(node); // orphan, show at top
-        }
-      }
+      // Orphan: parent not in entries — show at top level
+      roots.push(node);
     }
   }
 

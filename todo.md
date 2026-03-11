@@ -162,3 +162,12 @@
 - [x] useOsMapLayout accepts zoom param, derives lod, adds lod to useMemo deps (recomputes only on tier change)
 - [x] OsMapCanvas passes zoom state into useOsMapLayout; zoom declared before the hook call
 - [x] 5 new tests: zoomToLod thresholds, full>compact>minimal band heights, no-overlap at full LOD (186 total, all passing)
+
+## Richer Demo Cgroup Hierarchy
+- [x] Expanded MOCK_CGROUPS to 4-level tree: root → system/user/machine.slice → services (kubelet, docker, ssh, nginx, containerd) → pods/sessions
+- [x] Root cgroup has global ingress/egress policy; system.slice has device policy; kubelet has all 5 program types
+- [x] Docker container scopes (docker-abc123.scope, docker-fedcba.scope) at depth 3 under docker.service
+- [x] Kubernetes pod scopes (pod-nginx, pod-redis, pod-logger) at depth 4 under kubepods QoS slices
+- [x] User sessions (session-1, session-2) and user@1000.service at depth 3 under user-1000.slice
+- [x] Fixed buildCgroupTree to correctly handle root /sys/fs/cgroup node and proper parent-child wiring
+- [x] 5 new cgroup tree tests covering 4-level wiring, structural nodes, alphabetical sort, session depth, node count (191 total, all passing)

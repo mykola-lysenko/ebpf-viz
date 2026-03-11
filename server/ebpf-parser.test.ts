@@ -407,6 +407,17 @@ describe("buildNetworkInterfaces", () => {
 // ─── buildCgroupTree ──────────────────────────────────────────────────────────
 
 describe("buildCgroupTree", () => {
+  // ── helpers ────────────────────────────────────────────────────────────────
+  type CgNode = ReturnType<typeof buildCgroupTree>[0];
+  const findNode = (nodes: CgNode[], path: string): CgNode | undefined => {
+    for (const n of nodes) {
+      if (n.path === path) return n;
+      const found = findNode(n.children, path);
+      if (found) return found;
+    }
+  };
+
+  // ── base cases ─────────────────────────────────────────────────────────────
   it("builds a flat tree from cgroup entries", () => {
     const progs = parseProgList([cgroupSkbProg]);
     const cgroups: RawCgroupEntry[] = [{
@@ -416,14 +427,6 @@ describe("buildCgroupTree", () => {
     enrichWithCgroupAttachments(progs, cgroups);
     const tree = buildCgroupTree(progs, cgroups);
     expect(tree.length).toBeGreaterThanOrEqual(1);
-    // Find the leaf node
-    const findNode = (nodes: typeof tree, path: string): (typeof tree)[0] | undefined => {
-      for (const n of nodes) {
-        if (n.path === path) return n;
-        const found = findNode(n.children, path);
-        if (found) return found;
-      }
-    };
     const leaf = findNode(tree, "/sys/fs/cgroup/system.slice/test.service");
     expect(leaf).toBeDefined();
     expect(leaf!.programs).toHaveLength(1);
@@ -434,6 +437,185 @@ describe("buildCgroupTree", () => {
     const progs = parseProgList([]);
     const tree = buildCgroupTree(progs, []);
     expect(tree).toEqual([]);
+  });
+
+  // ── 4-level hierarchy ──────────────────────────────────────────────────────
+  const cgroupIngress: RawBpfProg = {
+    id: 10, type: "cgroup_skb", name: "cg_ingress", tag: "aabb000000000001",
+    gpl_compatible: true, loaded_at: 0, uid: 0, orphaned: false,
+    bytes_xlated: 64, jited: false, bytes_memlock: 4096,
+  };
+  const cgroupEgress: RawBpfProg = {
+    id: 11, type: "cgroup_skb", name: "cg_egress", tag: "aabb000000000002",
+    gpl_compatible: true, loaded_at: 0, uid: 0, orphaned: false,
+    bytes_xlated: 64, jited: false, bytes_memlock: 4096,
+  };
+  const cgroupDevice: RawBpfProg = {
+    id: 12, type: "cgroup_device", name: "cg_device", tag: "aabb000000000003",
+    gpl_compatible: true, loaded_at: 0, uid: 0, orphaned: false,
+    bytes_xlated: 128, jited: false, bytes_memlock: 4096,
+  };
+  const cgroupSockCreate: RawBpfProg = {
+    id: 13, type: "cgroup_sock", name: "cg_sock_create", tag: "aabb000000000004",
+    gpl_compatible: true, loaded_at: 0, uid: 0, orphaned: false,
+    bytes_xlated: 192, jited: false, bytes_memlock: 4096,
+  };
+  const cgroupSockops: RawBpfProg = {
+    id: 14, type: "sock_ops", name: "cg_sockops", tag: "aabb000000000005",
+    gpl_compatible: true, loaded_at: 0, uid: 0, orphaned: false,
+    bytes_xlated: 256, jited: true, bytes_memlock: 4096,
+  };
+
+  const deepCgroups: RawCgroupEntry[] = [
+    // Level 0: root — global policy
+    {
+      cgroup: "/sys/fs/cgroup",
+      programs: [
+        { id: 10, attach_type: "cgroup_inet_ingress", attach_flags: "multi" },
+        { id: 11, attach_type: "cgroup_inet_egress",  attach_flags: "multi" },
+      ],
+    },
+    // Level 1: system.slice — device policy for all services
+    {
+      cgroup: "/sys/fs/cgroup/system.slice",
+      programs: [
+        { id: 12, attach_type: "cgroup_device", attach_flags: "multi" },
+      ],
+    },
+    // Level 1: user.slice — no programs (structural node)
+    { cgroup: "/sys/fs/cgroup/user.slice", programs: [] },
+    // Level 2: kubelet.service — network + device + socket policy
+    {
+      cgroup: "/sys/fs/cgroup/system.slice/kubelet.service",
+      programs: [
+        { id: 10, attach_type: "cgroup_inet_ingress", attach_flags: "multi" },
+        { id: 11, attach_type: "cgroup_inet_egress",  attach_flags: "multi" },
+        { id: 12, attach_type: "cgroup_device",       attach_flags: "multi" },
+        { id: 13, attach_type: "cgroup_sock_create",  attach_flags: "" },
+        { id: 14, attach_type: "cgroup_sockops",      attach_flags: "multi" },
+      ],
+    },
+    // Level 2: ssh.service — network + socket policy
+    {
+      cgroup: "/sys/fs/cgroup/system.slice/ssh.service",
+      programs: [
+        { id: 10, attach_type: "cgroup_inet_ingress", attach_flags: "multi" },
+        { id: 11, attach_type: "cgroup_inet_egress",  attach_flags: "multi" },
+        { id: 13, attach_type: "cgroup_sock_create",  attach_flags: "" },
+      ],
+    },
+    // Level 2: user-1000.slice
+    { cgroup: "/sys/fs/cgroup/user.slice/user-1000.slice", programs: [] },
+    // Level 3: burstable pod QoS class
+    {
+      cgroup: "/sys/fs/cgroup/system.slice/kubelet.service/kubepods-burstable.slice",
+      programs: [
+        { id: 10, attach_type: "cgroup_inet_ingress", attach_flags: "multi" },
+        { id: 11, attach_type: "cgroup_inet_egress",  attach_flags: "multi" },
+      ],
+    },
+    // Level 3: user session
+    {
+      cgroup: "/sys/fs/cgroup/user.slice/user-1000.slice/session-1.scope",
+      programs: [
+        { id: 10, attach_type: "cgroup_inet_ingress", attach_flags: "multi" },
+        { id: 11, attach_type: "cgroup_inet_egress",  attach_flags: "multi" },
+      ],
+    },
+    // Level 4: individual pod
+    {
+      cgroup: "/sys/fs/cgroup/system.slice/kubelet.service/kubepods-burstable.slice/pod-nginx.scope",
+      programs: [
+        { id: 10, attach_type: "cgroup_inet_ingress", attach_flags: "multi" },
+        { id: 11, attach_type: "cgroup_inet_egress",  attach_flags: "multi" },
+        { id: 12, attach_type: "cgroup_device",       attach_flags: "multi" },
+        { id: 13, attach_type: "cgroup_sock_create",  attach_flags: "" },
+        { id: 14, attach_type: "cgroup_sockops",      attach_flags: "multi" },
+      ],
+    },
+  ];
+
+  it("builds a 4-level hierarchy with correct parent-child wiring", () => {
+    const progs = parseProgList([cgroupIngress, cgroupEgress, cgroupDevice, cgroupSockCreate, cgroupSockops]);
+    enrichWithCgroupAttachments(progs, deepCgroups);
+    const tree = buildCgroupTree(progs, deepCgroups);
+
+    // Root node should be at the top level
+    const root = findNode(tree, "/sys/fs/cgroup");
+    expect(root).toBeDefined();
+    expect(root!.depth).toBe(0);
+    expect(root!.programs).toHaveLength(2); // ingress + egress
+
+    // system.slice is a child of root
+    const systemSlice = findNode(tree, "/sys/fs/cgroup/system.slice");
+    expect(systemSlice).toBeDefined();
+    expect(systemSlice!.depth).toBe(1);
+    expect(systemSlice!.programs).toHaveLength(1); // device only
+
+    // kubelet.service is a child of system.slice
+    const kubelet = findNode(tree, "/sys/fs/cgroup/system.slice/kubelet.service");
+    expect(kubelet).toBeDefined();
+    expect(kubelet!.depth).toBe(2);
+    expect(kubelet!.programs).toHaveLength(5);
+
+    // burstable.slice is a child of kubelet.service
+    const burstable = findNode(tree, "/sys/fs/cgroup/system.slice/kubelet.service/kubepods-burstable.slice");
+    expect(burstable).toBeDefined();
+    expect(burstable!.depth).toBe(3);
+
+    // pod-nginx.scope is a child of burstable.slice (depth 4)
+    const pod = findNode(tree, "/sys/fs/cgroup/system.slice/kubelet.service/kubepods-burstable.slice/pod-nginx.scope");
+    expect(pod).toBeDefined();
+    expect(pod!.depth).toBe(4);
+    expect(pod!.programs).toHaveLength(5);
+    expect(pod!.children).toHaveLength(0); // leaf node
+  });
+
+  it("structural nodes with no programs have empty programs array", () => {
+    const progs = parseProgList([cgroupIngress]);
+    enrichWithCgroupAttachments(progs, deepCgroups);
+    const tree = buildCgroupTree(progs, deepCgroups);
+
+    const userSlice = findNode(tree, "/sys/fs/cgroup/user.slice");
+    expect(userSlice).toBeDefined();
+    expect(userSlice!.programs).toHaveLength(0);
+
+    const user1000 = findNode(tree, "/sys/fs/cgroup/user.slice/user-1000.slice");
+    expect(user1000).toBeDefined();
+    expect(user1000!.programs).toHaveLength(0);
+  });
+
+  it("children are sorted alphabetically at every level", () => {
+    const progs = parseProgList([cgroupIngress, cgroupEgress, cgroupDevice, cgroupSockCreate, cgroupSockops]);
+    enrichWithCgroupAttachments(progs, deepCgroups);
+    const tree = buildCgroupTree(progs, deepCgroups);
+
+    const systemSlice = findNode(tree, "/sys/fs/cgroup/system.slice");
+    expect(systemSlice).toBeDefined();
+    const childNames = systemSlice!.children.map(c => c.name);
+    expect(childNames).toEqual([...childNames].sort());
+  });
+
+  it("user session (depth 3) is wired under user-1000.slice", () => {
+    const progs = parseProgList([cgroupIngress, cgroupEgress]);
+    enrichWithCgroupAttachments(progs, deepCgroups);
+    const tree = buildCgroupTree(progs, deepCgroups);
+
+    const session = findNode(tree, "/sys/fs/cgroup/user.slice/user-1000.slice/session-1.scope");
+    expect(session).toBeDefined();
+    expect(session!.depth).toBe(3);
+    expect(session!.name).toBe("session-1.scope");
+    expect(session!.programs).toHaveLength(2);
+  });
+
+  it("total node count matches number of unique paths in deepCgroups", () => {
+    const progs = parseProgList([cgroupIngress, cgroupEgress, cgroupDevice, cgroupSockCreate, cgroupSockops]);
+    enrichWithCgroupAttachments(progs, deepCgroups);
+    const tree = buildCgroupTree(progs, deepCgroups);
+
+    const countNodes = (nodes: CgNode[]): number =>
+      nodes.reduce((sum, n) => sum + 1 + countNodes(n.children), 0);
+    expect(countNodes(tree)).toBe(deepCgroups.length);
   });
 });
 

@@ -93,52 +93,209 @@ export const MOCK_NET: RawNetSnapshot[] = [
 ];
 
 export const MOCK_CGROUPS: RawCgroupEntry[] = [
+  // ── Level 0: root ──────────────────────────────────────────────────────────
+  {
+    cgroup: "/sys/fs/cgroup",
+    programs: [
+      // Global ingress/egress policy applied at the root — inherited by all descendants
+      { id: 14, attach_type: "cgroup_inet_ingress", attach_flags: "multi" },
+      { id: 15, attach_type: "cgroup_inet_egress",  attach_flags: "multi" },
+    ],
+  },
+
+  // ── Level 1: top-level slices ──────────────────────────────────────────────
+  {
+    cgroup: "/sys/fs/cgroup/system.slice",
+    programs: [
+      // Device policy enforced on all system services
+      { id: 16, attach_type: "cgroup_device", attach_flags: "multi" },
+    ],
+  },
+  {
+    cgroup: "/sys/fs/cgroup/user.slice",
+    programs: [],
+  },
+  {
+    cgroup: "/sys/fs/cgroup/machine.slice",
+    programs: [
+      // VM/container network policy
+      { id: 14, attach_type: "cgroup_inet_ingress", attach_flags: "multi" },
+      { id: 15, attach_type: "cgroup_inet_egress",  attach_flags: "multi" },
+      { id: 16, attach_type: "cgroup_device",       attach_flags: "multi" },
+    ],
+  },
+
+  // ── Level 2: system services ───────────────────────────────────────────────
   {
     cgroup: "/sys/fs/cgroup/system.slice/systemd-udevd.service",
     programs: [
-      { id: 15, attach_type: "cgroup_inet_ingress", attach_flags: "multi" },
-      { id: 14, attach_type: "cgroup_inet_egress", attach_flags: "multi" },
-      { id: 16, attach_type: "cgroup_device", attach_flags: "multi" },
+      { id: 14, attach_type: "cgroup_inet_ingress", attach_flags: "multi" },
+      { id: 15, attach_type: "cgroup_inet_egress",  attach_flags: "multi" },
+      { id: 16, attach_type: "cgroup_device",       attach_flags: "multi" },
     ],
   },
   {
     cgroup: "/sys/fs/cgroup/system.slice/systemd-journald.service",
     programs: [
-      { id: 15, attach_type: "cgroup_inet_ingress", attach_flags: "multi" },
-      { id: 14, attach_type: "cgroup_inet_egress", attach_flags: "multi" },
-      { id: 16, attach_type: "cgroup_device", attach_flags: "multi" },
+      { id: 14, attach_type: "cgroup_inet_ingress", attach_flags: "multi" },
+      { id: 15, attach_type: "cgroup_inet_egress",  attach_flags: "multi" },
     ],
   },
   {
     cgroup: "/sys/fs/cgroup/system.slice/ssh.service",
     programs: [
-      { id: 15, attach_type: "cgroup_inet_ingress", attach_flags: "multi" },
-      { id: 14, attach_type: "cgroup_inet_egress", attach_flags: "multi" },
-      { id: 17, attach_type: "cgroup_sock_create", attach_flags: "" },
-      { id: 18, attach_type: "cgroup_sockops", attach_flags: "multi" },
-    ],
-  },
-  {
-    cgroup: "/sys/fs/cgroup/user.slice/user-1000.slice/session-1.scope",
-    programs: [
-      { id: 14, attach_type: "cgroup_inet_egress", attach_flags: "multi" },
-      { id: 15, attach_type: "cgroup_inet_ingress", attach_flags: "multi" },
+      { id: 14, attach_type: "cgroup_inet_ingress", attach_flags: "multi" },
+      { id: 15, attach_type: "cgroup_inet_egress",  attach_flags: "multi" },
+      { id: 17, attach_type: "cgroup_sock_create",  attach_flags: "" },
+      { id: 18, attach_type: "cgroup_sockops",      attach_flags: "multi" },
     ],
   },
   {
     cgroup: "/sys/fs/cgroup/system.slice/docker.service",
     programs: [
-      { id: 14, attach_type: "cgroup_inet_egress", attach_flags: "multi" },
-      { id: 15, attach_type: "cgroup_inet_ingress", attach_flags: "multi" },
-      { id: 16, attach_type: "cgroup_device", attach_flags: "multi" },
+      { id: 14, attach_type: "cgroup_inet_ingress", attach_flags: "multi" },
+      { id: 15, attach_type: "cgroup_inet_egress",  attach_flags: "multi" },
+      { id: 16, attach_type: "cgroup_device",       attach_flags: "multi" },
     ],
   },
   {
     cgroup: "/sys/fs/cgroup/system.slice/containerd.service",
     programs: [
-      { id: 14, attach_type: "cgroup_inet_egress", attach_flags: "multi" },
-      { id: 15, attach_type: "cgroup_inet_ingress", attach_flags: "multi" },
+      { id: 14, attach_type: "cgroup_inet_ingress", attach_flags: "multi" },
+      { id: 15, attach_type: "cgroup_inet_egress",  attach_flags: "multi" },
+      { id: 16, attach_type: "cgroup_device",       attach_flags: "multi" },
+    ],
+  },
+  {
+    cgroup: "/sys/fs/cgroup/system.slice/nginx.service",
+    programs: [
+      { id: 14, attach_type: "cgroup_inet_ingress", attach_flags: "multi" },
+      { id: 15, attach_type: "cgroup_inet_egress",  attach_flags: "multi" },
+      { id: 17, attach_type: "cgroup_sock_create",  attach_flags: "" },
+    ],
+  },
+  {
+    cgroup: "/sys/fs/cgroup/system.slice/kubelet.service",
+    programs: [
+      { id: 14, attach_type: "cgroup_inet_ingress", attach_flags: "multi" },
+      { id: 15, attach_type: "cgroup_inet_egress",  attach_flags: "multi" },
+      { id: 16, attach_type: "cgroup_device",       attach_flags: "multi" },
+      { id: 17, attach_type: "cgroup_sock_create",  attach_flags: "" },
+      { id: 18, attach_type: "cgroup_sockops",      attach_flags: "multi" },
+    ],
+  },
+
+  // ── Level 2: user slices ───────────────────────────────────────────────────
+  {
+    cgroup: "/sys/fs/cgroup/user.slice/user-0.slice",
+    programs: [
       { id: 16, attach_type: "cgroup_device", attach_flags: "multi" },
+    ],
+  },
+  {
+    cgroup: "/sys/fs/cgroup/user.slice/user-1000.slice",
+    programs: [],
+  },
+
+  // ── Level 2: machine/VM slice ──────────────────────────────────────────────
+  {
+    cgroup: "/sys/fs/cgroup/machine.slice/libvirt-qemu.service",
+    programs: [
+      { id: 14, attach_type: "cgroup_inet_ingress", attach_flags: "multi" },
+      { id: 15, attach_type: "cgroup_inet_egress",  attach_flags: "multi" },
+      { id: 16, attach_type: "cgroup_device",       attach_flags: "multi" },
+    ],
+  },
+
+  // ── Level 3: user sessions ─────────────────────────────────────────────────
+  {
+    cgroup: "/sys/fs/cgroup/user.slice/user-1000.slice/session-1.scope",
+    programs: [
+      { id: 14, attach_type: "cgroup_inet_ingress", attach_flags: "multi" },
+      { id: 15, attach_type: "cgroup_inet_egress",  attach_flags: "multi" },
+    ],
+  },
+  {
+    cgroup: "/sys/fs/cgroup/user.slice/user-1000.slice/session-2.scope",
+    programs: [
+      { id: 14, attach_type: "cgroup_inet_ingress", attach_flags: "multi" },
+      { id: 15, attach_type: "cgroup_inet_egress",  attach_flags: "multi" },
+    ],
+  },
+  {
+    cgroup: "/sys/fs/cgroup/user.slice/user-1000.slice/user@1000.service",
+    programs: [
+      { id: 17, attach_type: "cgroup_sock_create", attach_flags: "" },
+    ],
+  },
+  {
+    cgroup: "/sys/fs/cgroup/user.slice/user-0.slice/session-root.scope",
+    programs: [
+      { id: 14, attach_type: "cgroup_inet_ingress", attach_flags: "multi" },
+      { id: 15, attach_type: "cgroup_inet_egress",  attach_flags: "multi" },
+      { id: 16, attach_type: "cgroup_device",       attach_flags: "multi" },
+    ],
+  },
+
+  // ── Level 3: Docker container cgroups ─────────────────────────────────────
+  {
+    cgroup: "/sys/fs/cgroup/system.slice/docker.service/docker-abc123def456.scope",
+    programs: [
+      { id: 14, attach_type: "cgroup_inet_ingress", attach_flags: "multi" },
+      { id: 15, attach_type: "cgroup_inet_egress",  attach_flags: "multi" },
+      { id: 16, attach_type: "cgroup_device",       attach_flags: "multi" },
+      { id: 18, attach_type: "cgroup_sockops",      attach_flags: "multi" },
+    ],
+  },
+  {
+    cgroup: "/sys/fs/cgroup/system.slice/docker.service/docker-fedcba654321.scope",
+    programs: [
+      { id: 14, attach_type: "cgroup_inet_ingress", attach_flags: "multi" },
+      { id: 15, attach_type: "cgroup_inet_egress",  attach_flags: "multi" },
+      { id: 16, attach_type: "cgroup_device",       attach_flags: "multi" },
+    ],
+  },
+
+  // ── Level 3: Kubernetes pod cgroups (under kubelet) ────────────────────────
+  {
+    cgroup: "/sys/fs/cgroup/system.slice/kubelet.service/kubepods-burstable.slice",
+    programs: [
+      { id: 14, attach_type: "cgroup_inet_ingress", attach_flags: "multi" },
+      { id: 15, attach_type: "cgroup_inet_egress",  attach_flags: "multi" },
+    ],
+  },
+  {
+    cgroup: "/sys/fs/cgroup/system.slice/kubelet.service/kubepods-besteffort.slice",
+    programs: [
+      { id: 14, attach_type: "cgroup_inet_ingress", attach_flags: "multi" },
+      { id: 15, attach_type: "cgroup_inet_egress",  attach_flags: "multi" },
+    ],
+  },
+
+  // ── Level 4: individual Kubernetes pods ───────────────────────────────────
+  {
+    cgroup: "/sys/fs/cgroup/system.slice/kubelet.service/kubepods-burstable.slice/pod-nginx-7d4b9c.scope",
+    programs: [
+      { id: 14, attach_type: "cgroup_inet_ingress", attach_flags: "multi" },
+      { id: 15, attach_type: "cgroup_inet_egress",  attach_flags: "multi" },
+      { id: 16, attach_type: "cgroup_device",       attach_flags: "multi" },
+      { id: 17, attach_type: "cgroup_sock_create",  attach_flags: "" },
+      { id: 18, attach_type: "cgroup_sockops",      attach_flags: "multi" },
+    ],
+  },
+  {
+    cgroup: "/sys/fs/cgroup/system.slice/kubelet.service/kubepods-burstable.slice/pod-redis-2a1f8e.scope",
+    programs: [
+      { id: 14, attach_type: "cgroup_inet_ingress", attach_flags: "multi" },
+      { id: 15, attach_type: "cgroup_inet_egress",  attach_flags: "multi" },
+      { id: 16, attach_type: "cgroup_device",       attach_flags: "multi" },
+    ],
+  },
+  {
+    cgroup: "/sys/fs/cgroup/system.slice/kubelet.service/kubepods-besteffort.slice/pod-logger-9c3d2b.scope",
+    programs: [
+      { id: 14, attach_type: "cgroup_inet_ingress", attach_flags: "multi" },
+      { id: 15, attach_type: "cgroup_inet_egress",  attach_flags: "multi" },
     ],
   },
 ];
