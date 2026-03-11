@@ -9,6 +9,65 @@ Inspector with BPF bytecode and control-flow graphs.
 
 ---
 
+## Option C — Standalone Package (no npm on target)
+
+If your devserver has **only Node.js** (no npm, no Docker, no internet access), use the standalone build script to produce a self-contained tarball on your Mac and copy it over.
+
+### Build on your Mac
+
+```bash
+# From the project root (requires Node.js ≥ 18 + pnpm or npm)
+./build-standalone.sh
+```
+
+This produces `ebpf-viz-standalone.tar.gz` (~4–6 MB). The tarball contains:
+- `public/` — pre-compiled frontend (HTML, JS, CSS)
+- `server.js` — Express server **with all runtime dependencies bundled** (single file, no `node_modules` needed)
+- `start.sh` — launch script that loads `.env` and starts the server
+- `.env.example` — configuration template
+
+### Deploy to the devserver
+
+```bash
+# Copy the tarball
+scp ebpf-viz-standalone.tar.gz user@devserver:/opt/
+
+# On the devserver
+ssh user@devserver
+cd /opt
+tar -xzf ebpf-viz-standalone.tar.gz
+cd standalone
+
+# Configure (all settings are optional — see .env.example for details)
+cp .env.example .env
+vi .env
+
+# Start (requires Node.js ≥ 18 only)
+sudo ./start.sh          # sudo needed for bpftool access
+```
+
+Open `http://devserver:3000` in your browser.
+
+**To run in the background:**
+```bash
+nohup sudo ./start.sh > ebpf-viz.log 2>&1 &
+echo $! > ebpf-viz.pid
+# To stop: sudo kill $(cat ebpf-viz.pid)
+```
+
+**Key `.env` settings for standalone:**
+
+| Variable | Default | Description |
+|---|---|---|
+| `PORT` | `3000` | TCP port to listen on |
+| `BPFTOOL_PATH` | auto-detected | Full path to the `bpftool` binary |
+| `POLL_INTERVAL_MS` | `5000` | Poll interval in milliseconds |
+| `DEMO_MODE` | `false` | Set `true` for synthetic data (no kernel required) |
+
+No database, no OAuth, no API keys required.
+
+---
+
 ## Requirements
 
 | Dependency | Version | Notes |

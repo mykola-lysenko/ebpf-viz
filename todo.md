@@ -193,3 +193,9 @@
 - [x] Option C: hover tooltip shows tag prefix, sibling count, and scrollable list of id + cgroup path
 - [x] Option C: colours assigned deterministically (sorted tag → palette index) for stable rendering
 - [x] 14 new tests: buildTagCount, collectTagSiblings, buildSharedTagMap, buildTagColorMap (205 total, all passing)
+
+## Standalone Deployment Package
+- [x] Standalone build script: bundles all server deps into a single index.js, copies dist/public, produces ebpf-viz-standalone.tar.gz
+- [x] .env.example for standalone install (no Manus OAuth, no DB required)
+- [x] DEPLOY.md with step-by-step instructions for Mac build + devserver deploy
+- [x] Standalone mode: disable OAuth middleware, skip DB init when DATABASE_URL is absent
