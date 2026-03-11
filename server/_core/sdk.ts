@@ -202,7 +202,12 @@ class SDKServer {
     cookieValue: string | undefined | null
   ): Promise<{ openId: string; appId: string; name: string } | null> {
     if (!cookieValue) {
-      console.warn("[Auth] Missing session cookie");
+      // Only log when OAuth is configured — in standalone mode (no OAUTH_SERVER_URL)
+      // every request arrives without a session cookie, so this is expected and not
+      // a warning worth printing on every tRPC call.
+      if (ENV.oAuthServerUrl) {
+        console.warn("[Auth] Missing session cookie");
+      }
       return null;
     }
 

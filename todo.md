@@ -234,3 +234,8 @@
 - [x] Fix: expose maps from SSE stream through EbpfContext; MapsView now reads from context
 - [x] Fix: increase maxBuffer from 1MB to 32MB in runBpftool to prevent silent truncation on large systems
 - [x] Rebuild standalone and verify
+
+## Suppress [Auth] Missing session cookie log in standalone mode
+- [x] Found in sdk.ts verifySession() — fires on every tRPC call when no cookie is present
+- [x] Guard with ENV.oAuthServerUrl check: only log when OAuth is configured
+- [x] Rebuilt standalone and verified guard is present in bundle
