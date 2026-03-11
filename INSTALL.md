@@ -1,4 +1,4 @@
-# eBPF Visualizer — Self-Hosting Guide
+# eBPF Visualizer — Installation Guide
 
 A real-time dashboard for visualizing BPF programs running on a Linux system.
 Polls `bpftool` every 5 seconds and renders kernel attachment zones, network
@@ -14,7 +14,7 @@ Inspector with BPF bytecode and control-flow graphs.
 | Dependency | Version | Notes |
 |---|---|---|
 | Linux kernel | ≥ 5.1 | For `run_time_ns`/`run_cnt` stats; ≥ 4.15 for basic operation |
-| Node.js | ≥ 22 | Use [nvm](https://github.com/nvm-sh/nvm) |
+| Node.js | ≥ 22 | See install instructions below |
 | pnpm | ≥ 10 | `npm install -g pnpm` |
 | bpftool | ≥ 7.x | See build instructions below |
 | sudo | any | The server calls `sudo bpftool`; configure sudoers accordingly |
@@ -52,22 +52,114 @@ Open `http://localhost:3000` in your browser.
 
 ## Option B — Bare-metal / systemd
 
-### 1. Build bpftool from source
+### Step 1 — Install system build dependencies
+
+#### Fedora / RHEL 9+ / CentOS Stream / Rocky / AlmaLinux
 
 ```bash
-sudo apt-get install -y git build-essential libelf-dev zlib1g-dev \
-  libcap-dev libzstd-dev pkg-config binutils-dev
-
-git clone --depth=1 https://github.com/libbpf/bpftool.git
-cd bpftool && git submodule update --init
-cd src && make -j$(nproc)
-sudo cp bpftool /usr/local/sbin/bpftool
-sudo chmod 755 /usr/local/sbin/bpftool
+sudo dnf install -y \
+  git gcc make \
+  elfutils-libelf-devel \
+  zlib-devel \
+  libcap-devel \
+  libzstd-devel \
+  pkgconf-pkg-config \
+  binutils-devel \
+  kernel-devel
 ```
 
-Verify: `sudo bpftool prog list` should list running BPF programs.
+> **Fedora 38+ / RHEL 9+:** a pre-built bpftool package is available.
+> Try `sudo dnf install -y bpftool` first. If `bpftool version` reports ≥ 7.x,
+> skip Step 2. On Fedora the binary lands at `/usr/sbin/bpftool` — set
+> `BPFTOOL_PATH=/usr/sbin/bpftool` in your `.env` accordingly.
 
-### 2. Clone and build the app
+#### Debian / Ubuntu
+
+```bash
+sudo apt-get install -y \
+  git build-essential \
+  libelf-dev \
+  zlib1g-dev \
+  libcap-dev \
+  libzstd-dev \
+  pkg-config \
+  binutils-dev
+```
+
+#### Arch Linux
+
+```bash
+sudo pacman -S --needed \
+  git base-devel \
+  libelf \
+  zlib \
+  libcap \
+  zstd \
+  pkgconf \
+  binutils
+```
+
+---
+
+### Step 2 — Build bpftool from source
+
+> Skip if you installed a pre-built bpftool in Step 1 and `bpftool version` ≥ 7.x.
+
+```bash
+git clone --depth=1 https://github.com/libbpf/bpftool.git
+cd bpftool
+git submodule update --init
+cd src
+make -j$(nproc)
+sudo cp bpftool /usr/local/sbin/bpftool
+sudo chmod 755 /usr/local/sbin/bpftool
+cd ../..
+```
+
+Verify:
+
+```bash
+sudo bpftool prog list
+```
+
+You should see a list of running BPF programs (or an empty list — that is
+normal; the visualizer will show demo data in that case).
+
+---
+
+### Step 3 — Install Node.js ≥ 22
+
+#### Fedora / RHEL 9+
+
+```bash
+sudo dnf install -y nodejs npm
+node --version   # should print v22.x.x or higher
+```
+
+> If your distro ships an older Node.js, use nvm instead (see below).
+
+#### Using nvm (any distro — recommended)
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.1/install.sh | bash
+source ~/.bashrc          # or ~/.zshrc / ~/.profile
+nvm install 22
+nvm use 22
+node --version
+```
+
+---
+
+### Step 4 — Install pnpm
+
+```bash
+npm install -g pnpm
+pnpm --version   # should print 10.x.x or higher
+```
+
+---
+
+### Step 5 — Clone and build the app
 
 ```bash
 git clone https://github.com/YOUR_USERNAME/ebpf-viz.git
@@ -76,30 +168,60 @@ pnpm install
 pnpm build          # produces dist/
 ```
 
-### 3. Configure sudoers
+---
 
-The server process runs as a non-root user but needs to call bpftool as root:
+### Step 6 — Configure sudoers
+
+The server runs as a non-root user but needs to invoke bpftool as root.
+Replace `youruser` with the OS user that will run the Node.js process:
 
 ```bash
 sudo visudo -f /etc/sudoers.d/ebpf-viz
 ```
 
-Add (replace `www-data` with the user that will run the Node.js process):
+Add this line (adjust the path if bpftool is installed elsewhere):
 
 ```
-www-data ALL=(ALL) NOPASSWD: /usr/local/sbin/bpftool
+youruser ALL=(ALL) NOPASSWD: /usr/local/sbin/bpftool
 ```
 
-### 4. Configure the app
+Verify it works:
 
-Copy the sample config and edit as needed:
+```bash
+sudo -u youruser sudo /usr/local/sbin/bpftool prog list
+```
+
+> **Fedora SELinux note:** if you see `Permission denied` even with the
+> sudoers entry, check `sudo ausearch -m avc -ts recent`. You may need:
+> ```bash
+> sudo setenforce 0   # temporary — confirm it fixes the issue first
+> # then create a proper policy module for production
+> ```
+
+---
+
+### Step 7 — Configure the app
+
+Copy the sample config:
 
 ```bash
 cp config.sample .env
-# Edit PORT, BPFTOOL_PATH, DEMO_MODE, POLL_INTERVAL_MS as required
 ```
 
-### 5. Run
+Edit `.env` — only these four variables are needed, all have sensible defaults:
+
+```bash
+PORT=3000                                   # HTTP listen port
+BPFTOOL_PATH=/usr/local/sbin/bpftool        # path to bpftool binary
+DEMO_MODE=false                             # set true to force mock data
+POLL_INTERVAL_MS=5000                       # polling interval (ms)
+```
+
+No database URL, no auth tokens, no API keys.
+
+---
+
+### Step 8 — Run
 
 ```bash
 NODE_ENV=production node dist/index.js
@@ -113,17 +235,21 @@ pnpm start
 
 Open `http://localhost:3000`.
 
-### 6. systemd service (optional)
+---
+
+### Step 9 — systemd service (optional)
+
+Create `/etc/systemd/system/ebpf-viz.service` (replace `youruser` and the
+working directory path):
 
 ```ini
-# /etc/systemd/system/ebpf-viz.service
 [Unit]
 Description=eBPF Visualizer
 After=network.target
 
 [Service]
 Type=simple
-User=www-data
+User=youruser
 WorkingDirectory=/opt/ebpf-viz
 EnvironmentFile=/opt/ebpf-viz/.env
 ExecStart=/usr/bin/node dist/index.js
@@ -140,7 +266,9 @@ sudo systemctl enable --now ebpf-viz
 sudo journalctl -u ebpf-viz -f
 ```
 
-### 7. nginx reverse proxy (optional)
+---
+
+### Step 10 — nginx reverse proxy (optional)
 
 ```nginx
 server {
@@ -158,14 +286,14 @@ server {
 }
 ```
 
-Add TLS: `certbot --nginx -d ebpf.yourdomain.com`
+Add TLS: `sudo certbot --nginx -d ebpf.yourdomain.com`
 
 ---
 
 ## Configuration reference
 
-All settings can be placed in a `.env` file in the project root, or set as
-environment variables before starting the process.
+All settings live in `.env` (or as environment variables before starting the
+process). No database or auth configuration is required.
 
 | Variable | Default | Description |
 |---|---|---|
@@ -178,18 +306,18 @@ environment variables before starting the process.
 
 ## Enabling runtime statistics
 
-To see calls/sec, avg latency, and CPU% per program, enable BPF stats at boot:
+To see calls/sec, avg latency, and CPU% per program, enable BPF stats:
 
 ```bash
 # Immediate (lost on reboot)
 sudo sysctl -w kernel.bpf_stats_enabled=1
 
-# Persistent
+# Persistent across reboots
 echo 'kernel.bpf_stats_enabled=1' | sudo tee /etc/sysctl.d/90-bpf-stats.conf
 sudo sysctl -p /etc/sysctl.d/90-bpf-stats.conf
 ```
 
-The visualizer auto-enables this sysctl at startup if it has permission.
+The visualizer auto-enables this sysctl at startup when it has permission.
 Stats only accumulate **after** the sysctl is set — programs loaded before
 that point will show zero until they are reloaded.
 
@@ -198,18 +326,54 @@ that point will show zero until they are reloaded.
 ## Troubleshooting
 
 **"Demo mode" shows instead of live data**
-The poller fell back to mock data. Check the server log for the reason:
+
+The poller fell back to mock data. Check the server log:
+
 ```bash
 journalctl -u ebpf-viz -n 50
+# or when running directly:
+NODE_ENV=production node dist/index.js 2>&1 | head -30
 ```
-Common causes: bpftool not found, sudo permission denied, kernel too old.
 
-**bpftool permission denied**
-Verify the sudoers entry is correct and the process user matches.
+Common causes: bpftool not found at `BPFTOOL_PATH`, sudo permission denied,
+kernel too old (< 4.15).
+
+**bpftool: Permission denied**
+
+Verify the sudoers entry matches the user running the Node.js process:
+
+```bash
+sudo -u youruser sudo /usr/local/sbin/bpftool prog list
+```
+
+**Fedora: bpftool not found after `dnf install bpftool`**
+
+The package installs to `/usr/sbin/bpftool`. Set this in `.env`:
+
+```bash
+BPFTOOL_PATH=/usr/sbin/bpftool
+```
 
 **No programs visible**
-Your system may have no BPF programs loaded. Load one to test:
+
+Your system may have no BPF programs loaded. Verify directly:
+
 ```bash
-sudo bpftool prog load /sys/kernel/debug/tracing/events/syscalls/sys_enter_openat/filter /sys/fs/bpf/test_prog 2>/dev/null || true
 sudo bpftool prog list
+```
+
+If the list is empty, the visualizer will automatically show demo data.
+Trigger some cgroup programs by restarting a systemd service:
+
+```bash
+sudo systemctl restart systemd-resolved
+sudo bpftool prog list
+```
+
+**Fedora SELinux blocking bpftool**
+
+```bash
+sudo ausearch -m avc -ts recent | grep bpftool
+sudo setenforce 0   # temporary test
+# If that fixes it, build a custom policy module for production
 ```
