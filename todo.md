@@ -445,3 +445,11 @@
 - [x] File named ebpf-topology-<hostname>-<timestamp>.json
 - [x] Optimization analysis written: docs/osmap-performance-analysis.md
 - [x] 265 tests pass, TS clean
+
+## Optimization: OS Map immediate performance fixes
+- [x] Enable onlyRenderVisibleElements={true} on ReactFlow in OsMapCanvas
+- [x] Wrap all 9 node components in React.memo with data+selected comparator
+- [x] Lift LOD out of per-node useViewport() — derive lod once in OsMapCanvas from zoom state
+- [x] Inject lod into each node's data object via displayNodes useMemo (no layout hook changes needed)
+- [x] Remove useLod() / useViewport() from OsMapNodes.tsx entirely
+- [x] 265 tests pass, TS clean

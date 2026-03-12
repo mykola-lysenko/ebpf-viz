@@ -16,7 +16,7 @@ import {
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
 import { useEbpf } from "@/contexts/EbpfContext";
-import { useOsMapLayout } from "@/hooks/useOsMapLayout";
+import { useOsMapLayout, zoomToLod } from "@/hooks/useOsMapLayout";
 import { OS_MAP_NODE_TYPES } from "@/components/osmap/OsMapNodes";
 import type { ZoneNodeData, CgroupNodeData, InterfaceNodeData, ProcessNodeData } from "@/hooks/useOsMapLayout";
 import type { BpfProgram } from "../../../shared/ebpf-types";
@@ -402,18 +402,24 @@ function OsMapCanvas() {
     return nodeIds;
   }, [searchQuery, snapshot]);
 
-  // Apply highlight opacity to nodes
+  // Derive LOD tier from current zoom (changes at only 2 thresholds, not on every tick)
+  const lod = zoomToLod(zoom);
+
+  // Apply highlight opacity to nodes AND inject lod into data so node components
+  // don't need to call useViewport() individually (eliminates per-node re-renders on pan/zoom)
   const displayNodes = useMemo(() => {
-    if (!highlightedNodeIds) return nodes;
     return nodes.map(n => ({
       ...n,
-      style: {
-        ...n.style,
-        opacity: highlightedNodeIds.has(n.id) ? 1 : 0.15,
-        transition: "opacity 0.3s ease",
-      },
+      data: { ...n.data, lod },
+      ...(highlightedNodeIds ? {
+        style: {
+          ...n.style,
+          opacity: highlightedNodeIds.has(n.id) ? 1 : 0.15,
+          transition: "opacity 0.3s ease",
+        },
+      } : {}),
     }));
-  }, [nodes, highlightedNodeIds]);
+  }, [nodes, highlightedNodeIds, lod]);
 
   // Apply highlight opacity to edges
   const displayEdges = useMemo(() => {
@@ -515,6 +521,7 @@ function OsMapCanvas() {
         style={{ background: "oklch(0.075 0.012 240)" }}
         fitView={false}
         defaultViewport={{ x: -100, y: -50, zoom: 0.35 }}
+        onlyRenderVisibleElements={true}
       >
         <Background
           variant={BackgroundVariant.Dots}

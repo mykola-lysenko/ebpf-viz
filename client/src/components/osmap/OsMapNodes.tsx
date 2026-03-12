@@ -1,5 +1,5 @@
 import React, { useState } from "react";
-import { Handle, Position, useViewport } from "@xyflow/react";
+import { Handle, Position } from "@xyflow/react";
 import type {
   ZoneNodeData,
   CgroupNodeData,
@@ -12,17 +12,8 @@ import type {
 import { cn } from "@/lib/utils";
 import type { BpfProgram, NetworkInterface } from "../../../../shared/ebpf-types";
 
-// ─── LOD thresholds ───────────────────────────────────────────────────────────
-// zoom < 0.35 → minimal (count only)
-// zoom < 0.65 → compact (icon + label + count)
-// zoom >= 0.65 → full (all details)
-
-function useLod() {
-  const { zoom } = useViewport();
-  if (zoom < 0.35) return "minimal" as const;
-  if (zoom < 0.65) return "compact" as const;
-  return "full" as const;
-}
+// ─── LOD type (injected via data.lod from OsMapCanvas) ──────────────────────
+type Lod = "minimal" | "compact" | "full";
 
 // ─── Band nodes (background regions) ─────────────────────────────────────────
 
@@ -145,8 +136,8 @@ export function CgroupSectionLabelNode({ data }: { data: SectionLabelData }) {
 
 // ─── Zone node ────────────────────────────────────────────────────────────────
 
-export function ZoneNode({ data, selected }: { data: ZoneNodeData; selected?: boolean }) {
-  const lod = useLod();
+export function ZoneNode({ data, selected }: { data: ZoneNodeData & { lod?: Lod }; selected?: boolean }) {
+  const lod: Lod = data.lod ?? "compact";
   const { color, icon, label, programCount, description, isPacketPath } = data;
   const hasProgs = programCount > 0;
 
@@ -262,8 +253,8 @@ export function ZoneNode({ data, selected }: { data: ZoneNodeData; selected?: bo
 
 // ─── Cgroup node ──────────────────────────────────────────────────────────────
 
-export function CgroupNode({ data, selected }: { data: CgroupNodeData; selected?: boolean }) {
-  const lod = useLod();
+export function CgroupNode({ data, selected }: { data: CgroupNodeData & { lod?: Lod }; selected?: boolean }) {
+  const lod: Lod = data.lod ?? "compact";
   const { color, name, path, programs, depth } = data;
   const hasProgs = programs.length > 0;
 
@@ -678,8 +669,8 @@ function NicHardwareBase({ name, color }: { name: string; color: string }) {
   );
 }
 
-export function InterfaceNode({ data, selected }: { data: InterfaceNodeData; selected?: boolean }) {
-  const lod = useLod();
+export function InterfaceNode({ data, selected }: { data: InterfaceNodeData & { lod?: Lod }; selected?: boolean }) {
+  const lod: Lod = data.lod ?? "compact";
   const { name, kind, layers, allPrograms } = data;
   const hasProgs = allPrograms.length > 0;
   const isSockmap = kind === "sockmap";
@@ -872,9 +863,9 @@ export function InterfaceNode({ data, selected }: { data: InterfaceNodeData; sel
 
 // ─── Process node ─────────────────────────────────────────────────────────────
 
-export function ProcessNode({ data, selected }: { data: ProcessNodeData; selected?: boolean }) {
+export function ProcessNode({ data, selected }: { data: ProcessNodeData & { lod?: Lod }; selected?: boolean }) {
   const color = "#f59e0b";
-  const lod = useLod();
+  const lod: Lod = data.lod ?? "compact";
 
   return (
     <div
@@ -939,8 +930,8 @@ export type MapNodeData = {
   pinned: boolean;
 };
 
-export function MapNode({ data, selected }: { data: MapNodeData; selected?: boolean }) {
-  const lod = useLod();
+export function MapNode({ data, selected }: { data: MapNodeData & { lod?: Lod }; selected?: boolean }) {
+  const lod: Lod = data.lod ?? "compact";
   const { color, name, rawType, isShared, frozen, pinned, bytesKey, bytesValue, maxEntries } = data;
 
   const formatEntries = (n: number) => {
@@ -1054,17 +1045,38 @@ export function MapNode({ data, selected }: { data: MapNodeData; selected?: bool
   );
 }
 
+// ─── Memoized node wrappers ───────────────────────────────────────────────────
+// React.memo prevents re-renders when data/selected haven't changed.
+// This is critical for large topologies where setNodes() is called frequently.
+
+const dataEq = (a: unknown, b: unknown) => a === b;
+const nodeEq = <P extends { data: unknown; selected?: boolean }>(
+  prev: P,
+  next: P
+) => prev.selected === next.selected && dataEq(prev.data, next.data);
+
+const MemoUserspaceBandNode = React.memo(UserspaceBandNode, nodeEq);
+const MemoKernelBandNode = React.memo(KernelBandNode, nodeEq);
+const MemoNetworkBandNode = React.memo(NetworkBandNode, nodeEq);
+const MemoZoneSectionLabelNode = React.memo(ZoneSectionLabelNode, nodeEq);
+const MemoCgroupSectionLabelNode = React.memo(CgroupSectionLabelNode, nodeEq);
+const MemoZoneNode = React.memo(ZoneNode, nodeEq);
+const MemoCgroupNode = React.memo(CgroupNode, nodeEq);
+const MemoInterfaceNode = React.memo(InterfaceNode, nodeEq);
+const MemoProcessNode = React.memo(ProcessNode, nodeEq);
+const MemoMapNode = React.memo(MapNode, nodeEq);
+
 // ─── Node type map (export for ReactFlow) ─────────────────────────────────────
 
 export const OS_MAP_NODE_TYPES = {
-  userspaceBand: UserspaceBandNode,
-  kernelBand: KernelBandNode,
-  networkBand: NetworkBandNode,
-  zoneSectionLabel: ZoneSectionLabelNode,
-  cgroupSectionLabel: CgroupSectionLabelNode,
-  zoneNode: ZoneNode,
-  cgroupNode: CgroupNode,
-  interfaceNode: InterfaceNode,
-  processNode: ProcessNode,
-  mapNode: MapNode,
+  userspaceBand: MemoUserspaceBandNode,
+  kernelBand: MemoKernelBandNode,
+  networkBand: MemoNetworkBandNode,
+  zoneSectionLabel: MemoZoneSectionLabelNode,
+  cgroupSectionLabel: MemoCgroupSectionLabelNode,
+  zoneNode: MemoZoneNode,
+  cgroupNode: MemoCgroupNode,
+  interfaceNode: MemoInterfaceNode,
+  processNode: MemoProcessNode,
+  mapNode: MemoMapNode,
 } as const;
