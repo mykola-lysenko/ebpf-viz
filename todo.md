@@ -262,3 +262,18 @@
 - [x] Add ./start.sh --demo flag for DEMO_MODE=1
 - [x] Add --no-warnings flag to suppress Node 16 ESM warnings
 - [x] Rebuild standalone package with all fixes and deliver to user
+
+## Bug: progDump still truncated on Node 16 (regression)
+- [x] Root cause: DEMO_MODE env var was never read by startPoller() — poller ran in live mode even when DEMO_MODE=1 was set
+- [x] In live mode, mock program IDs (1-25) don't exist in the kernel → progDump returned null → frontend got 35-byte null response
+- [x] Fix 1: resolveDefaultConfig() reads DEMO_MODE env var at module load time
+- [x] Fix 2: startPoller() skips bpftool check when already in demo mode
+- [x] Fix 3: progDump procedure returns buildMockProgDump() for demo mode programs
+- [x] Verified: 7/7 tests pass, all mock programs return valid xlated + CFG DOT
+
+## Bug: Maps view empty in demo and live modes (regression)
+- [x] Root cause: same DEMO_MODE env var not read — poller ran in live mode, real programs have no map_ids
+- [x] Fix: resolveDefaultConfig() reads DEMO_MODE env var at module load time
+- [x] In live mode: bpftool map list returns 0 maps on this kernel (cgroup programs have no maps) — correct behavior
+- [x] In demo mode: buildMockMaps() now called correctly, returns 11 maps
+- [x] Verified: maps count = 11 in demo mode, SSE stream emits non-empty maps events

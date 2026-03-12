@@ -13,6 +13,7 @@ import {
   getBpftoolPath,
 } from "./ebpf-poller";
 import { fetchProgDump } from "./ebpf-dump";
+import { buildMockProgDump } from "./ebpf-mock-dump";
 import { dumpMapEntries } from "./ebpf-map-dump";
 
 export const appRouter = router({
@@ -115,6 +116,10 @@ export const appRouter = router({
         const snap = getLatestSnapshot();
         const prog = snap?.programs.find(p => p.id === input.id);
         if (!prog) return null;
+        // In demo mode, use mock dump — real bpftool IDs don't exist in the kernel
+        if (snap?.demoMode) {
+          return buildMockProgDump(input.id, prog.rawType, !!prog.btfId, prog.jited);
+        }
         try {
           const dump = await fetchProgDump(input.id, !!prog.btfId, prog.jited);
           if (prog.btfId) dump.btfId = prog.btfId;

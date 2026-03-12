@@ -17,12 +17,20 @@ const execAsync = promisify(exec);
 
 // ─── Config ────────────────────────────────────────────────────────────────
 
-const DEFAULT_CONFIG: PollingConfig = {
-  intervalMs: 5000,
-  demoMode: false,
-  bpftoolPath: "/usr/local/bin/bpftool",
-  sudo: true,
-};
+// ─── Env-var defaults ─────────────────────────────────────────────────────
+// Read environment variables at module load time so they are available
+// before startPoller() is called. These are the same variables documented
+// in .env.example and start.sh.
+function resolveDefaultConfig(): PollingConfig {
+  const demoMode = process.env.DEMO_MODE === "1" || process.env.DEMO_MODE === "true";
+  const bpftoolPath = process.env.BPFTOOL_PATH || "/usr/local/bin/bpftool";
+  const intervalMs = process.env.POLL_INTERVAL_MS
+    ? parseInt(process.env.POLL_INTERVAL_MS, 10)
+    : 5000;
+  return { intervalMs, demoMode, bpftoolPath, sudo: true };
+}
+
+const DEFAULT_CONFIG: PollingConfig = resolveDefaultConfig();
 
 // ─── State ─────────────────────────────────────────────────────────────────
 
@@ -216,15 +224,21 @@ async function poll(): Promise<void> {
 export async function startPoller(): Promise<void> {
   await getSystemInfo();
 
-  // Check if bpftool is actually available
-  try {
-    await runBpftool("version");
-    // Only try to enable stats when we have a real bpftool
-    await ensureBpfStatsEnabled();
-  } catch {
-    console.warn("[ebpf-poller] bpftool not accessible, enabling demo mode");
-    config.demoMode = true;
-    statsEnabled = true; // demo mode always has stats
+  // Log if demo mode was requested via env var
+  if (config.demoMode) {
+    console.log("[ebpf-poller] Demo mode enabled via DEMO_MODE env var — using synthetic data");
+    statsEnabled = true;
+  } else {
+    // Check if bpftool is actually available
+    try {
+      await runBpftool("version");
+      // Only try to enable stats when we have a real bpftool
+      await ensureBpfStatsEnabled();
+    } catch {
+      console.warn("[ebpf-poller] bpftool not accessible, enabling demo mode");
+      config.demoMode = true;
+      statsEnabled = true; // demo mode always has stats
+    }
   }
 
   await poll(); // immediate first poll
