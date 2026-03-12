@@ -566,6 +566,8 @@ export default function MapsView() {
           mapName={dumpMap.name}
           mapType={dumpMap.rawType}
           mapColor={meta.color}
+          keyBytes={dumpMap.bytesKey}
+          valueBytes={dumpMap.bytesValue}
           onClose={() => setDumpMap(null)}
         />
       )}

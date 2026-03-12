@@ -55,6 +55,10 @@ interface MapEntriesModalProps {
   mapName: string;
   mapType: string;
   mapColor: string;
+  /** Byte length of the key field — used to filter interpretation options */
+  keyBytes?: number;
+  /** Byte length of the value field — used to filter interpretation options */
+  valueBytes?: number;
   onClose: () => void;
 }
 
@@ -394,35 +398,53 @@ function CopyButton({ text }: { text: string }) {
 
 // ─── Interpret toggle ──────────────────────────────────────────────────────────
 
-const INTERPRET_OPTIONS: { value: InterpretMode; label: string; title: string }[] = [
-  { value: "raw",      label: "Raw",      title: "Show raw bytes as-is" },
-  { value: "ipv4",     label: "IPv4",     title: "Interpret bytes as IPv4 address (4 bytes, network order)" },
-  { value: "ipv6",     label: "IPv6",     title: "Interpret bytes as IPv6 address (16 bytes, network order)" },
-  { value: "mac",      label: "MAC",      title: "Interpret bytes as MAC/hardware address (6 bytes, aa:bb:cc:dd:ee:ff)" },
-  { value: "port",     label: "Port",     title: "Interpret bytes as TCP/UDP port number (2 bytes, big-endian)" },
-  { value: "u32le",    label: "U32 LE",   title: "Interpret 4 bytes as unsigned 32-bit integer (little-endian) — array index, CPU ID" },
-  { value: "u32be",    label: "U32 BE",   title: "Interpret 4 bytes as unsigned 32-bit integer (big-endian)" },
-  { value: "u64le",    label: "U64 LE",   title: "Interpret 8 bytes as unsigned 64-bit integer (little-endian) — counters, timestamps, cgroup inode IDs" },
-  { value: "cgroupid", label: "Cgroup",   title: "Interpret 8 or 12 bytes as cgroup storage key (inode ID + attach type)" },
-  { value: "proto",    label: "Proto",    title: "Interpret 1 byte as IP protocol number (6=TCP, 17=UDP, 1=ICMP, …)" },
+const INTERPRET_OPTIONS: { value: InterpretMode; label: string; title: string; requiredBytes: number | number[] | null }[] = [
+  { value: "raw",      label: "Raw",      title: "Show raw bytes as-is",                                                                          requiredBytes: null },
+  { value: "ipv4",     label: "IPv4",     title: "Interpret bytes as IPv4 address (4 bytes, network order)",                                     requiredBytes: 4 },
+  { value: "ipv6",     label: "IPv6",     title: "Interpret bytes as IPv6 address (16 bytes, network order)",                                    requiredBytes: 16 },
+  { value: "mac",      label: "MAC",      title: "Interpret bytes as MAC/hardware address (6 bytes, aa:bb:cc:dd:ee:ff)",                         requiredBytes: 6 },
+  { value: "port",     label: "Port",     title: "Interpret bytes as TCP/UDP port number (2 bytes, big-endian)",                                 requiredBytes: 2 },
+  { value: "u32le",    label: "U32 LE",   title: "Interpret 4 bytes as unsigned 32-bit integer (little-endian) — array index, CPU ID",           requiredBytes: 4 },
+  { value: "u32be",    label: "U32 BE",   title: "Interpret 4 bytes as unsigned 32-bit integer (big-endian)",                                   requiredBytes: 4 },
+  { value: "u64le",    label: "U64 LE",   title: "Interpret 8 bytes as unsigned 64-bit integer (little-endian) — counters, timestamps",          requiredBytes: 8 },
+  { value: "cgroupid", label: "Cgroup",   title: "Interpret 8 or 12 bytes as cgroup storage key (inode ID + attach type)",                      requiredBytes: [8, 12] },
+  { value: "proto",    label: "Proto",    title: "Interpret 1 byte as IP protocol number (6=TCP, 17=UDP, 1=ICMP, …)",                           requiredBytes: 1 },
 ];
+
+/**
+ * Return the subset of INTERPRET_OPTIONS compatible with a given byte length.
+ * "raw" is always included. If byteLen is undefined/0, all options are returned.
+ */
+function compatibleOptions(byteLen: number | undefined) {
+  if (!byteLen) return INTERPRET_OPTIONS;
+  return INTERPRET_OPTIONS.filter(opt => {
+    if (opt.requiredBytes === null) return true;
+    if (Array.isArray(opt.requiredBytes)) return opt.requiredBytes.includes(byteLen);
+    return opt.requiredBytes === byteLen;
+  });
+}
 
 function InterpretToggle({
   label,
   value,
   onChange,
   container,
+  byteLen,
 }: {
   label: string;
   value: InterpretMode;
   onChange: (v: InterpretMode) => void;
   container?: HTMLElement | null;
+  byteLen?: number;
 }) {
-  const selected = INTERPRET_OPTIONS.find(o => o.value === value);
+  const options = compatibleOptions(byteLen);
+  const selected = options.find(o => o.value === value) ?? options[0];
+  // If the current value is no longer in the compatible set, reset to raw
+  const effectiveValue = options.some(o => o.value === value) ? value : "raw";
   return (
     <div className="flex items-center gap-2">
       <span className="text-[10px] text-white/30 uppercase tracking-wider font-medium whitespace-nowrap">{label}</span>
-      <Select value={value} onValueChange={(v) => onChange(v as InterpretMode)}>
+      <Select value={effectiveValue} onValueChange={(v) => onChange(v as InterpretMode)}>
         <SelectTrigger
           className="h-7 min-w-[110px] max-w-[140px] bg-black/30 border-white/10 text-xs font-mono text-white/70 hover:border-white/25 focus:ring-0 focus:ring-offset-0"
           title={selected?.title}
@@ -433,7 +455,7 @@ function InterpretToggle({
           className="bg-[#0f1117] border-white/10 text-white z-[300]"
           container={container ?? undefined}
         >
-          {INTERPRET_OPTIONS.map(opt => (
+          {options.map(opt => (
             <SelectItem
               key={opt.value}
               value={opt.value}
@@ -581,16 +603,24 @@ export function MapEntriesModal({
   mapName,
   mapType,
   mapColor,
+  keyBytes,
+  valueBytes,
   onClose,
 }: MapEntriesModalProps) {
   const [mode, setMode] = useState<DisplayMode>("hex");
   const [keyInterpret, setKeyInterpret] = useState<InterpretMode>(() => {
     const saved = loadInterpretPrefs(mapType);
-    return saved ? saved.key : defaultKeyInterpret(mapType);
+    const preferred = saved ? saved.key : defaultKeyInterpret(mapType);
+    // Fall back to raw if the saved/default preference is incompatible with actual key size
+    const compat = compatibleOptions(keyBytes);
+    return compat.some(o => o.value === preferred) ? preferred : "raw";
   });
   const [valInterpret, setValInterpret] = useState<InterpretMode>(() => {
     const saved = loadInterpretPrefs(mapType);
-    return saved ? saved.val : "raw";
+    const preferred = saved ? saved.val : "raw";
+    // Fall back to raw if the saved preference is incompatible with actual value size
+    const compat = compatibleOptions(valueBytes);
+    return compat.some(o => o.value === preferred) ? preferred : "raw";
   });
   const [page, setPage] = useState(0);
 
@@ -733,8 +763,8 @@ export function MapEntriesModal({
           {/* Row 2: interpret toggles (only shown in hex mode) */}
           {!interpretDisabled && (
             <div className="flex items-center gap-6 flex-wrap">
-              <InterpretToggle label="Key as" value={keyInterpret} onChange={handleKeyInterpretChange} container={containerRef.current} />
-               <InterpretToggle label="Value as" value={valInterpret} onChange={handleValInterpretChange} container={containerRef.current} />
+              <InterpretToggle label="Key as" value={keyInterpret} onChange={handleKeyInterpretChange} container={containerRef.current} byteLen={keyBytes} />
+               <InterpretToggle label="Value as" value={valInterpret} onChange={handleValInterpretChange} container={containerRef.current} byteLen={valueBytes} />
             </div>
           )}
         </div>

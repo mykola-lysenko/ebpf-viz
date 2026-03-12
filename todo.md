@@ -351,3 +351,12 @@
 - [x] Root cause: Radix UI SelectContent uses Portal to render into document.body; in preview iframe the portal content was intercepted by the preview overlay before pointer events reached the dropdown
 - [x] Fix: added container prop to shadcn SelectContent (forwarded to SelectPrimitive.Portal); modal passes containerRef.current so dropdown renders inside the modal DOM node instead of document.body
 - [x] Verified in browser: dropdown opens correctly showing all 10 options in both dev server and preview mode
+
+## Feature: Filter interpretation dropdown by byte length compatibility
+- [x] Added requiredBytes: number | number[] | null to each INTERPRET_OPTIONS entry
+- [x] Added compatibleOptions(byteLen) helper — returns only options whose requiredBytes matches, always includes raw
+- [x] Added keyBytes/valueBytes props to MapEntriesModalProps; MapsView passes dumpMap.bytesKey/bytesValue
+- [x] InterpretToggle accepts byteLen prop and renders only compatible options
+- [x] State initialization falls back to raw if saved/default preference is incompatible with actual size
+- [x] effectiveValue guard in InterpretToggle resets to raw if current value becomes incompatible
+- [x] 242 tests pass, TS clean
