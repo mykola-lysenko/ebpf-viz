@@ -306,6 +306,44 @@ function defaultKeyInterpret(mapType: string): InterpretMode {
   return "raw";
 }
 
+// ── localStorage persistence for per-map-type interpretation prefs ─────────────────────────────────
+
+const VALID_MODES = new Set<string>([
+  "raw", "ipv4", "ipv6", "mac", "port",
+  "u32le", "u32be", "u64le", "cgroupid", "proto",
+]);
+
+function storageKey(mapType: string): string {
+  return `ebpf-viz:interp:${mapType.toLowerCase()}`;
+}
+
+interface InterpretPrefs {
+  key: InterpretMode;
+  val: InterpretMode;
+}
+
+function loadInterpretPrefs(mapType: string): InterpretPrefs | null {
+  try {
+    const raw = localStorage.getItem(storageKey(mapType));
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as { key?: string; val?: string };
+    const key = VALID_MODES.has(parsed.key ?? "") ? (parsed.key as InterpretMode) : null;
+    const val = VALID_MODES.has(parsed.val ?? "") ? (parsed.val as InterpretMode) : null;
+    if (!key || !val) return null;
+    return { key, val };
+  } catch {
+    return null;
+  }
+}
+
+function saveInterpretPrefs(mapType: string, key: InterpretMode, val: InterpretMode): void {
+  try {
+    localStorage.setItem(storageKey(mapType), JSON.stringify({ key, val }));
+  } catch {
+    // localStorage may be unavailable in private browsing — silently ignore
+  }
+}
+
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
 const PAGE_SIZE = 50;
@@ -531,9 +569,25 @@ export function MapEntriesModal({
   onClose,
 }: MapEntriesModalProps) {
   const [mode, setMode] = useState<DisplayMode>("hex");
-  const [keyInterpret, setKeyInterpret] = useState<InterpretMode>(() => defaultKeyInterpret(mapType));
-  const [valInterpret, setValInterpret] = useState<InterpretMode>("raw");
+  const [keyInterpret, setKeyInterpret] = useState<InterpretMode>(() => {
+    const saved = loadInterpretPrefs(mapType);
+    return saved ? saved.key : defaultKeyInterpret(mapType);
+  });
+  const [valInterpret, setValInterpret] = useState<InterpretMode>(() => {
+    const saved = loadInterpretPrefs(mapType);
+    return saved ? saved.val : "raw";
+  });
   const [page, setPage] = useState(0);
+
+  // Persist interpretation preferences whenever they change
+  const handleKeyInterpretChange = (v: InterpretMode) => {
+    setKeyInterpret(v);
+    saveInterpretPrefs(mapType, v, valInterpret);
+  };
+  const handleValInterpretChange = (v: InterpretMode) => {
+    setValInterpret(v);
+    saveInterpretPrefs(mapType, keyInterpret, v);
+  };
 
   const { data, isLoading, isError, refetch, isFetching } =
     trpc.ebpf.mapDump.useQuery({ id: mapId }, { staleTime: 10_000 });
@@ -652,8 +706,8 @@ export function MapEntriesModal({
           {/* Row 2: interpret toggles (only shown in hex mode) */}
           {!interpretDisabled && (
             <div className="flex items-center gap-4">
-              <InterpretToggle label="Key as" value={keyInterpret} onChange={setKeyInterpret} />
-              <InterpretToggle label="Value as" value={valInterpret} onChange={setValInterpret} />
+              <InterpretToggle label="Key as" value={keyInterpret} onChange={handleKeyInterpretChange} />
+              <InterpretToggle label="Value as" value={valInterpret} onChange={handleValInterpretChange} />
             </div>
           )}
         </div>

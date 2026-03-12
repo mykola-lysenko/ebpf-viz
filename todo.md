@@ -316,3 +316,11 @@
 - [x] Extend InterpretMode (9 options total) and INTERPRET_OPTIONS with all five
 - [x] Auto-detect best default: array/percpu_array → key=U32 LE; cgroup_storage/percpu_cgroup_storage/cgrp_storage → key=Cgroup
 - [x] 13 new unit tests — all 242 tests pass
+
+## Feature: Remember last-used interpretation per map type (localStorage)
+- [x] Add loadInterpretPrefs(mapType) / saveInterpretPrefs(mapType, key, val) helpers with validation against VALID_MODES set
+- [x] Initialize keyInterpret and valInterpret from saved prefs, falling back to auto-detect defaults
+- [x] Save prefs on every change via handleKeyInterpretChange / handleValInterpretChange wrappers
+- [x] Storage key format: "ebpf-viz:interp:<mapType>" → {key, val}
+- [x] Silently ignores localStorage errors (private browsing, quota exceeded)
+- [x] 242 tests pass, TS clean
