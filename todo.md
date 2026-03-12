@@ -438,3 +438,10 @@
 - [x] Unsupported map types show "—" instead of a count
 - [x] While counts are loading, falls back to static maxEntries in muted white
 - [x] 265 tests pass, TS clean
+
+## Feature: OS Map topology JSON download
+- [x] Add "Download Topology JSON" button in OsMapView toolbar (Download icon, next to Labels toggle)
+- [x] Download includes full snapshot + computed layout (nodes/edges positions) as JSON
+- [x] File named ebpf-topology-<hostname>-<timestamp>.json
+- [x] Optimization analysis written: docs/osmap-performance-analysis.md
+- [x] 265 tests pass, TS clean

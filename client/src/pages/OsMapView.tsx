@@ -25,7 +25,7 @@ import { Badge } from "@/components/ui/badge";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import {
   Maximize2, ZoomIn, ZoomOut, Layers, Map as MapIcon,
-  Eye, EyeOff, Info, Cpu
+  Eye, EyeOff, Info, Cpu, Download
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { trpc } from "@/lib/trpc";
@@ -76,12 +76,14 @@ function MapToolbar({
   onToggleLabels,
   nodeCount,
   progCount,
+  onDownload,
 }: {
   zoom: number;
   showLabels: boolean;
   onToggleLabels: () => void;
   nodeCount: number;
   progCount: number;
+  onDownload: () => void;
 }) {
   const { fitView, zoomIn, zoomOut } = useReactFlow();
 
@@ -186,6 +188,26 @@ function MapToolbar({
           </button>
         </TooltipTrigger>
         <TooltipContent>{showLabels ? "Hide labels" : "Show labels"}</TooltipContent>
+      </Tooltip>
+
+      <div style={{ width: 1, height: 16, background: "oklch(0.25 0.01 240)" }} />
+
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <button
+            onClick={onDownload}
+            style={{
+              width: 28, height: 28, borderRadius: 6,
+              background: "oklch(0.16 0.015 240)",
+              border: "1px solid oklch(0.25 0.015 240)",
+              display: "flex", alignItems: "center", justifyContent: "center",
+              cursor: "pointer", color: "oklch(0.7 0.01 240)",
+            }}
+          >
+            <Download size={13} />
+          </button>
+        </TooltipTrigger>
+        <TooltipContent>Download topology JSON</TooltipContent>
       </Tooltip>
     </div>
   );
@@ -441,6 +463,34 @@ function OsMapCanvas() {
 
   const progCount = snapshot?.stats.total ?? 0;
 
+  // Download the full topology snapshot as JSON for performance testing
+  const handleDownload = useCallback(() => {
+    if (!snapshot) return;
+    const payload = {
+      exportedAt: new Date().toISOString(),
+      hostname: snapshot.hostname ?? "unknown",
+      kernelVersion: snapshot.kernelVersion ?? "unknown",
+      snapshot,
+      layout: {
+        nodeCount: nodes.length,
+        edgeCount: edges.length,
+        nodes: nodes.map(n => ({ id: n.id, type: n.type, position: n.position, width: n.width, height: n.height })),
+        edges: edges.map(e => ({ id: e.id, source: e.source, target: e.target, type: e.type })),
+      },
+    };
+    const json = JSON.stringify(payload, null, 2);
+    const blob = new Blob([json], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    const ts = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
+    a.href = url;
+    a.download = `ebpf-topology-${snapshot.hostname ?? "host"}-${ts}.json`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  }, [snapshot, nodes, edges]);
+
   return (
     <div style={{ width: "100%", height: "100%", position: "relative" }}>
       <style>{FLOW_STYLES}</style>
@@ -501,6 +551,7 @@ function OsMapCanvas() {
             onToggleLabels={() => setShowLabels(l => !l)}
             nodeCount={nodes.filter(n => !n.type?.includes("Band") && !n.type?.includes("Label")).length}
             progCount={progCount}
+            onDownload={handleDownload}
           />
         </Panel>
 
