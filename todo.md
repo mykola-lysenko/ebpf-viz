@@ -399,3 +399,10 @@
 - [x] Search bar visible in all modes (hex, decimal, BTF) for consistency
 - [x] Keyboard shortcut: Escape clears the filter
 - [x] 254 tests pass, TS clean
+
+## Bug: bpftool not found at /usr/local/bin/bpftool
+- [x] Add resolveBpftoolPath() helper: checks BPFTOOL_PATH env, then `which bpftool`, then common paths
+- [x] Use resolveBpftoolPath() in ebpf-poller.ts resolveDefaultConfig()
+- [x] Use resolveBpftoolPath() in ebpf-dump.ts BPFTOOL constant
+- [x] Improve error message in ebpf-map-dump.ts to suggest setting BPFTOOL_PATH env var
+- [x] 254 tests pass, TS clean

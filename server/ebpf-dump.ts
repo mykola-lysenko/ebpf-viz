@@ -10,10 +10,11 @@
 import { execFile } from "child_process";
 import { promisify } from "util";
 import type { ProgDump, XlatedInsn, JitedInsn } from "../shared/ebpf-types";
+import { resolveBpftoolPath } from "./ebpf-poller";
 
 const execFileAsync = promisify(execFile);
 
-const BPFTOOL = process.env.BPFTOOL_PATH ?? "/usr/local/bin/bpftool";
+const BPFTOOL = resolveBpftoolPath();
 const SUDO = process.env.BPFTOOL_SUDO !== "false";
 
 async function run(args: string[]): Promise<{ stdout: string; stderr: string }> {

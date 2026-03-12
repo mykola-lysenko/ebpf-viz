@@ -227,7 +227,7 @@ export async function dumpMapEntries(
       return {
         ...base,
         entries: [],
-        error: `bpftool not found at ${bpftoolPath}`,
+        error: `bpftool not found at ${bpftoolPath}. Install bpftool or set the BPFTOOL_PATH environment variable to its location (e.g. BPFTOOL_PATH=/usr/sbin/bpftool).`,
       };
     }
     // Empty hash map returns exit code 255 with "[]" on stdout — handle gracefully

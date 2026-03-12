@@ -1,4 +1,4 @@
-import { exec } from "child_process";
+import { exec, execSync } from "child_process";
 import { promisify } from "util";
 import { hostname } from "os";
 import type { BpfMap, EbpfSnapshot, PollingConfig, RawBpfMap, RawBpfProg, RawCgroupEntry, RawNetSnapshot } from "../shared/ebpf-types";
@@ -15,15 +15,44 @@ import {
 
 const execAsync = promisify(exec);
 
-// ─── Config ────────────────────────────────────────────────────────────────
+// ─── Config ──────────────────────────────────────────────────────────────────
 
-// ─── Env-var defaults ─────────────────────────────────────────────────────
+/**
+ * Discover the bpftool binary path at startup.
+ * Priority: BPFTOOL_PATH env var → `which bpftool` → common install locations.
+ * Returns the first path that exists, or the last fallback (so the error
+ * message still shows a useful path rather than "undefined").
+ */
+export function resolveBpftoolPath(): string {
+  if (process.env.BPFTOOL_PATH) return process.env.BPFTOOL_PATH;
+  // Try `which bpftool` (works on any distro with bpftool in PATH)
+  try {
+    const found = execSync("which bpftool 2>/dev/null", { encoding: "utf8" }).trim();
+    if (found) return found;
+  } catch { /* not in PATH */ }
+  // Common install locations across distros
+  const candidates = [
+    "/usr/sbin/bpftool",
+    "/usr/bin/bpftool",
+    "/usr/local/sbin/bpftool",
+    "/usr/local/bin/bpftool",
+    "/sbin/bpftool",
+  ];
+  const { existsSync } = require("fs") as typeof import("fs");
+  for (const p of candidates) {
+    if (existsSync(p)) return p;
+  }
+  // Return the most common path as a fallback so the error message is helpful
+  return "/usr/sbin/bpftool";
+}
+
+// ─── Env-var defaults ──────────────────────────────────────────────────────────────────
 // Read environment variables at module load time so they are available
 // before startPoller() is called. These are the same variables documented
 // in .env.example and start.sh.
 function resolveDefaultConfig(): PollingConfig {
   const demoMode = process.env.DEMO_MODE === "1" || process.env.DEMO_MODE === "true";
-  const bpftoolPath = process.env.BPFTOOL_PATH || "/usr/local/bin/bpftool";
+  const bpftoolPath = resolveBpftoolPath();
   const intervalMs = process.env.POLL_INTERVAL_MS
     ? parseInt(process.env.POLL_INTERVAL_MS, 10)
     : 5000;
