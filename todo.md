@@ -300,3 +300,9 @@
 - [x] Extend InterpretMode to include "mac"
 - [x] Add MAC option to INTERPRET_OPTIONS in MapEntriesModal
 - [x] 6 new unit tests for bytesToMAC — all 224 tests pass
+
+## Feature: Port interpretation in map viewer
+- [x] Add bytesToPort() helper (2 bytes big-endian → decimal, annotates well-known ports with service name)
+- [x] Extend InterpretMode to include "port"
+- [x] Add Port option to INTERPRET_OPTIONS in MapEntriesModal
+- [x] 5 new unit tests for bytesToPort — all 229 tests pass

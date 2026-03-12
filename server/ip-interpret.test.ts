@@ -40,6 +40,20 @@ function bytesToMAC(bytes: Uint8Array): string {
   return Array.from(bytes).map(b => b.toString(16).padStart(2, "0")).join(":");
 }
 
+const WELL_KNOWN_PORTS: Record<number, string> = {
+  20: "ftp-data", 21: "ftp", 22: "ssh", 23: "telnet",
+  25: "smtp", 53: "dns", 80: "http", 443: "https",
+  3306: "mysql", 5432: "postgres", 6379: "redis",
+  8080: "http-alt",
+};
+
+function bytesToPort(bytes: Uint8Array): string {
+  if (bytes.length !== 2) return `(need 2B, got ${bytes.length}B)`;
+  const port = (bytes[0] << 8) | bytes[1];
+  const name = WELL_KNOWN_PORTS[port];
+  return name ? `${port} (${name})` : `${port}`;
+}
+
 function bytesToIPv6(bytes: Uint8Array): string {
   if (bytes.length !== 16) {
     return `(need 16B, got ${bytes.length}B)`;
@@ -107,6 +121,31 @@ describe("bytesToIPv4", () => {
     bytes[0] = 10; bytes[1] = 0; bytes[2] = 0; bytes[3] = 1;
     // Not IPv4-mapped (no 0xff bytes at [10],[11])
     expect(bytesToIPv4(bytes)).toBe("10.0.0.1 (first 4B of 16B)");
+  });
+});
+
+describe("bytesToPort", () => {
+  it("converts 2 big-endian bytes to decimal port", () => {
+    expect(bytesToPort(new Uint8Array([0x00, 0x50]))).toBe("80 (http)");
+    expect(bytesToPort(new Uint8Array([0x01, 0xbb]))).toBe("443 (https)");
+    expect(bytesToPort(new Uint8Array([0x00, 0x16]))).toBe("22 (ssh)");
+  });
+  it("annotates well-known ports with service name", () => {
+    expect(bytesToPort(new Uint8Array([0x00, 0x35]))).toBe("53 (dns)");
+    expect(bytesToPort(new Uint8Array([0x0c, 0xea]))).toBe("3306 (mysql)");
+    expect(bytesToPort(new Uint8Array([0x15, 0x38]))).toBe("5432 (postgres)");
+  });
+  it("returns plain decimal for unknown ports", () => {
+    expect(bytesToPort(new Uint8Array([0x1f, 0x90]))).toBe("8080 (http-alt)");
+    expect(bytesToPort(new Uint8Array([0x27, 0x0f]))).toBe("9999");
+    expect(bytesToPort(new Uint8Array([0x00, 0x00]))).toBe("0");
+  });
+  it("handles max port 65535", () => {
+    expect(bytesToPort(new Uint8Array([0xff, 0xff]))).toBe("65535");
+  });
+  it("returns error for wrong byte count", () => {
+    expect(bytesToPort(new Uint8Array(1))).toBe("(need 2B, got 1B)");
+    expect(bytesToPort(new Uint8Array(4))).toBe("(need 2B, got 4B)");
   });
 });
 

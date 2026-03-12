@@ -31,7 +31,7 @@ import { Button } from "@/components/ui/button";
 // ─── Types ────────────────────────────────────────────────────────────────────
 
 type DisplayMode = "hex" | "decimal" | "btf";
-type InterpretMode = "raw" | "ipv4" | "ipv6" | "mac";
+type InterpretMode = "raw" | "ipv4" | "ipv6" | "mac" | "port";
 
 interface MapEntriesModalProps {
   mapId: number;
@@ -119,6 +119,36 @@ function bytesToIPv6(bytes: Uint8Array): string {
   return `${left}::${right}`;
 }
 
+/** Well-known TCP/UDP port numbers → service name */
+const WELL_KNOWN_PORTS: Record<number, string> = {
+  20: "ftp-data", 21: "ftp", 22: "ssh", 23: "telnet",
+  25: "smtp", 53: "dns", 67: "dhcp", 68: "dhcp",
+  69: "tftp", 80: "http", 110: "pop3", 123: "ntp",
+  143: "imap", 161: "snmp", 179: "bgp", 389: "ldap",
+  443: "https", 465: "smtps", 514: "syslog", 515: "lpd",
+  587: "smtp", 636: "ldaps", 993: "imaps", 995: "pop3s",
+  1194: "openvpn", 1433: "mssql", 1521: "oracle",
+  3306: "mysql", 3389: "rdp", 5432: "postgres",
+  5672: "amqp", 5900: "vnc", 6379: "redis",
+  6443: "k8s-api", 8080: "http-alt", 8443: "https-alt",
+  9200: "elasticsearch", 9300: "elasticsearch",
+  27017: "mongodb",
+};
+
+/**
+ * Convert bytes to a port number string.
+ * Expects exactly 2 bytes in big-endian (network) order.
+ * Annotates well-known ports with their service name.
+ */
+function bytesToPort(bytes: Uint8Array): string {
+  if (bytes.length !== 2) {
+    return `(need 2B, got ${bytes.length}B)`;
+  }
+  const port = (bytes[0] << 8) | bytes[1];
+  const name = WELL_KNOWN_PORTS[port];
+  return name ? `${port} (${name})` : `${port}`;
+}
+
 /**
  * Convert bytes to a MAC address string (aa:bb:cc:dd:ee:ff).
  * Expects exactly 6 bytes. Returns an error string otherwise.
@@ -146,6 +176,7 @@ function interpretHex(hex: string, mode: InterpretMode): string {
   if (mode === "ipv4") return bytesToIPv4(bytes);
   if (mode === "ipv6") return bytesToIPv6(bytes);
   if (mode === "mac") return bytesToMAC(bytes);
+  if (mode === "port") return bytesToPort(bytes);
   return hex;
 }
 
@@ -197,6 +228,7 @@ const INTERPRET_OPTIONS: { value: InterpretMode; label: string; title: string }[
   { value: "ipv4", label: "IPv4", title: "Interpret bytes as IPv4 address (4 bytes, network order)" },
   { value: "ipv6", label: "IPv6", title: "Interpret bytes as IPv6 address (16 bytes, network order)" },
   { value: "mac",  label: "MAC",  title: "Interpret bytes as MAC/hardware address (6 bytes, aa:bb:cc:dd:ee:ff)" },
+  { value: "port", label: "Port", title: "Interpret bytes as TCP/UDP port number (2 bytes, big-endian)" },
 ];
 
 function InterpretToggle({
