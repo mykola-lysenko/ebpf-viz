@@ -11,7 +11,7 @@
  *  - Graceful unsupported / error states
  */
 
-import { useState, useMemo, useRef } from "react";
+import { useState, useMemo, useRef, useCallback, useEffect } from "react";
 import { trpc } from "@/lib/trpc";
 import type { MapEntry } from "../../../shared/ebpf-types";
 import {
@@ -25,6 +25,7 @@ import {
   RefreshCw,
   ChevronDown,
   ChevronUp,
+  Search,
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -418,6 +419,35 @@ function saveInterpretPrefs(mapType: string, key: InterpretMode, val: InterpretM
 
 const PAGE_SIZE = 50;
 
+/**
+ * Compute the final display text for an entry's key or value, applying the
+ * same interpretation logic used by EntryRow. Used for filtering.
+ */
+function entryKeyText(
+  entry: MapEntry,
+  mode: DisplayMode,
+  interpret: InterpretMode,
+  bigEndian: boolean,
+): string {
+  const raw = displayKey(entry, mode);
+  return (mode === "hex" || (!entry.keyBtf && mode !== "decimal"))
+    ? interpretHex(raw, interpret, bigEndian)
+    : raw;
+}
+
+function entryValText(
+  entry: MapEntry,
+  mode: DisplayMode,
+  interpret: InterpretMode,
+  bigEndian: boolean,
+): string {
+  if (entry.valueError) return `error: ${entry.valueError}`;
+  const raw = displayValue(entry, mode);
+  return (mode === "hex" || (!entry.valueBtf && mode !== "decimal"))
+    ? interpretHex(raw, interpret, bigEndian)
+    : raw;
+}
+
 function displayKey(entry: MapEntry, mode: DisplayMode): string {
   if (mode === "btf" && entry.keyBtf) return entry.keyBtf;
   if (mode === "decimal" && entry.keyDecimal !== null) return entry.keyDecimal;
@@ -709,6 +739,8 @@ export function MapEntriesModal({
   const [keyBE, setKeyBE] = useState(false);
   const [valBE, setValBE] = useState(false);
   const [page, setPage] = useState(0);
+  const [searchQuery, setSearchQuery] = useState("");
+  const searchInputRef = useRef<HTMLInputElement>(null);
 
   // Persist interpretation preferences whenever they change
   const handleKeyInterpretChange = (v: InterpretMode) => {
@@ -723,20 +755,51 @@ export function MapEntriesModal({
   const { data, isLoading, isError, refetch, isFetching } =
     trpc.ebpf.mapDump.useQuery({ id: mapId }, { staleTime: 10_000 });
 
-  const totalPages = useMemo(
-    () => Math.max(1, Math.ceil((data?.entries.length ?? 0) / PAGE_SIZE)),
-    [data],
-  );
-
-  const pageEntries = useMemo((): MapEntry[] => {
-    if (!data?.entries) return [];
-    const start = page * PAGE_SIZE;
-    return data.entries.slice(start, start + PAGE_SIZE);
-  }, [data, page]);
-
   // Auto-select BTF mode when BTF data is available
   const hasBtf = data?.btfDecoded ?? false;
   const effectiveMode: DisplayMode = mode === "btf" && !hasBtf ? "hex" : mode;
+
+  // ── Search / filter ──────────────────────────────────────────────────────
+  const handleSearchChange = useCallback((q: string) => {
+    setSearchQuery(q);
+    setPage(0); // always reset to first page when filter changes
+  }, []);
+
+  // Filtered entries: case-insensitive substring match on interpreted key + value text.
+  // Recomputed whenever query, data, mode, or interpret settings change.
+  const filteredEntries = useMemo((): MapEntry[] => {
+    if (!data?.entries) return [];
+    const q = searchQuery.trim().toLowerCase();
+    if (!q) return data.entries;
+    return data.entries.filter(entry => {
+      const k = entryKeyText(entry, effectiveMode, keyInterpret, keyBE).toLowerCase();
+      const v = entryValText(entry, effectiveMode, valInterpret, valBE).toLowerCase();
+      return k.includes(q) || v.includes(q);
+    });
+  }, [data, searchQuery, effectiveMode, keyInterpret, valInterpret, keyBE, valBE]);
+
+  const totalPages = useMemo(
+    () => Math.max(1, Math.ceil(filteredEntries.length / PAGE_SIZE)),
+    [filteredEntries],
+  );
+
+  const pageEntries = useMemo((): MapEntry[] => {
+    const start = page * PAGE_SIZE;
+    return filteredEntries.slice(start, start + PAGE_SIZE);
+  }, [filteredEntries, page]);
+
+  // Escape key clears the search filter
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if (e.key === "Escape" && searchQuery) {
+        e.stopPropagation();
+        handleSearchChange("");
+        searchInputRef.current?.focus();
+      }
+    };
+    window.addEventListener("keydown", handler, true);
+    return () => window.removeEventListener("keydown", handler, true);
+  }, [searchQuery, handleSearchChange]);
 
   // Disable interpret toggles in BTF/decimal mode (bytes are already decoded)
   const interpretDisabled = effectiveMode !== "hex";
@@ -853,6 +916,38 @@ export function MapEntriesModal({
               <InterpretToggle label="Value as" value={valInterpret} bigEndian={valBE} onChangeBE={setValBE} onChange={handleValInterpretChange} container={containerRef.current} byteLen={valueBytes} />
             </div>
           )}
+
+          {/* Row 3: search / filter bar (only shown when entries are loaded) */}
+          {data && !data.unsupported && !data.error && data.entries.length > 0 && (
+            <div className="relative flex items-center">
+              <Search className="absolute left-2.5 w-3.5 h-3.5 text-white/25 pointer-events-none" />
+              <input
+                ref={searchInputRef}
+                type="text"
+                value={searchQuery}
+                onChange={e => handleSearchChange(e.target.value)}
+                placeholder="Search keys or values…"
+                className="w-full pl-8 pr-8 py-1.5 bg-black/30 border border-white/10 rounded-lg text-xs font-mono text-white/70 placeholder-white/20 focus:outline-none focus:border-white/25 focus:bg-black/40 transition-colors"
+                aria-label="Filter map entries"
+              />
+              {/* Match count badge */}
+              {searchQuery.trim() && (
+                <span className="absolute right-8 text-[10px] font-mono text-white/30 select-none">
+                  {filteredEntries.length}/{data.entries.length}
+                </span>
+              )}
+              {/* Clear button */}
+              {searchQuery && (
+                <button
+                  onClick={() => { handleSearchChange(""); searchInputRef.current?.focus(); }}
+                  className="absolute right-2 p-0.5 rounded text-white/25 hover:text-white/60 transition-colors"
+                  title="Clear filter (Esc)"
+                >
+                  <X className="w-3.5 h-3.5" />
+                </button>
+              )}
+            </div>
+          )}
         </div>
 
         {/* ── Body ───────────────────────────────────────────────────────── */}
@@ -895,6 +990,21 @@ export function MapEntriesModal({
               <Database className="w-10 h-10 opacity-30" />
               <div className="text-sm">Map is empty</div>
               <div className="text-xs text-white/20">No entries found in this map</div>
+            </div>
+          ) : filteredEntries.length === 0 ? (
+            <div className="flex-1 flex flex-col items-center justify-center gap-3 text-white/30">
+              <Search className="w-10 h-10 opacity-30" />
+              <div className="text-sm">No matching entries</div>
+              <div className="text-xs text-white/20">
+                0 of {data?.entries.length ?? 0} entries match
+                {" "}<span className="font-mono text-white/40">"{searchQuery}"</span>
+              </div>
+              <button
+                onClick={() => handleSearchChange("")}
+                className="mt-1 text-xs text-[var(--accent)] hover:underline"
+              >
+                Clear filter
+              </button>
             </div>
           ) : (
             <div className="flex-1 overflow-y-auto">
@@ -939,8 +1049,8 @@ export function MapEntriesModal({
           )}
         </div>
 
-        {/* ── Pagination ─────────────────────────────────────────────────── */}
-        {data && !data.unsupported && !data.error && data.entries.length > PAGE_SIZE && (
+        {/* ── Pagination ────────────────────────────────────────────────────── */}
+        {data && !data.unsupported && !data.error && filteredEntries.length > PAGE_SIZE && (
           <div className="flex items-center justify-between px-5 py-3 border-t border-white/10 bg-white/[0.02] flex-shrink-0">
             <button
               onClick={() => setPage(p => Math.max(0, p - 1))}
@@ -953,7 +1063,7 @@ export function MapEntriesModal({
             <span className="text-xs text-white/40">
               Page {page + 1} of {totalPages}
               <span className="text-white/20 ml-2">
-                (rows {page * PAGE_SIZE + 1}–{Math.min((page + 1) * PAGE_SIZE, data.entries.length)})
+                (rows {page * PAGE_SIZE + 1}–{Math.min((page + 1) * PAGE_SIZE, filteredEntries.length)})
               </span>
             </span>
             <button

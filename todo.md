@@ -387,3 +387,15 @@
 - [x] Added ktime_map (map 24) to demo data: 8 PID → timestamp entries showcasing all time ranges
 - [x] Added fentry__tcp_close (prog 26) to MOCK_PROGS referencing ktime_map
 - [x] 254 tests pass, TS clean, standalone rebuilt
+
+## Feature: Map entry search/filter bar
+- [x] Add search text input in the modal toolbar (row 3, below interpret toggles)
+- [x] Filter applies to both interpreted key text AND interpreted value text (post-interpretation)
+- [x] Case-insensitive substring match; also supports raw hex search
+- [x] Match count badge: "N / total matches" shown next to the input
+- [x] Clear button (×) inside the input when non-empty
+- [x] Filtered results reset pagination to page 0
+- [x] Empty state message when no entries match the filter
+- [x] Search bar visible in all modes (hex, decimal, BTF) for consistency
+- [x] Keyboard shortcut: Escape clears the filter
+- [x] 254 tests pass, TS clean
