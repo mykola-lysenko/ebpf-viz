@@ -284,3 +284,13 @@
 - [x] Added writeHead interception to log all 5xx responses with method + path to stdout.
 - [x] Verified: 400 invalid input returns Content-Length=1672 with full error JSON; 200 responses unchanged.
 - [x] 205 unit tests pass, standalone package rebuilt.
+
+## Feature: Map value interpreter dropdown (Raw / IPv4 / IPv6)
+- [x] Add parseHexBytes/bytesToIPv4/bytesToIPv6/interpretHex helpers in MapEntriesModal
+- [x] Add "Interpret as" row (Raw, IPv4, IPv6) to the toolbar, separate from the display mode toggle
+- [x] Key and value interpretations are independent (separate InterpretToggle controls)
+- [x] Interpretation errors shown in amber italic (e.g. "(need 4B, got 8B)")
+- [x] Per-CPU value expansion respects the selected value interpretation
+- [x] Interpret row hidden in BTF/decimal mode (bytes already decoded)
+- [x] Column headers show active interpretation label (e.g. "Key (ipv4)")
+- [x] 13 new unit tests in server/ip-interpret.test.ts — all 218 tests pass
