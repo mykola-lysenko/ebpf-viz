@@ -3,7 +3,7 @@
  * Full-screen modal that shows the entries of a BPF map by calling
  * trpc.ebpf.mapDump.  Supports:
  *  - Hex / Decimal / BTF display modes for keys and values
- *  - Raw / IPv4 / IPv6 / MAC / Port / Index / U32BE / U64LE / CgroupID / Protocol interpretation
+ *  - Raw / IPv4 / IPv6 / MAC / Port / U32 / U64 / CgroupID / Protocol / Timestamp interpretation
  *  - Auto-detection of best default interpretation based on map type
  *  - Pagination (50 rows per page)
  *  - Copy-to-clipboard for individual cells
@@ -47,7 +47,8 @@ type InterpretMode =
   | "u32"     // 4-byte unsigned integer (LE by default, BE via toggle)
   | "u64"     // 8-byte unsigned integer (LE by default, BE via toggle)
   | "cgroupid" // 8-byte cgroup inode + 4-byte attach type
-  | "proto";  // 1-byte IP protocol number
+  | "proto"   // 1-byte IP protocol number
+  | "ts";     // 8-byte nanosecond timestamp → human-readable elapsed time
 
 interface MapEntriesModalProps {
   mapId: number;
@@ -283,6 +284,59 @@ function bytesToProtocol(bytes: Uint8Array): string {
 }
 
 /**
+ * Convert 8 bytes (little-endian U64) representing nanoseconds from
+ * bpf_ktime_get_ns() into a human-readable elapsed-time string.
+ *
+ * Format: [Ny] [Nd] [Nh] [Nm] [Ns] [Nms]  — only non-zero components shown,
+ * except for sub-millisecond values which show the raw nanosecond count.
+ * Zero is shown as "0 (never)" to distinguish an unset map slot from
+ * a program that ran at boot time with zero elapsed time.
+ */
+function bytesToTimestamp(bytes: Uint8Array): string {
+  if (bytes.length !== 8) return `(need 8B, got ${bytes.length}B)`;
+
+  // Read as LE U64 using BigInt for full 64-bit precision.
+  // Use BigInt() constructor (not n-suffix literals) for ES2017 compat.
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  const lo = BigInt(view.getUint32(0, true));
+  const hi = BigInt(view.getUint32(4, true));
+  const B32 = BigInt(32);
+  const ns = (hi << B32) | lo;
+
+  const ZERO = BigInt(0);
+  if (ns === ZERO) return "0 (never)";
+
+  // Time-unit constants as BigInt
+  const MS  = BigInt(1_000_000);
+  const SEC = BigInt(1_000) * MS;
+  const MIN = BigInt(60) * SEC;
+  const HR  = BigInt(60) * MIN;
+  const DAY = BigInt(24) * HR;
+  const YR  = BigInt(365) * DAY;
+
+  let rem = ns;
+  const years   = rem / YR;   rem %= YR;
+  const days    = rem / DAY;  rem %= DAY;
+  const hours   = rem / HR;   rem %= HR;
+  const minutes = rem / MIN;  rem %= MIN;
+  const seconds = rem / SEC;  rem %= SEC;
+  const millis  = rem / MS;   rem %= MS;
+
+  const parts: string[] = [];
+  if (years   > ZERO) parts.push(`${years}y`);
+  if (days    > ZERO) parts.push(`${days}d`);
+  if (hours   > ZERO) parts.push(`${hours}h`);
+  if (minutes > ZERO) parts.push(`${minutes}m`);
+  if (seconds > ZERO) parts.push(`${seconds}s`);
+  if (millis  > ZERO) parts.push(`${millis}ms`);
+
+  // Sub-millisecond: show raw ns
+  if (parts.length === 0) return `${ns}ns`;
+
+  return parts.join(" ");
+}
+
+/**
  * Apply an interpretation mode to a raw hex string.
  * @param hex  Space-separated hex byte string.
  * @param mode Interpretation mode.
@@ -307,6 +361,7 @@ function interpretHex(hex: string, mode: InterpretMode, bigEndian = false): stri
   if (mode === "u64") return bytesToU64LE(bytes);  // after optional reversal, always read as LE
   if (mode === "cgroupid") return bytesToCgroupId(bytes);
   if (mode === "proto") return bytesToProtocol(bytes);
+  if (mode === "ts") return bytesToTimestamp(bytes);
   return hex;
 }
 
@@ -325,7 +380,7 @@ function defaultKeyInterpret(mapType: string): InterpretMode {
 
 const VALID_MODES = new Set<string>([
   "raw", "ipv4", "ipv6", "mac", "port",
-  "u32", "u64", "cgroupid", "proto",
+  "u32", "u64", "cgroupid", "proto", "ts",
 ]);
 
 function storageKey(mapType: string): string {
@@ -412,6 +467,7 @@ const INTERPRET_OPTIONS: { value: InterpretMode; label: string; title: string; r
   { value: "u64",      label: "U64",    title: "Interpret 8 bytes as unsigned 64-bit integer (LE by default; toggle BE for big-endian)",     requiredBytes: 8,       beToggleable: true  },
   { value: "cgroupid", label: "Cgroup", title: "Interpret 8 or 12 bytes as cgroup storage key (inode ID + attach type)",                    requiredBytes: [8, 12], beToggleable: false },
   { value: "proto",    label: "Proto",  title: "Interpret 1 byte as IP protocol number (6=TCP, 17=UDP, 1=ICMP, …)",                         requiredBytes: 1,       beToggleable: false },
+  { value: "ts",       label: "Timestamp", title: "Interpret 8 bytes as nanoseconds from bpf_ktime_get_ns() → elapsed time (e.g. 3d 14h 22m 5s)", requiredBytes: 8,       beToggleable: false },
 ];
 
 /**

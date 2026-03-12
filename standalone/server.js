@@ -78044,7 +78044,8 @@ function buildMockMaps(programs) {
     20: { type: "sockmap", name: "sock_redirect", bytes_key: 4, bytes_value: 4, max_entries: 65535, bytes_memlock: 524288 },
     21: { type: "prog_array", name: "tail_calls", bytes_key: 4, bytes_value: 4, max_entries: 8, bytes_memlock: 4096 },
     22: { type: "lru_hash", name: "conn_track", bytes_key: 12, bytes_value: 24, max_entries: 65536, bytes_memlock: 4194304 },
-    23: { type: "array", name: "config_map", bytes_key: 4, bytes_value: 4, max_entries: 16, bytes_memlock: 4096 }
+    23: { type: "array", name: "config_map", bytes_key: 4, bytes_value: 4, max_entries: 16, bytes_memlock: 4096 },
+    24: { type: "hash", name: "ktime_map", bytes_key: 4, bytes_value: 8, max_entries: 1024, bytes_memlock: 65536 }
   };
   const rawMaps = [];
   for (const id of Array.from(allMapIds).sort((a, b) => a - b)) {
@@ -78104,7 +78105,9 @@ var MOCK_PROGS = [
   // LSM
   { id: 24, type: "lsm", name: "lsm_file_open", tag: "0c0d0e0f10110900", gpl_compatible: true, loaded_at: NOW - 7200, uid: 0, orphaned: false, bytes_xlated: 512, jited: true, bytes_memlock: 4096, btf_id: 77, run_time_ns: 3291e3, run_cnt: 8821 },
   // Orphaned
-  { id: 25, type: "kprobe", name: "old_kprobe_handler", tag: "0d0e0f1011120a00", gpl_compatible: true, loaded_at: NOW - 86400, uid: 1e3, orphaned: true, bytes_xlated: 256, jited: false, bytes_memlock: 4096 }
+  { id: 25, type: "kprobe", name: "old_kprobe_handler", tag: "0d0e0f1011120a00", gpl_compatible: true, loaded_at: NOW - 86400, uid: 1e3, orphaned: true, bytes_xlated: 256, jited: false, bytes_memlock: 4096 },
+  // ktime demo — records per-PID last-seen timestamps via bpf_ktime_get_ns()
+  { id: 26, type: "fentry", name: "fentry__tcp_close", tag: "0e0f101112130b00", gpl_compatible: true, loaded_at: NOW - 1200, uid: 0, orphaned: false, bytes_xlated: 448, jited: true, bytes_memlock: 4096, map_ids: [24], btf_id: 88, run_time_ns: 8821e3, run_cnt: 3412 }
 ];
 var MOCK_NET = [
   {
@@ -79654,6 +79657,34 @@ function mockConnTrack() {
     return entry(i, keyHex, valueHex);
   });
 }
+function mockKtimeMap() {
+  const BASE_NS_PER_SEC = 1e9;
+  const BASE_NS_PER_MIN = 60 * BASE_NS_PER_SEC;
+  const BASE_NS_PER_HR = 60 * BASE_NS_PER_MIN;
+  const BASE_NS_PER_DAY = 24 * BASE_NS_PER_HR;
+  const UPTIME_NS = 3 * BASE_NS_PER_DAY + 14 * BASE_NS_PER_HR + 22 * BASE_NS_PER_MIN;
+  const pids = [
+    [1, UPTIME_NS - 5 * BASE_NS_PER_SEC],
+    // PID 1 (init): 5s ago
+    [1234, UPTIME_NS - 2 * BASE_NS_PER_MIN],
+    // 2m ago
+    [5678, UPTIME_NS - 1 * BASE_NS_PER_HR],
+    // 1h ago
+    [9012, UPTIME_NS - 1 * BASE_NS_PER_DAY],
+    // 1d ago
+    [31337, UPTIME_NS - 5e5],
+    // 500µs ago (sub-ms)
+    [42, UPTIME_NS - 3 * BASE_NS_PER_HR - 7 * BASE_NS_PER_MIN + 12 * BASE_NS_PER_SEC],
+    // 3h 7m 12s ago
+    [7777, UPTIME_NS - 2 * BASE_NS_PER_DAY - 6 * BASE_NS_PER_HR],
+    // 2d 6h ago
+    [99, 0]
+    // 0 — never seen (unset slot)
+  ];
+  return pids.map(
+    ([pid, ns], i) => entry(i, u32leHex(pid), u64leHex(ns), { keyDecimal: String(pid) })
+  );
+}
 function mockConfigMap() {
   const configs = [
     ["ENABLED", 1],
@@ -79729,6 +79760,9 @@ function buildMockMapDump(mapId, mapType, mapName) {
       break;
     case 23:
       entries = mockConfigMap();
+      break;
+    case 24:
+      entries = mockKtimeMap();
       break;
     default:
       entries = [0, 1, 2, 3].map(

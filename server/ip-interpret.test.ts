@@ -340,3 +340,135 @@ describe("bytesToIPv6", () => {
     expect(bytesToIPv6(new Uint8Array(6))).toBe("(need 16B, got 6B)");
   });
 });
+
+// ── bytesToTimestamp helper (replicated from MapEntriesModal.tsx) ─────────────
+
+function bytesToTimestamp(bytes: Uint8Array): string {
+  if (bytes.length !== 8) return `(need 8B, got ${bytes.length}B)`;
+
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  const lo = BigInt(view.getUint32(0, true));
+  const hi = BigInt(view.getUint32(4, true));
+  const B32 = BigInt(32);
+  const ns = (hi << B32) | lo;
+
+  const ZERO = BigInt(0);
+  if (ns === ZERO) return "0 (never)";
+
+  const MS  = BigInt(1_000_000);
+  const SEC = BigInt(1_000) * MS;
+  const MIN = BigInt(60) * SEC;
+  const HR  = BigInt(60) * MIN;
+  const DAY = BigInt(24) * HR;
+  const YR  = BigInt(365) * DAY;
+
+  let rem = ns;
+  const years   = rem / YR;   rem %= YR;
+  const days    = rem / DAY;  rem %= DAY;
+  const hours   = rem / HR;   rem %= HR;
+  const minutes = rem / MIN;  rem %= MIN;
+  const seconds = rem / SEC;  rem %= SEC;
+  const millis  = rem / MS;   rem %= MS;
+
+  const parts: string[] = [];
+  if (years   > ZERO) parts.push(`${years}y`);
+  if (days    > ZERO) parts.push(`${days}d`);
+  if (hours   > ZERO) parts.push(`${hours}h`);
+  if (minutes > ZERO) parts.push(`${minutes}m`);
+  if (seconds > ZERO) parts.push(`${seconds}s`);
+  if (millis  > ZERO) parts.push(`${millis}ms`);
+
+  if (parts.length === 0) return `${ns}ns`;
+  return parts.join(" ");
+}
+
+/** Encode a BigInt nanosecond value into a little-endian Uint8Array (8 bytes). */
+function nsToBytes(ns: bigint): Uint8Array {
+  const buf = new Uint8Array(8);
+  const view = new DataView(buf.buffer);
+  view.setUint32(0, Number(ns & BigInt(0xffffffff)), true);
+  view.setUint32(4, Number(ns >> BigInt(32)), true);
+  return buf;
+}
+
+// ── Tests ─────────────────────────────────────────────────────────────────────
+
+describe("bytesToTimestamp", () => {
+  it("returns '0 (never)' for all-zero bytes", () => {
+    expect(bytesToTimestamp(new Uint8Array(8))).toBe("0 (never)");
+  });
+
+  it("returns error for wrong byte count", () => {
+    expect(bytesToTimestamp(new Uint8Array(4))).toBe("(need 8B, got 4B)");
+    expect(bytesToTimestamp(new Uint8Array(16))).toBe("(need 8B, got 16B)");
+  });
+
+  it("formats sub-millisecond values as raw ns", () => {
+    // 500_000 ns = 0.5 ms → shown as "500000ns"
+    const ns = nsToBytes(BigInt(500_000));
+    expect(bytesToTimestamp(ns)).toBe("500000ns");
+  });
+
+  it("formats exact 1 ms", () => {
+    const ns = nsToBytes(BigInt(1_000_000));
+    expect(bytesToTimestamp(ns)).toBe("1ms");
+  });
+
+  it("formats milliseconds only (< 1 second)", () => {
+    const ns = nsToBytes(BigInt(999_000_000)); // 999 ms
+    expect(bytesToTimestamp(ns)).toBe("999ms");
+  });
+
+  it("formats seconds and milliseconds", () => {
+    // 1s + 500ms = 1_500_000_000 ns
+    const ns = nsToBytes(BigInt(1_500_000_000));
+    expect(bytesToTimestamp(ns)).toBe("1s 500ms");
+  });
+
+  it("formats exact 1 minute", () => {
+    const ns = nsToBytes(BigInt(60) * BigInt(1_000_000_000));
+    expect(bytesToTimestamp(ns)).toBe("1m");
+  });
+
+  it("formats minutes and seconds", () => {
+    // 2m 30s
+    const ns = nsToBytes(BigInt(150) * BigInt(1_000_000_000));
+    expect(bytesToTimestamp(ns)).toBe("2m 30s");
+  });
+
+  it("formats hours, minutes, seconds", () => {
+    // 1h 2m 3s = 3723 seconds
+    const ns = nsToBytes(BigInt(3723) * BigInt(1_000_000_000));
+    expect(bytesToTimestamp(ns)).toBe("1h 2m 3s");
+  });
+
+  it("formats days and hours", () => {
+    // 3d 14h = (3*24 + 14) * 3600 = 86 * 3600 = 309600 seconds
+    const ns = nsToBytes(BigInt(309600) * BigInt(1_000_000_000));
+    expect(bytesToTimestamp(ns)).toBe("3d 14h");
+  });
+
+  it("formats years, days, hours, minutes, seconds, ms", () => {
+    // 1y 2d 3h 4m 5s 6ms
+    const MS  = BigInt(1_000_000);
+    const SEC = BigInt(1_000) * MS;
+    const MIN = BigInt(60) * SEC;
+    const HR  = BigInt(60) * MIN;
+    const DAY = BigInt(24) * HR;
+    const YR  = BigInt(365) * DAY;
+    const total = YR + BigInt(2) * DAY + BigInt(3) * HR + BigInt(4) * MIN + BigInt(5) * SEC + BigInt(6) * MS;
+    expect(bytesToTimestamp(nsToBytes(total))).toBe("1y 2d 3h 4m 5s 6ms");
+  });
+
+  it("handles large values > 10 years without overflow", () => {
+    // 100 years in nanoseconds
+    const MS  = BigInt(1_000_000);
+    const SEC = BigInt(1_000) * MS;
+    const MIN = BigInt(60) * SEC;
+    const HR  = BigInt(60) * MIN;
+    const DAY = BigInt(24) * HR;
+    const YR  = BigInt(365) * DAY;
+    const ns = nsToBytes(BigInt(100) * YR);
+    expect(bytesToTimestamp(ns)).toBe("100y");
+  });
+});

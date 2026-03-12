@@ -302,6 +302,39 @@ function mockConnTrack(): MapEntry[] {
 }
 
 /**
+ * Map 24: ktime_map — hash, key=U32 LE PID (4B), value=U64 LE nanoseconds from bpf_ktime_get_ns()
+ * Stores the last-seen kernel timestamp for each tracked PID.
+ * Used by: fentry__tcp_close (prog 26)
+ *
+ * Values are realistic uptime-relative nanosecond timestamps:
+ * a system uptime of ~3 days means timestamps are in the 2.5e14 ns range.
+ */
+function mockKtimeMap(): MapEntry[] {
+  // Simulate a system that has been up for ~3 days 14 hours
+  // bpf_ktime_get_ns() returns nanoseconds since boot (monotonic clock)
+  const BASE_NS_PER_SEC = 1_000_000_000;
+  const BASE_NS_PER_MIN = 60 * BASE_NS_PER_SEC;
+  const BASE_NS_PER_HR  = 60 * BASE_NS_PER_MIN;
+  const BASE_NS_PER_DAY = 24 * BASE_NS_PER_HR;
+  // ~3d 14h 22m uptime in nanoseconds (safe as a JS number, < 2^53)
+  const UPTIME_NS = 3 * BASE_NS_PER_DAY + 14 * BASE_NS_PER_HR + 22 * BASE_NS_PER_MIN;
+
+  const pids: Array<[number, number]> = [
+    [1,     UPTIME_NS - 5 * BASE_NS_PER_SEC],          // PID 1 (init): 5s ago
+    [1234,  UPTIME_NS - 2 * BASE_NS_PER_MIN],          // 2m ago
+    [5678,  UPTIME_NS - 1 * BASE_NS_PER_HR],           // 1h ago
+    [9012,  UPTIME_NS - 1 * BASE_NS_PER_DAY],          // 1d ago
+    [31337, UPTIME_NS - 500_000],                       // 500µs ago (sub-ms)
+    [42,    UPTIME_NS - 3 * BASE_NS_PER_HR - 7 * BASE_NS_PER_MIN + 12 * BASE_NS_PER_SEC], // 3h 7m 12s ago
+    [7777,  UPTIME_NS - 2 * BASE_NS_PER_DAY - 6 * BASE_NS_PER_HR], // 2d 6h ago
+    [99,    0],                                         // 0 — never seen (unset slot)
+  ];
+  return pids.map(([pid, ns], i) =>
+    entry(i, u32leHex(pid), u64leHex(ns), { keyDecimal: String(pid) }),
+  );
+}
+
+/**
  * Map 23: config_map — array, key=U32 LE index, value=U32 LE config value
  * Global configuration flags/values for the XDP program
  */
@@ -371,6 +404,7 @@ export function buildMockMapDump(
     case 20: entries = mockSockRedirect();   break;
     case 22: entries = mockConnTrack();      break;
     case 23: entries = mockConfigMap();      break;
+    case 24: entries = mockKtimeMap();       break;
     default:
       // Generic fallback: 4 array-style entries
       entries = [0, 1, 2, 3].map(i =>

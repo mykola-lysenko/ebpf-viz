@@ -88,6 +88,7 @@ export function buildMockMaps(programs: BpfProgram[]): BpfMap[] {
     21: { type: "prog_array",     name: "tail_calls",        bytes_key: 4,  bytes_value: 4,  max_entries: 8,     bytes_memlock: 4096 },
     22: { type: "lru_hash",       name: "conn_track",        bytes_key: 12, bytes_value: 24, max_entries: 65536, bytes_memlock: 4194304 },
     23: { type: "array",          name: "config_map",        bytes_key: 4,  bytes_value: 4,  max_entries: 16,    bytes_memlock: 4096 },
+    24: { type: "hash",           name: "ktime_map",          bytes_key: 4,  bytes_value: 8,  max_entries: 1024,  bytes_memlock: 65536 },
   };
 
   const rawMaps: RawBpfMap[] = [];

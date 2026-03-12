@@ -374,3 +374,16 @@
 - [x] interpretHex reverses byte array when bigEndian=true before passing to helper
 - [x] EntryRow and per-CPU expansion both receive and respect keyBE/valBE
 - [x] 242 tests pass, TS clean, standalone rebuilt
+
+## Feature: Timestamp interpretation for 8-byte U64 nanosecond values
+- [x] Add bytesToTimestamp() helper: reads 8-byte LE U64 nanoseconds, formats as elapsed time (e.g. "3d 14h 22m 5s 123ms")
+- [x] Zero value shown as "0 (never)" to distinguish unset entries from zero-elapsed
+- [x] Very large values (> 365 days) shown with year component
+- [x] Add "ts" to InterpretMode union type
+- [x] Add "Timestamp" option to INTERPRET_OPTIONS with requiredBytes: 8 and beToggleable: false
+- [x] Wire into interpretHex() dispatch
+- [x] Add unit tests for bytesToTimestamp (zero, sub-ms, ms, seconds, minutes, hours, days, years, 100y) — 12 tests
+- [x] Update VALID_MODES set to include "ts"
+- [x] Added ktime_map (map 24) to demo data: 8 PID → timestamp entries showcasing all time ranges
+- [x] Added fentry__tcp_close (prog 26) to MOCK_PROGS referencing ktime_map
+- [x] 254 tests pass, TS clean, standalone rebuilt

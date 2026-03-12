@@ -49,6 +49,9 @@ export const MOCK_PROGS: RawBpfProg[] = [
 
   // Orphaned
   { id: 25, type: "kprobe", name: "old_kprobe_handler", tag: "0d0e0f1011120a00", gpl_compatible: true, loaded_at: NOW - 86400, uid: 1000, orphaned: true, bytes_xlated: 256, jited: false, bytes_memlock: 4096 },
+
+  // ktime demo — records per-PID last-seen timestamps via bpf_ktime_get_ns()
+  { id: 26, type: "fentry", name: "fentry__tcp_close", tag: "0e0f101112130b00", gpl_compatible: true, loaded_at: NOW - 1200, uid: 0, orphaned: false, bytes_xlated: 448, jited: true, bytes_memlock: 4096, map_ids: [24], btf_id: 88, run_time_ns: 8821000, run_cnt: 3412 },
 ];
 
 export const MOCK_NET: RawNetSnapshot[] = [
