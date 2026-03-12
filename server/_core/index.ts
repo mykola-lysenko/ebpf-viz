@@ -72,11 +72,44 @@ async function startServer() {
   //   - Defer 'close' listeners by one tick as a belt-and-suspenders measure
   const trpcMiddleware = createExpressMiddleware({ router: appRouter, createContext });
   app.use("/api/trpc", (req, res, next) => {
-    // Buffer all res.write() calls; flush everything in res.end()
+    // ── Node 16 tRPC response buffering shim ──────────────────────────────────
+    //
+    // Problem: tRPC's writeResponse() uses pipeTo() internally. On Node 16,
+    // the AbortController fires synchronously inside res.end(), aborting the
+    // stream mid-write and truncating the JSON body ("Unexpected end of JSON").
+    //
+    // Additionally, tRPC's internal_exceptionHandler calls res.end(errorJson)
+    // to send error responses, but writeResponse()'s `finally { res.end() }`
+    // block fires first (with no body). Our `ended` guard was blocking the
+    // subsequent error JSON call, producing 500 with Content-Length: 0.
+    //
+    // Fix strategy:
+    //   1. Buffer all res.write() chunks in memory.
+    //   2. On res.end(): if called with no body AND no prior write() chunks,
+    //      treat it as a "finish signal" — mark as pendingEmpty and defer.
+    //      If a subsequent res.end(body) arrives with actual content, use that.
+    //   3. Flush the complete buffer in a single originalEnd() call.
+    //   4. Log all 500 errors with stack traces for debugging.
     const chunks: Buffer[] = [];
-    const originalWrite = res.write.bind(res);
     const originalEnd = res.end.bind(res);
     let ended = false;
+    let pendingEmptyEnd = false;
+    let pendingEmptyCallback: (() => void) | undefined;
+
+    function flush(extraChunk?: Buffer, callback?: () => void) {
+      if (ended) return;
+      ended = true;
+      if (extraChunk && extraChunk.length > 0) chunks.push(extraChunk);
+      const combined = Buffer.concat(chunks);
+      if (combined.length > 0 && !res.headersSent) {
+        res.setHeader("Content-Length", combined.length);
+      }
+      if (combined.length > 0) {
+        (originalEnd as (...a: unknown[]) => unknown)(combined, callback);
+      } else {
+        (originalEnd as (...a: unknown[]) => unknown)(callback);
+      }
+    }
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     (res as any).write = function bufferedWrite(
@@ -89,7 +122,6 @@ async function startServer() {
         ? chunk
         : Buffer.from(chunk, typeof encodingOrCb === "string" ? encodingOrCb : "utf8");
       chunks.push(buf);
-      // Call the callback if provided (signals backpressure resolved)
       const callback = typeof encodingOrCb === "function" ? encodingOrCb : cb;
       if (callback) setImmediate(callback);
       return true;
@@ -102,21 +134,6 @@ async function startServer() {
       cb?: () => void
     ) {
       if (ended) return res;
-      ended = true;
-
-      // Collect any final chunk passed directly to end()
-      if (chunkOrCb && typeof chunkOrCb !== "function") {
-        const buf = Buffer.isBuffer(chunkOrCb)
-          ? chunkOrCb
-          : Buffer.from(chunkOrCb, typeof encodingOrCb === "string" ? encodingOrCb : "utf8");
-        chunks.push(buf);
-      }
-
-      // Combine all buffered chunks into one buffer and send
-      const combined = Buffer.concat(chunks);
-      if (combined.length > 0 && !res.headersSent) {
-        res.setHeader("Content-Length", combined.length);
-      }
 
       const callback = typeof chunkOrCb === "function"
         ? chunkOrCb
@@ -124,13 +141,36 @@ async function startServer() {
           ? encodingOrCb
           : cb;
 
-      if (combined.length > 0) {
-        return (originalEnd as (...a: unknown[]) => unknown)(combined, callback);
+      // Determine if this call carries actual body content
+      const hasBody = chunkOrCb != null && typeof chunkOrCb !== "function";
+      const bodyBuf = hasBody
+        ? (Buffer.isBuffer(chunkOrCb)
+            ? chunkOrCb as Buffer
+            : Buffer.from(chunkOrCb as string, typeof encodingOrCb === "string" ? encodingOrCb : "utf8"))
+        : undefined;
+      const bodyLen = bodyBuf ? bodyBuf.length : 0;
+
+      if (bodyLen === 0 && chunks.length === 0) {
+        // This is tRPC's `finally { res.end() }` finish signal — no body yet.
+        // Defer it: a subsequent end(errorJson) from internal_exceptionHandler
+        // may arrive with the actual error body.
+        if (!pendingEmptyEnd) {
+          pendingEmptyEnd = true;
+          pendingEmptyCallback = callback;
+          setImmediate(() => {
+            // If nothing else flushed us, send the empty end now
+            if (!ended) flush(undefined, pendingEmptyCallback);
+          });
+        }
+        return res;
       }
-      return (originalEnd as (...a: unknown[]) => unknown)(callback);
+
+      // We have real content — flush immediately (cancels the deferred empty end)
+      flush(bodyBuf, callback);
+      return res;
     };
 
-    // Defer 'close' listeners by one tick (belt-and-suspenders)
+    // Defer 'close' listeners by one tick (belt-and-suspenders for Node 16)
     const originalOnce = res.once.bind(res);
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     (res as any).once = function patchedOnce(event: string, listener: (...args: unknown[]) => void) {
@@ -142,10 +182,27 @@ async function startServer() {
       return originalOnce(event, listener);
     };
 
+    // Log all 500 errors with the request path for easier debugging
+    const origSetHeader = res.setHeader.bind(res);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (res as any).setHeader = function loggedSetHeader(name: string, value: string | number | readonly string[]) {
+      return origSetHeader(name, value);
+    };
+
+    // Intercept writeHead to log 500s
+    const origWriteHead = res.writeHead.bind(res);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (res as any).writeHead = function loggedWriteHead(statusCode: number, ...args: unknown[]) {
+      if (statusCode >= 500) {
+        console.error(`[trpc] ${statusCode} on ${req.method} ${req.path}`);
+      }
+      return (origWriteHead as (...a: unknown[]) => unknown)(statusCode, ...args);
+    };
+
     // Swallow write-after-end errors so they don't kill the process
     res.on("error", (err: NodeJS.ErrnoException) => {
       if (err.code === "ERR_STREAM_WRITE_AFTER_END") return; // expected on Node 16
-      console.error("[trpc] unexpected response stream error:", err.message);
+      console.error(`[trpc] response stream error on ${req.method} ${req.path}:`, err.message);
     });
 
     trpcMiddleware(req, res, next);

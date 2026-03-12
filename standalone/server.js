@@ -90964,9 +90964,24 @@ async function startServer() {
   const trpcMiddleware = createExpressMiddleware({ router: appRouter, createContext });
   app.use("/api/trpc", (req, res, next) => {
     const chunks = [];
-    const originalWrite = res.write.bind(res);
     const originalEnd = res.end.bind(res);
     let ended = false;
+    let pendingEmptyEnd = false;
+    let pendingEmptyCallback;
+    function flush(extraChunk, callback) {
+      if (ended) return;
+      ended = true;
+      if (extraChunk && extraChunk.length > 0) chunks.push(extraChunk);
+      const combined = Buffer.concat(chunks);
+      if (combined.length > 0 && !res.headersSent) {
+        res.setHeader("Content-Length", combined.length);
+      }
+      if (combined.length > 0) {
+        originalEnd(combined, callback);
+      } else {
+        originalEnd(callback);
+      }
+    }
     res.write = function bufferedWrite(chunk, encodingOrCb, cb) {
       if (ended) return false;
       const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk, typeof encodingOrCb === "string" ? encodingOrCb : "utf8");
@@ -90977,20 +90992,22 @@ async function startServer() {
     };
     res.end = function bufferedEnd(chunkOrCb, encodingOrCb, cb) {
       if (ended) return res;
-      ended = true;
-      if (chunkOrCb && typeof chunkOrCb !== "function") {
-        const buf = Buffer.isBuffer(chunkOrCb) ? chunkOrCb : Buffer.from(chunkOrCb, typeof encodingOrCb === "string" ? encodingOrCb : "utf8");
-        chunks.push(buf);
-      }
-      const combined = Buffer.concat(chunks);
-      if (combined.length > 0 && !res.headersSent) {
-        res.setHeader("Content-Length", combined.length);
-      }
       const callback = typeof chunkOrCb === "function" ? chunkOrCb : typeof encodingOrCb === "function" ? encodingOrCb : cb;
-      if (combined.length > 0) {
-        return originalEnd(combined, callback);
+      const hasBody = chunkOrCb != null && typeof chunkOrCb !== "function";
+      const bodyBuf = hasBody ? Buffer.isBuffer(chunkOrCb) ? chunkOrCb : Buffer.from(chunkOrCb, typeof encodingOrCb === "string" ? encodingOrCb : "utf8") : void 0;
+      const bodyLen = bodyBuf ? bodyBuf.length : 0;
+      if (bodyLen === 0 && chunks.length === 0) {
+        if (!pendingEmptyEnd) {
+          pendingEmptyEnd = true;
+          pendingEmptyCallback = callback;
+          setImmediate(() => {
+            if (!ended) flush(void 0, pendingEmptyCallback);
+          });
+        }
+        return res;
       }
-      return originalEnd(callback);
+      flush(bodyBuf, callback);
+      return res;
     };
     const originalOnce = res.once.bind(res);
     res.once = function patchedOnce(event, listener) {
@@ -91001,9 +91018,20 @@ async function startServer() {
       }
       return originalOnce(event, listener);
     };
+    const origSetHeader = res.setHeader.bind(res);
+    res.setHeader = function loggedSetHeader(name, value) {
+      return origSetHeader(name, value);
+    };
+    const origWriteHead = res.writeHead.bind(res);
+    res.writeHead = function loggedWriteHead(statusCode, ...args) {
+      if (statusCode >= 500) {
+        console.error(`[trpc] ${statusCode} on ${req.method} ${req.path}`);
+      }
+      return origWriteHead(statusCode, ...args);
+    };
     res.on("error", (err) => {
       if (err.code === "ERR_STREAM_WRITE_AFTER_END") return;
-      console.error("[trpc] unexpected response stream error:", err.message);
+      console.error(`[trpc] response stream error on ${req.method} ${req.path}:`, err.message);
     });
     trpcMiddleware(req, res, next);
   });

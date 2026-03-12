@@ -277,3 +277,10 @@
 - [x] In live mode: bpftool map list returns 0 maps on this kernel (cgroup programs have no maps) — correct behavior
 - [x] In demo mode: buildMockMaps() now called correctly, returns 11 maps
 - [x] Verified: maps count = 11 in demo mode, SSE stream emits non-empty maps events
+
+## Bug: 500 Internal Server Error with Content-Length: 0 on live devserver
+- [x] Root cause: tRPC's writeResponse() `finally { res.end() }` fires with no body BEFORE internal_exceptionHandler calls res.end(errorJson). Old `ended=true` guard blocked the error JSON, producing 500 with Content-Length: 0.
+- [x] Fix: deferred empty end() calls via setImmediate. A subsequent non-empty end(body) call cancels the deferred empty end and flushes the real body.
+- [x] Added writeHead interception to log all 5xx responses with method + path to stdout.
+- [x] Verified: 400 invalid input returns Content-Length=1672 with full error JSON; 200 responses unchanged.
+- [x] 205 unit tests pass, standalone package rebuilt.
