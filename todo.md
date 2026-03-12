@@ -294,3 +294,9 @@
 - [x] Interpret row hidden in BTF/decimal mode (bytes already decoded)
 - [x] Column headers show active interpretation label (e.g. "Key (ipv4)")
 - [x] 13 new unit tests in server/ip-interpret.test.ts — all 218 tests pass
+
+## Feature: MAC address interpretation in map viewer
+- [x] Add bytesToMAC() helper (6 bytes → aa:bb:cc:dd:ee:ff, lowercase, zero-padded)
+- [x] Extend InterpretMode to include "mac"
+- [x] Add MAC option to INTERPRET_OPTIONS in MapEntriesModal
+- [x] 6 new unit tests for bytesToMAC — all 224 tests pass

@@ -35,6 +35,11 @@ function bytesToIPv4(bytes: Uint8Array): string {
   return `(need 4B, got ${bytes.length}B)`;
 }
 
+function bytesToMAC(bytes: Uint8Array): string {
+  if (bytes.length !== 6) return `(need 6B, got ${bytes.length}B)`;
+  return Array.from(bytes).map(b => b.toString(16).padStart(2, "0")).join(":");
+}
+
 function bytesToIPv6(bytes: Uint8Array): string {
   if (bytes.length !== 16) {
     return `(need 16B, got ${bytes.length}B)`;
@@ -102,6 +107,27 @@ describe("bytesToIPv4", () => {
     bytes[0] = 10; bytes[1] = 0; bytes[2] = 0; bytes[3] = 1;
     // Not IPv4-mapped (no 0xff bytes at [10],[11])
     expect(bytesToIPv4(bytes)).toBe("10.0.0.1 (first 4B of 16B)");
+  });
+});
+
+describe("bytesToMAC", () => {
+  it("converts 6 bytes to colon-separated lowercase hex", () => {
+    expect(bytesToMAC(new Uint8Array([0x00, 0x1a, 0x2b, 0x3c, 0x4d, 0x5e]))).toBe("00:1a:2b:3c:4d:5e");
+  });
+  it("pads single-digit nibbles with leading zero", () => {
+    expect(bytesToMAC(new Uint8Array([0x00, 0x00, 0x00, 0x00, 0x00, 0x01]))).toBe("00:00:00:00:00:01");
+  });
+  it("handles broadcast address ff:ff:ff:ff:ff:ff", () => {
+    expect(bytesToMAC(new Uint8Array([0xff, 0xff, 0xff, 0xff, 0xff, 0xff]))).toBe("ff:ff:ff:ff:ff:ff");
+  });
+  it("handles all-zero MAC", () => {
+    expect(bytesToMAC(new Uint8Array(6))).toBe("00:00:00:00:00:00");
+  });
+  it("returns error for 4 bytes", () => {
+    expect(bytesToMAC(new Uint8Array(4))).toBe("(need 6B, got 4B)");
+  });
+  it("returns error for 8 bytes", () => {
+    expect(bytesToMAC(new Uint8Array(8))).toBe("(need 6B, got 8B)");
   });
 });
 

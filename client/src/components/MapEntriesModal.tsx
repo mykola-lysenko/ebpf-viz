@@ -31,7 +31,7 @@ import { Button } from "@/components/ui/button";
 // ─── Types ────────────────────────────────────────────────────────────────────
 
 type DisplayMode = "hex" | "decimal" | "btf";
-type InterpretMode = "raw" | "ipv4" | "ipv6";
+type InterpretMode = "raw" | "ipv4" | "ipv6" | "mac";
 
 interface MapEntriesModalProps {
   mapId: number;
@@ -120,6 +120,19 @@ function bytesToIPv6(bytes: Uint8Array): string {
 }
 
 /**
+ * Convert bytes to a MAC address string (aa:bb:cc:dd:ee:ff).
+ * Expects exactly 6 bytes. Returns an error string otherwise.
+ */
+function bytesToMAC(bytes: Uint8Array): string {
+  if (bytes.length !== 6) {
+    return `(need 6B, got ${bytes.length}B)`;
+  }
+  return Array.from(bytes)
+    .map(b => b.toString(16).padStart(2, "0"))
+    .join(":");
+}
+
+/**
  * Apply an interpretation mode to a raw hex string.
  * Returns the interpreted string, or the original hex if interpretation is "raw"
  * or if the hex string is not a plain byte sequence (e.g. BTF-decoded JSON).
@@ -132,6 +145,7 @@ function interpretHex(hex: string, mode: InterpretMode): string {
   if (!bytes) return hex;
   if (mode === "ipv4") return bytesToIPv4(bytes);
   if (mode === "ipv6") return bytesToIPv6(bytes);
+  if (mode === "mac") return bytesToMAC(bytes);
   return hex;
 }
 
@@ -182,6 +196,7 @@ const INTERPRET_OPTIONS: { value: InterpretMode; label: string; title: string }[
   { value: "raw",  label: "Raw",  title: "Show raw bytes as-is" },
   { value: "ipv4", label: "IPv4", title: "Interpret bytes as IPv4 address (4 bytes, network order)" },
   { value: "ipv6", label: "IPv6", title: "Interpret bytes as IPv6 address (16 bytes, network order)" },
+  { value: "mac",  label: "MAC",  title: "Interpret bytes as MAC/hardware address (6 bytes, aa:bb:cc:dd:ee:ff)" },
 ];
 
 function InterpretToggle({
