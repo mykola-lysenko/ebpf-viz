@@ -453,3 +453,8 @@
 - [x] Inject lod into each node's data object via displayNodes useMemo (no layout hook changes needed)
 - [x] Remove useLod() / useViewport() from OsMapNodes.tsx entirely
 - [x] 265 tests pass, TS clean
+
+## Feature: Auto-rebuild standalone tarball on every commit
+- [x] Install .git/hooks/pre-commit that runs build-standalone.sh before every commit
+- [x] Hook stages the updated ebpf-viz-standalone.tar.gz automatically
+- [x] Verified: build succeeds, produces 2.1 MB tarball (2526 modules, 6s build)

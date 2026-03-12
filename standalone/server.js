@@ -77510,7 +77510,7 @@ var adminProcedure = t.procedure.use(
 );
 
 // server/ebpf-poller.ts
-import { exec } from "child_process";
+import { exec, execSync } from "child_process";
 import { promisify } from "util";
 import { hostname as hostname3 } from "os";
 
@@ -78457,9 +78457,29 @@ function pruneStale(currentIds) {
 
 // server/ebpf-poller.ts
 var execAsync = promisify(exec);
+function resolveBpftoolPath() {
+  if (process.env.BPFTOOL_PATH) return process.env.BPFTOOL_PATH;
+  try {
+    const found = execSync("which bpftool 2>/dev/null", { encoding: "utf8" }).trim();
+    if (found) return found;
+  } catch {
+  }
+  const candidates = [
+    "/usr/sbin/bpftool",
+    "/usr/bin/bpftool",
+    "/usr/local/sbin/bpftool",
+    "/usr/local/bin/bpftool",
+    "/sbin/bpftool"
+  ];
+  const { existsSync } = __require("fs");
+  for (const p of candidates) {
+    if (existsSync(p)) return p;
+  }
+  return "/usr/sbin/bpftool";
+}
 function resolveDefaultConfig() {
   const demoMode = process.env.DEMO_MODE === "1" || process.env.DEMO_MODE === "true";
-  const bpftoolPath = process.env.BPFTOOL_PATH || "/usr/local/bin/bpftool";
+  const bpftoolPath = resolveBpftoolPath();
   const intervalMs = process.env.POLL_INTERVAL_MS ? parseInt(process.env.POLL_INTERVAL_MS, 10) : 5e3;
   return { intervalMs, demoMode, bpftoolPath, sudo: true };
 }
@@ -78691,7 +78711,7 @@ function getBpftoolPath() {
 import { execFile } from "child_process";
 import { promisify as promisify2 } from "util";
 var execFileAsync = promisify2(execFile);
-var BPFTOOL = process.env.BPFTOOL_PATH ?? "/usr/local/bin/bpftool";
+var BPFTOOL = resolveBpftoolPath();
 var SUDO = process.env.BPFTOOL_SUDO !== "false";
 async function run2(args) {
   const cmd = SUDO ? "sudo" : BPFTOOL;
@@ -79386,7 +79406,7 @@ async function dumpMapEntries(mapId, mapType, mapName, bpftoolPath) {
       return {
         ...base,
         entries: [],
-        error: `bpftool not found at ${bpftoolPath}`
+        error: `bpftool not found at ${bpftoolPath}. Install bpftool or set the BPFTOOL_PATH environment variable to its location (e.g. BPFTOOL_PATH=/usr/sbin/bpftool).`
       };
     }
     return { ...base, entries: [], error: null };
@@ -79848,7 +79868,29 @@ var appRouter = router({
       const bpftoolPath = getBpftoolPath();
       return dumpMapEntries(input.id, mapType, mapName, bpftoolPath);
     }),
-    // ── Code Inspector ─────────────────────────────────────────────────────
+    // ── Map entry counts ──────────────────────────────────────────────────────────────────
+    /**
+     * Returns the live entry count for every dumpable map in one batch call.
+     * Unsupported map types (ringbuf, perf_event_array, etc.) are marked with
+     * unsupported: true and count: null.
+     */
+    mapEntryCounts: publicProcedure.query(async () => {
+      const maps = getLatestMaps();
+      const bpftoolPath = getBpftoolPath();
+      const demo = isDemoMode();
+      const results = await Promise.all(
+        maps.map(async (map2) => {
+          const result2 = demo ? buildMockMapDump(map2.id, map2.rawType, map2.name) : await dumpMapEntries(map2.id, map2.rawType, map2.name, bpftoolPath);
+          return {
+            mapId: map2.id,
+            count: result2.unsupported || result2.error ? null : result2.totalEntries,
+            unsupported: result2.unsupported ?? false
+          };
+        })
+      );
+      return results;
+    }),
+    // ── Code Inspector ──────────────────────────────────────────────────────────────────
     /**
      * Fetch the full code dump for a single BPF program:
      * xlated bytecode, CFG DOT, jited assembly (when available),
