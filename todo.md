@@ -346,3 +346,8 @@
 - [x] All 10 options, auto-detect defaults, and localStorage persistence fully preserved
 - [x] Row uses flex-wrap so both dropdowns stack gracefully on narrow modals
 - [x] 242 tests pass, TS clean
+
+## Bug: Select dropdowns in MapEntriesModal fail to open in preview
+- [x] Root cause: Radix UI SelectContent uses Portal to render into document.body; in preview iframe the portal content was intercepted by the preview overlay before pointer events reached the dropdown
+- [x] Fix: added container prop to shadcn SelectContent (forwarded to SelectPrimitive.Portal); modal passes containerRef.current so dropdown renders inside the modal DOM node instead of document.body
+- [x] Verified in browser: dropdown opens correctly showing all 10 options in both dev server and preview mode

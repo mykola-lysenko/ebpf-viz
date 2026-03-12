@@ -11,7 +11,7 @@
  *  - Graceful unsupported / error states
  */
 
-import { useState, useMemo } from "react";
+import { useState, useMemo, useRef } from "react";
 import { trpc } from "@/lib/trpc";
 import type { MapEntry } from "../../../shared/ebpf-types";
 import {
@@ -411,10 +411,12 @@ function InterpretToggle({
   label,
   value,
   onChange,
+  container,
 }: {
   label: string;
   value: InterpretMode;
   onChange: (v: InterpretMode) => void;
+  container?: HTMLElement | null;
 }) {
   const selected = INTERPRET_OPTIONS.find(o => o.value === value);
   return (
@@ -427,7 +429,10 @@ function InterpretToggle({
         >
           <SelectValue />
         </SelectTrigger>
-        <SelectContent className="bg-[#0f1117] border-white/10 text-white">
+        <SelectContent
+          className="bg-[#0f1117] border-white/10 text-white z-[300]"
+          container={container ?? undefined}
+        >
           {INTERPRET_OPTIONS.map(opt => (
             <SelectItem
               key={opt.value}
@@ -620,12 +625,24 @@ export function MapEntriesModal({
   // Disable interpret toggles in BTF/decimal mode (bytes are already decoded)
   const interpretDisabled = effectiveMode !== "hex";
 
+  // Ref for the modal container — passed to SelectContent portal so the dropdown
+  // renders inside the modal's DOM node instead of document.body. This prevents
+  // the preview iframe overlay from intercepting pointer events on the dropdown.
+  const containerRef = useRef<HTMLDivElement>(null);
+
   return (
     <div
       className="fixed inset-0 z-[200] flex items-center justify-center p-4 bg-black/70 backdrop-blur-sm"
-      onClick={e => e.target === e.currentTarget && onClose()}
+      onMouseDown={e => {
+        // Only close when clicking the backdrop itself, not Radix portal elements
+        if (e.target === e.currentTarget) onClose();
+      }}
     >
-      <div className="w-full max-w-4xl max-h-[90vh] flex flex-col bg-[#0d1117] border border-white/10 rounded-2xl shadow-2xl overflow-hidden">
+      <div
+        ref={containerRef}
+        className="w-full max-w-4xl max-h-[90vh] flex flex-col bg-[#0d1117] border border-white/10 rounded-2xl shadow-2xl overflow-hidden"
+        onMouseDown={e => e.stopPropagation()}
+      >
 
         {/* ── Header ─────────────────────────────────────────────────────── */}
         <div className="flex items-center justify-between px-5 py-4 border-b border-white/10 flex-shrink-0">
@@ -716,8 +733,8 @@ export function MapEntriesModal({
           {/* Row 2: interpret toggles (only shown in hex mode) */}
           {!interpretDisabled && (
             <div className="flex items-center gap-6 flex-wrap">
-              <InterpretToggle label="Key as" value={keyInterpret} onChange={handleKeyInterpretChange} />
-              <InterpretToggle label="Value as" value={valInterpret} onChange={handleValInterpretChange} />
+              <InterpretToggle label="Key as" value={keyInterpret} onChange={handleKeyInterpretChange} container={containerRef.current} />
+               <InterpretToggle label="Value as" value={valInterpret} onChange={handleValInterpretChange} container={containerRef.current} />
             </div>
           )}
         </div>
