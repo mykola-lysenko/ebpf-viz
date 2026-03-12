@@ -7,6 +7,7 @@ import { Link } from "wouter";
 import { cn } from "@/lib/utils";
 import { TYPE_COLORS } from "../../../server/ebpf-parser";
 import Sparkline, { samplesToCallsPerSec, fmtCps, fmtNs, fmtCpu } from "@/components/Sparkline";
+import { formatRelativeTime, formatFullTimestamp, useNow } from "@/lib/time";
 
 function StatCard({ label, value, sub, icon: Icon, color }: {
   label: string; value: string | number; sub?: string;
@@ -212,6 +213,7 @@ function ActivityLeaderboard() {
 
 export default function Dashboard() {
   const { snapshot, isLoading, demoMode, activity, statsEnabled } = useEbpf();
+  const now = useNow(30_000); // refresh relative times every 30s
 
   if (isLoading && !snapshot) {
     return (
@@ -320,8 +322,11 @@ export default function Dashboard() {
             {recentProgs.map(p => (
               <div key={p.id} className="flex items-center gap-2">
                 <ProgBadge program={p} />
-                <span className="text-xs text-muted-foreground ml-auto shrink-0">
-                  {p.loadedAt ? new Date(p.loadedAt * 1000).toLocaleTimeString() : "—"}
+                <span
+                  className="text-xs text-muted-foreground ml-auto shrink-0"
+                  title={formatFullTimestamp(p.loadedAt)}
+                >
+                  {formatRelativeTime(p.loadedAt, now)}
                 </span>
               </div>
             ))}

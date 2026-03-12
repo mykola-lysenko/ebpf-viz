@@ -6,6 +6,7 @@ import { Activity, SortAsc, SortDesc, Filter, X, Zap } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { BpfProgram, ProgHistory } from "../../../shared/ebpf-types";
 import Sparkline, { samplesToCallsPerSec, fmtCps, fmtNs, fmtCpu } from "@/components/Sparkline";
+import { formatRelativeTime, formatFullTimestamp, useNow } from "@/lib/time";
 
 type SortKey = "id" | "name" | "type" | "loadedAt" | "runCnt" | "bytesXlated" | "callsPerSec" | "avgLatency" | "cpuFraction";
 type SortDir = "asc" | "desc";
@@ -53,12 +54,14 @@ function ProgramRow({
   maxCallsPerSec,
   tagCount,
   onTagFilter,
+  now,
 }: {
   prog: BpfProgram;
   history?: ProgHistory | null;
   maxCallsPerSec: number;
   tagCount: Map<string, number>;
   onTagFilter: (tag: string) => void;
+  now: number;
 }) {
   const { setSelectedProgram } = useEbpf();
   const color = TYPE_COLORS_MAP[prog.rawType] ?? "#6b7280";
@@ -201,7 +204,9 @@ function ProgramRow({
 
       {/* Loaded */}
       <td className="px-4 py-3 text-xs text-muted-foreground hidden sm:table-cell">
-        {prog.loadedAt ? new Date(prog.loadedAt * 1000).toLocaleTimeString() : "—"}
+        <span title={formatFullTimestamp(prog.loadedAt)}>
+          {formatRelativeTime(prog.loadedAt, now)}
+        </span>
       </td>
     </tr>
   );
@@ -212,6 +217,7 @@ export default function ProgramsView() {
   const [sortKey, setSortKey] = useState<SortKey>("id");
   const [sortDir, setSortDir] = useState<SortDir>("asc");
   const [tagFilter, setTagFilter] = useState<string | null>(null);
+  const now = useNow(30_000); // refresh relative times every 30s
 
   // Compute tag frequency map across ALL programs (not just filtered)
   const tagCount = useMemo(() => {
@@ -387,6 +393,7 @@ export default function ProgramsView() {
                   maxCallsPerSec={maxCallsPerSec}
                   tagCount={tagCount}
                   onTagFilter={setTagFilter}
+                  now={now}
                 />
               ))}
               {sorted.length === 0 && (

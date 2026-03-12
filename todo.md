@@ -406,3 +406,14 @@
 - [x] Use resolveBpftoolPath() in ebpf-dump.ts BPFTOOL constant
 - [x] Improve error message in ebpf-map-dump.ts to suggest setting BPFTOOL_PATH env var
 - [x] 254 tests pass, TS clean
+
+## Feature: Relative-time display for loaded_at
+- [x] Add formatRelativeTime(unixSec) helper: "just now", "5m ago", "2h 15m ago", "3d 7h ago", absolute date for >=7d
+- [x] Add formatFullTimestamp(unixSec) helper for tooltip display
+- [x] Add useNow(intervalMs) hook that ticks every 30s to keep relative times fresh
+- [x] Show relative time in Programs table "Loaded" column with full timestamp as tooltip
+- [x] Show relative time in Program detail panel "Loaded at" row with full timestamp as tooltip
+- [x] Show relative time in Dashboard "Recently Loaded" sidebar list with full timestamp as tooltip
+- [x] Auto-refresh every 30s so the relative time stays current without a page reload
+- [x] 11 unit tests for formatRelativeTime (zero, future, <60s, minutes, exact hours, hours+minutes, exact days, days+hours, >=7d, very old)
+- [x] 265 tests pass, TS clean

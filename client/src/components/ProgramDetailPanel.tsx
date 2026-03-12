@@ -1,4 +1,5 @@
 import React, { useMemo, useState } from "react";
+import { formatRelativeTime, formatFullTimestamp, useNow } from "@/lib/time";
 import { X, Copy, Check, Clock, Cpu, Hash, Tag, Database, Activity, Shield, AlertTriangle, Zap, Timer, BarChart2, Code2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -81,6 +82,7 @@ function formatBytes(bytes: number): string {
   return `${(bytes / 1024).toFixed(1)} KB`;
 }
 
+// Replaced by formatRelativeTime from @/lib/time — kept as alias for any remaining callers
 function formatTimestamp(unix: number): string {
   if (!unix) return "—";
   return new Date(unix * 1000).toLocaleString();
@@ -116,6 +118,7 @@ function ChartTooltip({ active, payload, label, mode }: {
 export function ProgramDetailPanel({ program, history, onClose }: Props) {
   const [showCode, setShowCode] = useState(false);
   const hasHistory = (history?.samples?.length ?? 0) >= 2;
+  const now = useNow(30_000); // refresh relative times every 30s
 
   // Derive chart series
   const { callsSeries, latencySeries, chartData } = useMemo(() => {
@@ -338,7 +341,15 @@ export function ProgramDetailPanel({ program, history, onClose }: Props) {
         <section>
           <h3 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2">Timing</h3>
           <div className="divide-y divide-border/50">
-            <MetaRow icon={Clock} label="Loaded at" value={formatTimestamp(program.loadedAt)} />
+            <MetaRow
+              icon={Clock}
+              label="Loaded at"
+              value={
+                <span title={formatFullTimestamp(program.loadedAt)} className="cursor-default">
+                  {formatRelativeTime(program.loadedAt, now)}
+                </span>
+              }
+            />
             {program.runTimeNs !== undefined && (
               <MetaRow icon={Activity} label="Total run time" value={fmtNs(program.runTimeNs)} mono />
             )}
