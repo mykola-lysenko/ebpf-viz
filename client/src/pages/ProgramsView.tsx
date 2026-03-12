@@ -2,7 +2,7 @@ import React, { useState, useMemo } from "react";
 import { useEbpf } from "@/contexts/EbpfContext";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Activity, SortAsc, SortDesc, Filter, X, Zap } from "lucide-react";
+import { Activity, SortAsc, SortDesc, Filter, X, Zap, AlertTriangle } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { BpfProgram, ProgHistory } from "../../../shared/ebpf-types";
 import Sparkline, { samplesToCallsPerSec, fmtCps, fmtNs, fmtCpu } from "@/components/Sparkline";
@@ -217,6 +217,7 @@ export default function ProgramsView() {
   const [sortKey, setSortKey] = useState<SortKey>("id");
   const [sortDir, setSortDir] = useState<SortDir>("asc");
   const [tagFilter, setTagFilter] = useState<string | null>(null);
+  const [orphanFilter, setOrphanFilter] = useState(false);
   const now = useNow(30_000); // refresh relative times every 30s
 
   // Compute tag frequency map across ALL programs (not just filtered)
@@ -227,11 +228,13 @@ export default function ProgramsView() {
     return m;
   }, [snapshot]);
 
-  // Programs visible after type filter + tag filter
+  // Programs visible after type filter + tag filter + orphan filter
   const visiblePrograms = useMemo(() => {
-    if (!tagFilter) return filteredPrograms;
-    return filteredPrograms.filter(p => p.tag === tagFilter);
-  }, [filteredPrograms, tagFilter]);
+    let progs = filteredPrograms;
+    if (tagFilter) progs = progs.filter(p => p.tag === tagFilter);
+    if (orphanFilter) progs = progs.filter(p => p.orphaned);
+    return progs;
+  }, [filteredPrograms, tagFilter, orphanFilter]);
 
   // Compute max calls/sec across all visible programs for bar scaling
   // NOTE: must be before any early returns to satisfy Rules of Hooks
@@ -248,6 +251,7 @@ export default function ProgramsView() {
 
   const allTypes = Array.from(new Set(snapshot.programs.map(p => p.rawType))).sort();
   const sharedTagCount = Array.from(tagCount.values()).filter(c => c > 1).length;
+  const orphanedCount = snapshot.programs.filter(p => p.orphaned).length;
 
   const handleSort = (key: SortKey) => {
     if (sortKey === key) setSortDir(d => d === "asc" ? "desc" : "asc");
@@ -301,7 +305,7 @@ export default function ProgramsView() {
             All Programs
           </h1>
           <p className="text-sm text-muted-foreground mt-0.5">
-            {sorted.length} of {snapshot.stats.total} programs{tagFilter && ` · filtered to tag ${tagFilter.slice(0, 8)}…`}
+            {sorted.length} of {snapshot.stats.total} programs{tagFilter && ` · filtered to tag ${tagFilter.slice(0, 8)}…`}{orphanFilter && " · orphaned only"}
             {statsEnabled && (
               <span className="ml-2 text-cyan-400 text-xs inline-flex items-center gap-1">
                 <Zap size={10} />
@@ -346,6 +350,26 @@ export default function ProgramsView() {
             <X size={11} className="mr-1" />
             Clear
           </Button>
+        )}
+        {orphanedCount > 0 && (
+          <button
+            onClick={() => setOrphanFilter(v => !v)}
+            title={orphanFilter ? "Show all programs" : `Show only orphaned programs (${orphanedCount})`}
+            className="ml-auto inline-flex items-center gap-1.5 text-[11px] font-medium px-2.5 py-0.5 rounded border transition-all"
+            style={orphanFilter ? {
+              color: "#f87171",
+              borderColor: "#f8717160",
+              background: "#f8717115",
+            } : {
+              color: "oklch(0.55 0.01 240)",
+              borderColor: "oklch(0.22 0.015 240)",
+              background: "transparent",
+            }}
+          >
+            <AlertTriangle size={11} />
+            Orphaned only
+            <span className="font-mono opacity-70">({orphanedCount})</span>
+          </button>
         )}
       </div>
       {/* Shared-tag filter indicator */}

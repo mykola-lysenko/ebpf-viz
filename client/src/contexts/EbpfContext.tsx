@@ -89,6 +89,8 @@ export function EbpfProvider({ children }: { children: React.ReactNode }) {
 
   // Manual refresh: trigger an immediate server-side poll via tRPC mutation
   const refreshMutation = trpc.ebpf.refresh.useMutation();
+  // Server-side snapshot parser for raw bpftool format (capture-snapshot.sh output)
+  const parseSnapshotMutation = trpc.ebpf.parseSnapshot.useMutation();
   const refresh = useCallback(() => {
     if (loadedSnapshot) return; // no-op in snapshot mode
     refreshMutation.mutate();
@@ -121,14 +123,22 @@ export function EbpfProvider({ children }: { children: React.ReactNode }) {
     if (obj.snapshot && typeof obj.snapshot === "object") {
       // Format 1: pre-parsed snapshot embedded in the file
       ebpfSnapshot = obj.snapshot as EbpfSnapshot;
-    } else if (obj.raw) {
-      // Format 2: raw bpftool outputs — we can't parse these client-side without
-      // the full server-side buildSnapshot() pipeline. Show a helpful error.
-      throw new Error(
-        "This snapshot was captured with capture-snapshot.sh and contains raw bpftool output.\n" +
-        "To analyse it, upload it to a running eBPF Viz instance (the server will parse it).\n" +
-        "Alternatively, use the Download button in the OS Map tab to get a pre-parsed snapshot."
-      );
+    } else if (obj.raw && typeof obj.raw === "object") {
+      // Format 2: raw bpftool outputs — send to server for parsing via parseSnapshot mutation
+      const rawObj = obj.raw as Record<string, unknown>;
+      ebpfSnapshot = await parseSnapshotMutation.mutateAsync({
+        raw: {
+          progs: (rawObj.progs as unknown[]) ?? [],
+          maps: rawObj.maps as unknown[] | undefined,
+          net: rawObj.net as unknown[] | undefined,
+          cgroups: rawObj.cgroups as unknown[] | undefined,
+        },
+        hostname: obj.hostname as string | undefined,
+        kernelVersion: obj.kernelVersion as string | undefined,
+        bpftoolVersion: obj.bpftoolVersion as string | undefined,
+        capturedAt: obj.capturedAt as string | undefined,
+        timestamp: obj.timestamp as number | undefined,
+      });
     } else {
       throw new Error("Snapshot file is missing the 'snapshot' or 'raw' field.");
     }
@@ -141,7 +151,7 @@ export function EbpfProvider({ children }: { children: React.ReactNode }) {
       hostname: ebpfSnapshot.hostname ?? "unknown",
       kernelVersion: ebpfSnapshot.kernelVersion ?? "unknown",
     });
-  }, []);
+  }, [parseSnapshotMutation]);
 
   const clearSnapshot = useCallback(() => {
     setLoadedSnapshot(null);

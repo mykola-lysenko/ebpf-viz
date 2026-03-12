@@ -14,6 +14,7 @@ import {
   isDemoMode,
 } from "./ebpf-poller";
 import { fetchProgDump } from "./ebpf-dump";
+import { buildSnapshot } from "./ebpf-parser";
 import { buildMockProgDump } from "./ebpf-mock-dump";
 import { dumpMapEntries } from "./ebpf-map-dump";
 import { buildMockMapDump } from "./ebpf-mock-map-dump";
@@ -160,6 +161,43 @@ export const appRouter = router({
           console.error("[progDump] failed for id", input.id, err);
           return null;
         }
+      }),
+
+    // ── Snapshot parsing ───────────────────────────────────────────────────
+    /**
+     * Parse a raw bpftool snapshot (from capture-snapshot.sh) into a full EbpfSnapshot.
+     * Accepts the raw JSON envelope with { raw: { progs, maps, net, cgroups }, hostname, kernelVersion, ... }
+     * and runs the full server-side buildSnapshot() pipeline.
+     */
+    parseSnapshot: publicProcedure
+      .input(z.object({
+        raw: z.object({
+          progs: z.array(z.any()),
+          maps: z.array(z.any()).optional(),
+          net: z.array(z.any()).optional(),
+          cgroups: z.array(z.any()).optional(),
+        }),
+        hostname: z.string().optional(),
+        kernelVersion: z.string().optional(),
+        bpftoolVersion: z.string().optional(),
+        capturedAt: z.string().optional(),
+        timestamp: z.number().optional(),
+      }))
+      .mutation(({ input }) => {
+        const snap = buildSnapshot(
+          input.raw.progs,
+          input.raw.net ?? [],
+          input.raw.cgroups ?? [],
+          {
+            hostname: input.hostname ?? "unknown",
+            kernelVersion: input.kernelVersion ?? "unknown",
+            bpftoolVersion: input.bpftoolVersion ?? "unknown",
+            demoMode: false,
+          }
+        );
+        // Preserve the original capture timestamp if provided
+        if (input.timestamp) snap.timestamp = input.timestamp;
+        return snap;
       }),
 
     // ── Runtime statistics ─────────────────────────────────────────────────

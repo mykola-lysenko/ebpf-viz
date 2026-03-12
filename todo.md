@@ -484,3 +484,33 @@
 - [x] Show last-known owning process comm + PID (from pids field) or "owning process PID unknown" if pids is empty
 - [x] Add "View in Programs →" link to the Programs table
 - [x] 265 tests pass, TS clean
+
+## Bug: Snapshot upload fails for raw bpftool format (capture-snapshot.sh output)
+- [x] Add trpc.ebpf.parseSnapshot mutation: accepts raw bpftool JSON, returns EbpfSnapshot
+- [x] Update loadSnapshot in EbpfContext: detect raw format, call parseSnapshot.mutateAsync
+- [x] Show loading toast while server parses the snapshot
+- [x] Test with real snapshot from devvm — SUCCESS (215 progs, 12 cgroup roots, 1 iface, 256KB response)
+
+## Feature: Orphaned-only filter chip in Programs table
+- [x] Add orphanFilter boolean state to ProgramsView
+- [x] visiblePrograms useMemo now chains tagFilter + orphanFilter
+- [x] "Orphaned only (N)" toggle chip appears in the type-filter bar when orphaned programs exist
+- [x] Chip is right-aligned (ml-auto) so it doesn't crowd the type chips
+- [x] Active chip uses red-400 palette to match the orphaned badge colour
+- [x] Subtitle line shows "· orphaned only" when filter is active
+- [x] 265 tests pass, TS clean
+
+## Feature: Cgroup subtree collapse with depth slider in OS Map toolbar
+- [x] Add collapsedChildren?: number to CgroupNodeData interface
+- [x] Add countDescendants() helper in useOsMapLayout
+- [x] layoutCgroupTree() accepts optional maxDepth parameter; prunes nodes deeper than maxDepth
+- [x] buildOsMapLayout() accepts optional maxCgroupDepth parameter; passes to layoutCgroupTree
+- [x] Nodes at the depth limit get collapsedChildren = total hidden descendants
+- [x] useOsMapLayout() accepts optional maxCgroupDepth parameter; passes to buildOsMapLayout
+- [x] OsMapCanvas: maxCgroupDepth state + maxTreeDepth computed from snapshot
+- [x] MapToolbar: depth slider (range input) appears when maxTreeDepth > 0
+- [x] Slider range: 0 to maxTreeDepth; value = maxCgroupDepth ?? maxTreeDepth
+- [x] Slider at max position resets to undefined (show all)
+- [x] Blue X button clears the depth limit when active
+- [x] CgroupNode component: shows "+ N hidden" dashed badge when collapsedChildren > 0
+- [x] 265 tests pass, TS clean

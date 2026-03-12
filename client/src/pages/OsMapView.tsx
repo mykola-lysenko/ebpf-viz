@@ -25,7 +25,7 @@ import { Badge } from "@/components/ui/badge";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import {
   Maximize2, ZoomIn, ZoomOut, Layers, Map as MapIcon,
-  Eye, EyeOff, Info, Cpu, Download
+  Eye, EyeOff, Info, Cpu, Download, X
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { trpc } from "@/lib/trpc";
@@ -77,6 +77,9 @@ function MapToolbar({
   nodeCount,
   progCount,
   onDownload,
+  maxTreeDepth,
+  maxCgroupDepth,
+  onMaxCgroupDepthChange,
 }: {
   zoom: number;
   showLabels: boolean;
@@ -84,6 +87,9 @@ function MapToolbar({
   nodeCount: number;
   progCount: number;
   onDownload: () => void;
+  maxTreeDepth: number;
+  maxCgroupDepth: number | undefined;
+  onMaxCgroupDepthChange: (v: number | undefined) => void;
 }) {
   const { fitView, zoomIn, zoomOut } = useReactFlow();
 
@@ -189,6 +195,66 @@ function MapToolbar({
         </TooltipTrigger>
         <TooltipContent>{showLabels ? "Hide labels" : "Show labels"}</TooltipContent>
       </Tooltip>
+
+      {/* Cgroup depth slider — only shown when tree has depth > 0 */}
+      {maxTreeDepth > 0 && (
+        <>
+          <div style={{ width: 1, height: 16, background: "oklch(0.25 0.01 240)" }} />
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                <span style={{ fontSize: 10, fontFamily: "monospace", color: "oklch(0.55 0.01 240)", whiteSpace: "nowrap" }}>
+                  Cgroup depth:
+                </span>
+                <input
+                  type="range"
+                  min={0}
+                  max={maxTreeDepth}
+                  value={maxCgroupDepth ?? maxTreeDepth}
+                  onChange={e => {
+                    const v = parseInt(e.target.value, 10);
+                    onMaxCgroupDepthChange(v >= maxTreeDepth ? undefined : v);
+                  }}
+                  style={{
+                    width: 72,
+                    accentColor: "#3b82f6",
+                    cursor: "pointer",
+                  }}
+                />
+                <span style={{
+                  fontSize: 10,
+                  fontFamily: "monospace",
+                  color: maxCgroupDepth !== undefined ? "#3b82f6" : "oklch(0.55 0.01 240)",
+                  minWidth: 14,
+                  textAlign: "right",
+                }}>
+                  {maxCgroupDepth ?? maxTreeDepth}
+                </span>
+                {maxCgroupDepth !== undefined && (
+                  <button
+                    onClick={() => onMaxCgroupDepthChange(undefined)}
+                    title="Show all depths"
+                    style={{
+                      width: 16, height: 16, borderRadius: 4,
+                      background: "#3b82f620",
+                      border: "1px solid #3b82f640",
+                      display: "flex", alignItems: "center", justifyContent: "center",
+                      cursor: "pointer", color: "#3b82f6", padding: 0,
+                    }}
+                  >
+                    <X size={9} />
+                  </button>
+                )}
+              </div>
+            </TooltipTrigger>
+            <TooltipContent>
+              {maxCgroupDepth !== undefined
+                ? `Showing cgroup subtrees up to depth ${maxCgroupDepth} — drag to expand`
+                : `Showing full cgroup tree (depth ${maxTreeDepth}) — drag to collapse subtrees`}
+            </TooltipContent>
+          </Tooltip>
+        </>
+      )}
 
       <div style={{ width: 1, height: 16, background: "oklch(0.25 0.01 240)" }} />
 
@@ -296,7 +362,9 @@ function OsMapCanvas() {
   const maps = useMemo(() => mapsQuery.data ?? [], [mapsQuery.data]);
   // zoom must be declared before useOsMapLayout so the LOD can be derived from it
   const [zoom, setZoom] = useState(0.35);
-  const layout = useOsMapLayout(snapshot, maps, zoom);
+  // maxCgroupDepth: undefined = show all; 0 = root only; N = show up to depth N
+  const [maxCgroupDepth, setMaxCgroupDepth] = useState<number | undefined>(undefined);
+  const layout = useOsMapLayout(snapshot, maps, zoom, maxCgroupDepth);
   const { fitView, getViewport } = useReactFlow();
   // Keep a stable ref to fitView so it never appears in useEffect deps
   const fitViewRef = useRef(fitView);
@@ -469,6 +537,18 @@ function OsMapCanvas() {
 
   const progCount = snapshot?.stats.total ?? 0;
 
+  // Compute the maximum cgroup depth in the current snapshot
+  const maxTreeDepth = useMemo(() => {
+    if (!snapshot) return 0;
+    let max = 0;
+    const snap = snapshot;
+    function walk(nodes: typeof snap.cgroupTree) {
+      nodes.forEach(n => { max = Math.max(max, n.depth); walk(n.children); });
+    }
+    walk(snap.cgroupTree);
+    return max;
+  }, [snapshot]);
+
   // Download the full topology snapshot as JSON for performance testing
   const handleDownload = useCallback(() => {
     if (!snapshot) return;
@@ -562,6 +642,9 @@ function OsMapCanvas() {
             nodeCount={nodes.filter(n => !n.type?.includes("Band") && !n.type?.includes("Label")).length}
             progCount={progCount}
             onDownload={handleDownload}
+            maxTreeDepth={maxTreeDepth}
+            maxCgroupDepth={maxCgroupDepth}
+            onMaxCgroupDepthChange={setMaxCgroupDepth}
           />
         </Panel>
 

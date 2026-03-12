@@ -255,8 +255,9 @@ export function ZoneNode({ data, selected }: { data: ZoneNodeData & { lod?: Lod 
 
 export function CgroupNode({ data, selected }: { data: CgroupNodeData & { lod?: Lod }; selected?: boolean }) {
   const lod: Lod = data.lod ?? "compact";
-  const { color, name, path, programs, depth } = data;
+  const { color, name, path, programs, depth, collapsedChildren } = data;
   const hasProgs = programs.length > 0;
+  const isCollapsed = collapsedChildren !== undefined && collapsedChildren > 0;
 
   const displayName = name.length > 28 ? name.slice(0, 26) + "…" : name;
 
@@ -340,6 +341,29 @@ export function CgroupNode({ data, selected }: { data: CgroupNodeData & { lod?: 
               +{programs.length - 3} more
             </span>
           )}
+        </div>
+      )}
+
+      {/* Collapsed subtree indicator */}
+      {isCollapsed && lod !== "minimal" && (
+        <div style={{
+          display: "flex",
+          alignItems: "center",
+          gap: 4,
+          marginTop: 2,
+          padding: "2px 5px",
+          background: `${color}10`,
+          border: `1px dashed ${color}40`,
+          borderRadius: 4,
+        }}>
+          <span style={{ fontSize: 9 }}>+</span>
+          <span style={{
+            fontSize: 9,
+            fontFamily: "monospace",
+            color: `${color}cc`,
+          }}>
+            {collapsedChildren} hidden
+          </span>
         </div>
       )}
     </div>

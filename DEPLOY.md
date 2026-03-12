@@ -184,3 +184,80 @@ standalone/
 ```
 
 The tarball is approximately **2 MB** compressed. No `node_modules` directory is needed on the target server.
+
+---
+
+## Snapshot Workflow: Capture, Transfer, and Visualize
+
+The snapshot workflow lets you capture a point-in-time view of BPF programs from a production server and visualize it on your local machine — without installing the full eBPF Visualizer on the production host.
+
+### How It Works
+
+The three data modes are:
+
+| Mode | Description | When to Use |
+|------|-------------|-------------|
+| **Live** | Polls `bpftool` every 5 seconds via SSE | Running on the target devserver |
+| **Demo** | Synthetic mock data (no `bpftool` needed) | Exploring the UI offline |
+| **Snapshot** | Uploaded JSON file (ephemeral, in-memory) | Inspecting production data locally |
+
+### Step 1 — Capture a Snapshot on the Production Server
+
+Copy `scripts/capture-snapshot.sh` to the production server and run it as root:
+
+```bash
+# On the production server
+sudo bash capture-snapshot.sh
+```
+
+The script requires only `bash` and `bpftool` — no `jq`, Python, or Node.js. It auto-discovers `bpftool` via the `BPFTOOL_PATH` environment variable, `which bpftool`, or common install paths (`/usr/sbin`, `/usr/bin`, `/sbin`).
+
+The script outputs a file named `ebpf-snapshot-<hostname>-<YYYYMMDD-HHMMSS>.json` in the current directory and prints the `scp` command to transfer it:
+
+```
+Snapshot saved to: ebpf-snapshot-myserver-20260312-151100.json
+To transfer: scp ebpf-snapshot-myserver-20260312-151100.json user@laptop:/tmp/
+```
+
+### Step 2 — Transfer the Snapshot to Your Local Machine
+
+```bash
+scp user@myserver:/path/to/ebpf-snapshot-myserver-20260312-151100.json ~/Downloads/
+```
+
+### Step 3 — Load the Snapshot in the UI
+
+1. Open the eBPF Visualizer in your browser.
+2. Click the **Load Snapshot** button (folder icon) in the top-right toolbar.
+3. Select the `.json` file you downloaded.
+4. The UI switches to **Snapshot mode** — a `SNAPSHOT` badge appears in the toolbar with the capture timestamp and hostname.
+
+All views (Dashboard, Programs, Maps, OS Map, Cgroups) render the snapshot data identically to live mode. The snapshot is held in memory and is lost on page reload.
+
+### Step 4 — Clear the Snapshot
+
+Click the **×** button next to the `SNAPSHOT` badge in the toolbar, or the **×** button next to the filename in the sidebar, to return to Live or Demo mode.
+
+### Snapshot File Format
+
+The snapshot file is a JSON object with the following structure:
+
+```json
+{
+  "_ebpfVizSnapshot": true,
+  "capturedAt": "2026-03-12T15:11:00Z",
+  "hostname": "myserver",
+  "kernelVersion": "6.8.0-51-generic",
+  "bpftoolVersion": "7.4.0",
+  "raw": {
+    "progs": [ ... ],
+    "maps":  [ ... ],
+    "net":   [ ... ],
+    "cgroups": [ ... ]
+  }
+}
+```
+
+The `raw` field contains the unprocessed output of `bpftool prog list`, `bpftool map list`, `bpftool net list`, and `bpftool cgroup tree`. The server-side `parseSnapshot` procedure converts this into the full `EbpfSnapshot` model when the file is uploaded.
+
+Snapshots exported via the **Download Topology JSON** button in the OS Map toolbar use the same `_ebpfVizSnapshot: true` marker and can be re-uploaded directly.

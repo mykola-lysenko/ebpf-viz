@@ -111,6 +111,8 @@ export interface CgroupNodeData {
   programs: BpfProgram[];
   hasChildren: boolean;
   color: string;
+  /** When set, this node is a depth-limit boundary and has N hidden subtree nodes */
+  collapsedChildren?: number;
 }
 
 export interface InterfaceNodeData {
@@ -157,17 +159,31 @@ function flattenCgroup(nodes: CgroupNode[]): CgroupNode[] {
   return result;
 }
 
-/** Assign x,y positions to cgroup nodes using a simple tree layout */
+/** Count all descendants (recursively) of a cgroup node */
+function countDescendants(n: CgroupNode): number {
+  let count = 0;
+  function walk(node: CgroupNode) {
+    count += node.children.length;
+    node.children.forEach(walk);
+  }
+  walk(n);
+  return count;
+}
+
+/** Assign x,y positions to cgroup nodes using a simple tree layout.
+ *  maxDepth: if set, nodes deeper than maxDepth are omitted from the layout. */
 function layoutCgroupTree(
   roots: CgroupNode[],
   startX: number,
-  startY: number
+  startY: number,
+  maxDepth?: number
 ): Map<string, { x: number; y: number; w: number; h: number }> {
   const positions = new Map<string, { x: number; y: number; w: number; h: number }>();
 
-  // Group nodes by depth
+  // Group nodes by depth (up to maxDepth)
   const byDepth: CgroupNode[][] = [];
   function collect(n: CgroupNode, depth: number) {
+    if (maxDepth !== undefined && depth > maxDepth) return;
     if (!byDepth[depth]) byDepth[depth] = [];
     byDepth[depth].push(n);
     n.children.forEach(c => collect(c, depth + 1));
@@ -211,7 +227,8 @@ const MAP_CATEGORY_COLORS: Record<string, string> = {
 export function buildOsMapLayout(
   snapshot: EbpfSnapshot,
   maps: BpfMap[] = [],
-  lod: "minimal" | "compact" | "full" = "compact"
+  lod: "minimal" | "compact" | "full" = "compact",
+  maxCgroupDepth?: number
 ): OsMapLayout {
   const nodes: Node[] = [];
   const edges: Edge[] = [];
@@ -272,9 +289,12 @@ export function buildOsMapLayout(
     ? ZONES_SECTION_Y + ZONE_H + 60
     : ZONES_SECTION_Y;
 
-  const cgroupPositions = layoutCgroupTree(snapshot.cgroupTree, cgroupStartX, cgroupStartY);
+  const cgroupPositions = layoutCgroupTree(snapshot.cgroupTree, cgroupStartX, cgroupStartY, maxCgroupDepth);
 
-  const allCgroups = flattenCgroup(snapshot.cgroupTree);
+  // Only flatten up to maxCgroupDepth
+  const allCgroups = maxCgroupDepth !== undefined
+    ? flattenCgroup(snapshot.cgroupTree).filter(n => n.depth <= maxCgroupDepth)
+    : flattenCgroup(snapshot.cgroupTree);
 
   // Compute cgroup section total height
   let cgroupMaxY = cgroupStartY;
@@ -285,6 +305,10 @@ export function buildOsMapLayout(
   allCgroups.forEach(cgNode => {
     const pos = cgroupPositions.get(cgNode.path);
     if (!pos) return;
+
+    // Count hidden descendants when this node is at the depth limit
+    const isAtLimit = maxCgroupDepth !== undefined && cgNode.depth === maxCgroupDepth && cgNode.children.length > 0;
+    const collapsedChildren = isAtLimit ? countDescendants(cgNode) + cgNode.children.length : undefined;
 
     nodes.push({
       id: `cgroup-${cgNode.path}`,
@@ -297,6 +321,7 @@ export function buildOsMapLayout(
         programs: cgNode.programs,
         hasChildren: cgNode.children.length > 0,
         color: "#3b82f6",
+        collapsedChildren,
       } satisfies CgroupNodeData,
       style: { width: CGROUP_NODE_W, height: CGROUP_NODE_H },
     });
@@ -604,14 +629,15 @@ export function zoomToLod(zoom: number): "minimal" | "compact" | "full" {
 export function useOsMapLayout(
   snapshot: EbpfSnapshot | null,
   maps: BpfMap[] = [],
-  zoom = 0.35
+  zoom = 0.35,
+  maxCgroupDepth?: number
 ): OsMapLayout {
   const lod = zoomToLod(zoom);
   return useMemo(() => {
     if (!snapshot) return { nodes: [], edges: [], totalHeight: 1200, totalWidth: CANVAS_W };
-    return buildOsMapLayout(snapshot, maps, lod);
+    return buildOsMapLayout(snapshot, maps, lod, maxCgroupDepth);
     // lod is derived from zoom but we only want to recompute when the LOD tier
     // changes (not on every sub-threshold zoom tick), so depend on lod not zoom.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [snapshot, maps, lod]);
+  }, [snapshot, maps, lod, maxCgroupDepth]);
 }
