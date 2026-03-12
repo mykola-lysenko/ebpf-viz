@@ -44,9 +44,8 @@ type InterpretMode =
   | "ipv4" | "ipv6"
   | "mac"
   | "port"
-  | "u32le"   // 4-byte little-endian unsigned (array index)
-  | "u32be"   // 4-byte big-endian unsigned
-  | "u64le"   // 8-byte little-endian unsigned (counters, cgroup inode IDs)
+  | "u32"     // 4-byte unsigned integer (LE by default, BE via toggle)
+  | "u64"     // 8-byte unsigned integer (LE by default, BE via toggle)
   | "cgroupid" // 8-byte cgroup inode + 4-byte attach type
   | "proto";  // 1-byte IP protocol number
 
@@ -285,22 +284,27 @@ function bytesToProtocol(bytes: Uint8Array): string {
 
 /**
  * Apply an interpretation mode to a raw hex string.
- * Returns the interpreted string, or the original hex if interpretation is "raw"
- * or if the hex string is not a plain byte sequence (e.g. BTF-decoded JSON).
+ * @param hex  Space-separated hex byte string.
+ * @param mode Interpretation mode.
+ * @param bigEndian When true, reverse the byte array before interpreting
+ *                  (applies to u32, u64, ipv4, port, mac — byte-order-sensitive types).
  */
-function interpretHex(hex: string, mode: InterpretMode): string {
+function interpretHex(hex: string, mode: InterpretMode, bigEndian = false): string {
   if (mode === "raw" || !hex || hex === "—") return hex;
   // Don't try to interpret BTF-decoded JSON or decimal strings
   if (hex.startsWith("{") || hex.startsWith("[")) return hex;
-  const bytes = parseHexBytes(hex);
+  let bytes = parseHexBytes(hex);
   if (!bytes) return hex;
+  // Reverse byte order for BE interpretation of byte-order-sensitive types
+  if (bigEndian && (mode === "u32" || mode === "u64" || mode === "ipv4" || mode === "port" || mode === "mac")) {
+    bytes = bytes.slice().reverse();
+  }
   if (mode === "ipv4") return bytesToIPv4(bytes);
   if (mode === "ipv6") return bytesToIPv6(bytes);
   if (mode === "mac") return bytesToMAC(bytes);
-  if (mode === "port") return bytesToPort(bytes);
-  if (mode === "u32le") return bytesToU32LE(bytes);
-  if (mode === "u32be") return bytesToU32BE(bytes);
-  if (mode === "u64le") return bytesToU64LE(bytes);
+  if (mode === "port") return bytesToPort(bigEndian ? bytes : bytes); // already reversed above
+  if (mode === "u32") return bytesToU32LE(bytes);  // after optional reversal, always read as LE
+  if (mode === "u64") return bytesToU64LE(bytes);  // after optional reversal, always read as LE
   if (mode === "cgroupid") return bytesToCgroupId(bytes);
   if (mode === "proto") return bytesToProtocol(bytes);
   return hex;
@@ -312,7 +316,7 @@ function interpretHex(hex: string, mode: InterpretMode): string {
  */
 function defaultKeyInterpret(mapType: string): InterpretMode {
   const t = mapType.toLowerCase();
-  if (t === "array" || t === "percpu_array") return "u32le";
+  if (t === "array" || t === "percpu_array") return "u32";
   if (t === "cgroup_storage" || t === "percpu_cgroup_storage" || t === "cgrp_storage") return "cgroupid";
   return "raw";
 }
@@ -321,7 +325,7 @@ function defaultKeyInterpret(mapType: string): InterpretMode {
 
 const VALID_MODES = new Set<string>([
   "raw", "ipv4", "ipv6", "mac", "port",
-  "u32le", "u32be", "u64le", "cgroupid", "proto",
+  "u32", "u64", "cgroupid", "proto",
 ]);
 
 function storageKey(mapType: string): string {
@@ -398,17 +402,16 @@ function CopyButton({ text }: { text: string }) {
 
 // ─── Interpret toggle ──────────────────────────────────────────────────────────
 
-const INTERPRET_OPTIONS: { value: InterpretMode; label: string; title: string; requiredBytes: number | number[] | null }[] = [
-  { value: "raw",      label: "Raw",      title: "Show raw bytes as-is",                                                                          requiredBytes: null },
-  { value: "ipv4",     label: "IPv4",     title: "Interpret bytes as IPv4 address (4 bytes, network order)",                                     requiredBytes: 4 },
-  { value: "ipv6",     label: "IPv6",     title: "Interpret bytes as IPv6 address (16 bytes, network order)",                                    requiredBytes: 16 },
-  { value: "mac",      label: "MAC",      title: "Interpret bytes as MAC/hardware address (6 bytes, aa:bb:cc:dd:ee:ff)",                         requiredBytes: 6 },
-  { value: "port",     label: "Port",     title: "Interpret bytes as TCP/UDP port number (2 bytes, big-endian)",                                 requiredBytes: 2 },
-  { value: "u32le",    label: "U32 LE",   title: "Interpret 4 bytes as unsigned 32-bit integer (little-endian) — array index, CPU ID",           requiredBytes: 4 },
-  { value: "u32be",    label: "U32 BE",   title: "Interpret 4 bytes as unsigned 32-bit integer (big-endian)",                                   requiredBytes: 4 },
-  { value: "u64le",    label: "U64 LE",   title: "Interpret 8 bytes as unsigned 64-bit integer (little-endian) — counters, timestamps",          requiredBytes: 8 },
-  { value: "cgroupid", label: "Cgroup",   title: "Interpret 8 or 12 bytes as cgroup storage key (inode ID + attach type)",                      requiredBytes: [8, 12] },
-  { value: "proto",    label: "Proto",    title: "Interpret 1 byte as IP protocol number (6=TCP, 17=UDP, 1=ICMP, …)",                           requiredBytes: 1 },
+const INTERPRET_OPTIONS: { value: InterpretMode; label: string; title: string; requiredBytes: number | number[] | null; beToggleable: boolean }[] = [
+  { value: "raw",      label: "Raw",    title: "Show raw bytes as-is",                                                                        requiredBytes: null,    beToggleable: false },
+  { value: "ipv4",     label: "IPv4",   title: "Interpret bytes as IPv4 address (4 bytes)",                                                  requiredBytes: 4,       beToggleable: true  },
+  { value: "ipv6",     label: "IPv6",   title: "Interpret bytes as IPv6 address (16 bytes, network order)",                                  requiredBytes: 16,      beToggleable: false },
+  { value: "mac",      label: "MAC",    title: "Interpret bytes as MAC/hardware address (6 bytes)",                                          requiredBytes: 6,       beToggleable: true  },
+  { value: "port",     label: "Port",   title: "Interpret bytes as TCP/UDP port number (2 bytes)",                                           requiredBytes: 2,       beToggleable: true  },
+  { value: "u32",      label: "U32",    title: "Interpret 4 bytes as unsigned 32-bit integer (LE by default; toggle BE for big-endian)",     requiredBytes: 4,       beToggleable: true  },
+  { value: "u64",      label: "U64",    title: "Interpret 8 bytes as unsigned 64-bit integer (LE by default; toggle BE for big-endian)",     requiredBytes: 8,       beToggleable: true  },
+  { value: "cgroupid", label: "Cgroup", title: "Interpret 8 or 12 bytes as cgroup storage key (inode ID + attach type)",                    requiredBytes: [8, 12], beToggleable: false },
+  { value: "proto",    label: "Proto",  title: "Interpret 1 byte as IP protocol number (6=TCP, 17=UDP, 1=ICMP, …)",                         requiredBytes: 1,       beToggleable: false },
 ];
 
 /**
@@ -427,12 +430,16 @@ function compatibleOptions(byteLen: number | undefined) {
 function InterpretToggle({
   label,
   value,
+  bigEndian,
+  onChangeBE,
   onChange,
   container,
   byteLen,
 }: {
   label: string;
   value: InterpretMode;
+  bigEndian: boolean;
+  onChangeBE: (be: boolean) => void;
   onChange: (v: InterpretMode) => void;
   container?: HTMLElement | null;
   byteLen?: number;
@@ -441,12 +448,14 @@ function InterpretToggle({
   const selected = options.find(o => o.value === value) ?? options[0];
   // If the current value is no longer in the compatible set, reset to raw
   const effectiveValue = options.some(o => o.value === value) ? value : "raw";
+  // Show BE toggle only when the selected mode supports byte-order flipping
+  const showBeToggle = (options.find(o => o.value === effectiveValue)?.beToggleable) ?? false;
   return (
     <div className="flex items-center gap-2">
       <span className="text-[10px] text-white/30 uppercase tracking-wider font-medium whitespace-nowrap">{label}</span>
       <Select value={effectiveValue} onValueChange={(v) => onChange(v as InterpretMode)}>
         <SelectTrigger
-          className="h-7 min-w-[110px] max-w-[140px] bg-black/30 border-white/10 text-xs font-mono text-white/70 hover:border-white/25 focus:ring-0 focus:ring-offset-0"
+          className="h-7 min-w-[100px] max-w-[130px] bg-black/30 border-white/10 text-xs font-mono text-white/70 hover:border-white/25 focus:ring-0 focus:ring-offset-0"
           title={selected?.title}
         >
           <SelectValue />
@@ -467,6 +476,21 @@ function InterpretToggle({
           ))}
         </SelectContent>
       </Select>
+      {showBeToggle && (
+        <button
+          onClick={() => onChangeBE(!bigEndian)}
+          title={bigEndian ? "Big-endian (click to switch to little-endian)" : "Little-endian (click to switch to big-endian)"}
+          className={`
+            h-7 px-2 rounded-md text-[10px] font-mono font-semibold border transition-all
+            ${bigEndian
+              ? "bg-amber-500/20 border-amber-500/40 text-amber-300 hover:bg-amber-500/30"
+              : "bg-black/30 border-white/10 text-white/30 hover:border-white/25 hover:text-white/50"
+            }
+          `}
+        >
+          BE
+        </button>
+      )}
     </div>
   );
 }
@@ -478,12 +502,16 @@ function EntryRow({
   mode,
   keyInterpret,
   valInterpret,
+  keyBE,
+  valBE,
   index,
 }: {
   entry: MapEntry;
   mode: DisplayMode;
   keyInterpret: InterpretMode;
   valInterpret: InterpretMode;
+  keyBE: boolean;
+  valBE: boolean;
   index: number;
 }) {
   const [expanded, setExpanded] = useState(false);
@@ -494,12 +522,12 @@ function EntryRow({
 
   // Apply interpretation only to hex-mode strings (not BTF/decimal)
   const keyText = (mode === "hex" || (!entry.keyBtf && mode !== "decimal"))
-    ? interpretHex(rawKeyText, keyInterpret)
+    ? interpretHex(rawKeyText, keyInterpret, keyBE)
     : rawKeyText;
   const valText = entry.valueError
     ? rawValText
     : (mode === "hex" || (!entry.valueBtf && mode !== "decimal"))
-      ? interpretHex(rawValText, valInterpret)
+      ? interpretHex(rawValText, valInterpret, valBE)
       : rawValText;
 
   // Detect interpretation error markers for styling
@@ -574,7 +602,7 @@ function EntryRow({
               {entry.perCpuValues!.map(cv => {
                 const rawPerCpu = mode === "decimal" && cv.decimal !== null ? cv.decimal : cv.hex;
                 const interpretedPerCpu = mode === "hex"
-                  ? interpretHex(cv.hex, valInterpret)
+                  ? interpretHex(cv.hex, valInterpret, valBE)
                   : rawPerCpu;
                 return (
                   <div
@@ -622,6 +650,8 @@ export function MapEntriesModal({
     const compat = compatibleOptions(valueBytes);
     return compat.some(o => o.value === preferred) ? preferred : "raw";
   });
+  const [keyBE, setKeyBE] = useState(false);
+  const [valBE, setValBE] = useState(false);
   const [page, setPage] = useState(0);
 
   // Persist interpretation preferences whenever they change
@@ -763,8 +793,8 @@ export function MapEntriesModal({
           {/* Row 2: interpret toggles (only shown in hex mode) */}
           {!interpretDisabled && (
             <div className="flex items-center gap-6 flex-wrap">
-              <InterpretToggle label="Key as" value={keyInterpret} onChange={handleKeyInterpretChange} container={containerRef.current} byteLen={keyBytes} />
-               <InterpretToggle label="Value as" value={valInterpret} onChange={handleValInterpretChange} container={containerRef.current} byteLen={valueBytes} />
+              <InterpretToggle label="Key as" value={keyInterpret} bigEndian={keyBE} onChangeBE={setKeyBE} onChange={handleKeyInterpretChange} container={containerRef.current} byteLen={keyBytes} />
+              <InterpretToggle label="Value as" value={valInterpret} bigEndian={valBE} onChangeBE={setValBE} onChange={handleValInterpretChange} container={containerRef.current} byteLen={valueBytes} />
             </div>
           )}
         </div>
@@ -842,6 +872,8 @@ export function MapEntriesModal({
                       mode={effectiveMode}
                       keyInterpret={keyInterpret}
                       valInterpret={valInterpret}
+                      keyBE={keyBE}
+                      valBE={valBE}
                       index={page * PAGE_SIZE + i}
                     />
                   ))}

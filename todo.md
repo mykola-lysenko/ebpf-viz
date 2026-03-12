@@ -365,3 +365,12 @@
 - [x] Root cause: button used text-[var(--accent)]/80 which resolved to near-black on the dark card background
 - [x] Fix: replaced with explicit cyan-300/cyan-500 palette (bg-cyan-500/15 border-cyan-500/40 text-cyan-300) on both the card button and the detail panel CTA
 - [x] Verified in browser: button clearly visible with cyan text and border on all map cards
+
+## Feature: Simplify U32 LE/BE to U32 + BE toggle; U64 LE to U64
+- [x] Merged u32le + u32be → u32 (LE default); merged u64le → u64 (LE default)
+- [x] Added keyBE / valBE boolean state per column
+- [x] Added small "BE" toggle button next to each dropdown (amber when active, dim when inactive)
+- [x] BE toggle only shown for byte-order-sensitive modes (u32, u64, ipv4, port, mac)
+- [x] interpretHex reverses byte array when bigEndian=true before passing to helper
+- [x] EntryRow and per-CPU expansion both receive and respect keyBE/valBE
+- [x] 242 tests pass, TS clean, standalone rebuilt
