@@ -524,3 +524,9 @@
 - [x] Disable Dump Entries button in snapshot mode with clear tooltip
 - [x] Fix Download Topology JSON to include maps for round-trip re-upload support
 - [x] Verified: parseSnapshot returns { snapshot: { programs: 1 }, maps: 3 } with correct cross-refs
+
+## Bug: Maps tab still broken in snapshot mode (needs real end-to-end test)
+- [x] Find real snapshot file and test parseSnapshot endpoint directly — 1452 maps returned
+- [x] Verify maps count > 0 in server response — CONFIRMED
+- [x] Trace why maps don't appear in Maps tab — traced via Playwright browser test
+- [x] VERIFIED FIXED via Playwright: setSnapshotMaps(1452), maps=1452, Maps tab shows 1452 maps

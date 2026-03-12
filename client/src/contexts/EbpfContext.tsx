@@ -85,7 +85,6 @@ export function EbpfProvider({ children }: { children: React.ReactNode }) {
   // ── Active snapshot: loaded snapshot takes priority over live stream ───────
   const snapshot = loadedSnapshot ?? liveSnapshot ?? null;
   const maps: BpfMap[] = loadedSnapshot ? snapshotMaps : liveMaps;
-
   const isLoading = loadedSnapshot === null && liveSnapshot === null && streamStatus === "connecting";
 
   // Manual refresh: trigger an immediate server-side poll via tRPC mutation

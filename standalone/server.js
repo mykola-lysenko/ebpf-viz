@@ -79943,7 +79943,8 @@ var appRouter = router({
         }
       );
       if (input.timestamp) snap.timestamp = input.timestamp;
-      return snap;
+      const maps = parseMaps(input.raw.maps ?? [], snap.programs);
+      return { snapshot: snap, maps };
     }),
     // ── Runtime statistics ─────────────────────────────────────────────────
     /**
