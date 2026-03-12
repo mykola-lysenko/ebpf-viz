@@ -187,8 +187,8 @@ function MapCard({
         <button
           onClick={onDumpEntries}
           className="w-full flex items-center justify-center gap-1.5 py-1.5 rounded-lg text-xs font-medium transition-all
-            bg-[var(--accent)]/10 border border-[var(--accent)]/30 text-[var(--accent)]/80
-            hover:bg-[var(--accent)]/20 hover:border-[var(--accent)]/50 hover:text-[var(--accent)]"
+            bg-cyan-500/15 border border-cyan-500/40 text-cyan-300
+            hover:bg-cyan-500/25 hover:border-cyan-400/60 hover:text-cyan-200"
         >
           <List className="w-3 h-3" />
           Dump Entries
@@ -271,7 +271,7 @@ function MapDetailPanel({
           className={`
             w-full flex items-center justify-center gap-2 py-2.5 rounded-xl text-sm font-medium transition-all
             ${canDump
-              ? "bg-[var(--accent)]/15 border border-[var(--accent)]/40 text-[var(--accent)] hover:bg-[var(--accent)]/25 hover:border-[var(--accent)]/60"
+              ? "bg-cyan-500/15 border border-cyan-500/40 text-cyan-300 hover:bg-cyan-500/25 hover:border-cyan-400/60 hover:text-cyan-200"
               : "bg-white/5 border border-white/10 text-white/25 cursor-not-allowed"
             }
           `}
