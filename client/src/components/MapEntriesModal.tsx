@@ -28,6 +28,13 @@ import {
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -409,27 +416,30 @@ function InterpretToggle({
   value: InterpretMode;
   onChange: (v: InterpretMode) => void;
 }) {
+  const selected = INTERPRET_OPTIONS.find(o => o.value === value);
   return (
-    <div className="flex items-center gap-1.5">
-      <span className="text-[10px] text-white/30 uppercase tracking-wider font-medium">{label}</span>
-      <div className="flex items-center gap-0.5 bg-black/30 rounded-md p-0.5 border border-white/10">
-        {INTERPRET_OPTIONS.map(opt => (
-          <button
-            key={opt.value}
-            onClick={() => onChange(opt.value)}
-            title={opt.title}
-            className={`
-              px-2 py-0.5 rounded text-[11px] font-mono transition-all
-              ${value === opt.value
-                ? "bg-emerald-500/20 text-emerald-400 border border-emerald-500/40"
-                : "text-white/35 hover:text-white/60"
-              }
-            `}
-          >
-            {opt.label}
-          </button>
-        ))}
-      </div>
+    <div className="flex items-center gap-2">
+      <span className="text-[10px] text-white/30 uppercase tracking-wider font-medium whitespace-nowrap">{label}</span>
+      <Select value={value} onValueChange={(v) => onChange(v as InterpretMode)}>
+        <SelectTrigger
+          className="h-7 min-w-[110px] max-w-[140px] bg-black/30 border-white/10 text-xs font-mono text-white/70 hover:border-white/25 focus:ring-0 focus:ring-offset-0"
+          title={selected?.title}
+        >
+          <SelectValue />
+        </SelectTrigger>
+        <SelectContent className="bg-[#0f1117] border-white/10 text-white">
+          {INTERPRET_OPTIONS.map(opt => (
+            <SelectItem
+              key={opt.value}
+              value={opt.value}
+              className="text-xs font-mono text-white/70 hover:text-white focus:text-white focus:bg-white/10 cursor-pointer"
+              title={opt.title}
+            >
+              {opt.label}
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
     </div>
   );
 }
@@ -705,7 +715,7 @@ export function MapEntriesModal({
 
           {/* Row 2: interpret toggles (only shown in hex mode) */}
           {!interpretDisabled && (
-            <div className="flex items-center gap-4">
+            <div className="flex items-center gap-6 flex-wrap">
               <InterpretToggle label="Key as" value={keyInterpret} onChange={handleKeyInterpretChange} />
               <InterpretToggle label="Value as" value={valInterpret} onChange={handleValInterpretChange} />
             </div>

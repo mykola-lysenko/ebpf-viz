@@ -339,3 +339,10 @@
 - [x] exec_events (perf_event_array) and sock_redirect (sockmap) marked unsupported
 - [x] Wire via isDemoMode() export from ebpf-poller.ts
 - [x] 242 tests pass, standalone bundle verified: 10 maps with entries, 2 unsupported
+
+## Feature: Replace InterpretToggle pill buttons with Select dropdowns
+- [x] Replace InterpretToggle component with shadcn Select in MapEntriesModal
+- [x] Key as and Value as each get a compact labeled Select dropdown (h-7, min-w-[110px])
+- [x] All 10 options, auto-detect defaults, and localStorage persistence fully preserved
+- [x] Row uses flex-wrap so both dropdowns stack gracefully on narrow modals
+- [x] 242 tests pass, TS clean
