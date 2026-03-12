@@ -26,6 +26,7 @@ import {
   ChevronDown,
   ChevronUp,
   Search,
+  Download,
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -36,6 +37,13 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import { toast } from "sonner";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -485,6 +493,68 @@ function CopyButton({ text }: { text: string }) {
   );
 }
 
+// ─── Export helpers ───────────────────────────────────────────────────────────
+
+function csvEscape(s: string): string {
+  // Wrap in quotes if the value contains a comma, quote, or newline
+  if (s.includes(",") || s.includes('"') || s.includes("\n")) {
+    return '"' + s.replace(/"/g, '""') + '"';
+  }
+  return s;
+}
+
+function triggerDownload(content: string, filename: string, mimeType: string) {
+  const blob = new Blob([content], { type: mimeType });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+
+function exportAsJSON(
+  entries: MapEntry[],
+  mapName: string,
+  effectiveMode: DisplayMode,
+  keyInterpret: InterpretMode,
+  valInterpret: InterpretMode,
+  keyBE: boolean,
+  valBE: boolean,
+) {
+  const rows = entries.map(e => ({
+    index: e.index,
+    keyHex: e.keyHex ?? null,
+    key: entryKeyText(e, effectiveMode, keyInterpret, keyBE),
+    valueHex: e.valueHex ?? null,
+    value: entryValText(e, effectiveMode, valInterpret, valBE),
+  }));
+  const json = JSON.stringify(rows, null, 2);
+  triggerDownload(json, `${mapName}-entries.json`, "application/json");
+  toast.success(`Exported ${entries.length} entr${entries.length === 1 ? "y" : "ies"} as JSON`);
+}
+
+function exportAsCSV(
+  entries: MapEntry[],
+  mapName: string,
+  effectiveMode: DisplayMode,
+  keyInterpret: InterpretMode,
+  valInterpret: InterpretMode,
+  keyBE: boolean,
+  valBE: boolean,
+) {
+  const lines = ["Index,Key,Value"];
+  for (const e of entries) {
+    const k = csvEscape(entryKeyText(e, effectiveMode, keyInterpret, keyBE));
+    const v = csvEscape(entryValText(e, effectiveMode, valInterpret, valBE));
+    lines.push(`${e.index},${k},${v}`);
+  }
+  triggerDownload(lines.join("\n"), `${mapName}-entries.csv`, "text/csv");
+  toast.success(`Exported ${entries.length} entr${entries.length === 1 ? "y" : "ies"} as CSV`);
+}
+
 // ─── Interpret toggle ──────────────────────────────────────────────────────────
 
 const INTERPRET_OPTIONS: { value: InterpretMode; label: string; title: string; requiredBytes: number | number[] | null; beToggleable: boolean }[] = [
@@ -847,6 +917,31 @@ export function MapEntriesModal({
           </div>
 
           <div className="flex items-center gap-2">
+            {/* Export dropdown — only shown when entries are available */}
+            {filteredEntries.length > 0 && (
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <button
+                    className="p-1.5 rounded-lg hover:bg-white/10 text-white/40 hover:text-white transition-colors"
+                    title={`Export ${filteredEntries.length} entr${filteredEntries.length === 1 ? "y" : "ies"}`}
+                  >
+                    <Download className="w-4 h-4" />
+                  </button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end" className="min-w-[160px]">
+                  <DropdownMenuItem
+                    onClick={() => exportAsJSON(filteredEntries, mapName, effectiveMode, keyInterpret, valInterpret, keyBE, valBE)}
+                  >
+                    Export as JSON
+                  </DropdownMenuItem>
+                  <DropdownMenuItem
+                    onClick={() => exportAsCSV(filteredEntries, mapName, effectiveMode, keyInterpret, valInterpret, keyBE, valBE)}
+                  >
+                    Export as CSV
+                  </DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
+            )}
             {/* Refresh */}
             <button
               onClick={() => refetch()}

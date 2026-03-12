@@ -417,3 +417,14 @@
 - [x] Auto-refresh every 30s so the relative time stays current without a page reload
 - [x] 11 unit tests for formatRelativeTime (zero, future, <60s, minutes, exact hours, hours+minutes, exact days, days+hours, >=7d, very old)
 - [x] 265 tests pass, TS clean
+
+## Feature: Map entry export (JSON / CSV)
+- [x] Add Export button (Download icon) in the map entries modal header toolbar
+- [x] Dropdown with two options: "Export as JSON" and "Export as CSV"
+- [x] Export uses the currently filtered entries (respects search filter)
+- [x] JSON export: array of { index, keyHex, key, valueHex, value } objects using interpreted text
+- [x] CSV export: header row "Index,Key,Value" + one row per entry with proper CSV escaping
+- [x] File is named <mapName>-entries.json / <mapName>-entries.csv
+- [x] Toast notification on successful export
+- [x] Export button hidden when no entries are loaded
+- [x] 265 tests pass, TS clean
