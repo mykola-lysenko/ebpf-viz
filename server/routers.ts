@@ -110,8 +110,33 @@ export const appRouter = router({
         const bpftoolPath = getBpftoolPath();
         return dumpMapEntries(input.id, mapType, mapName, bpftoolPath);
       }),
+    // ── Map entry counts ──────────────────────────────────────────────────────────────────
+    /**
+     * Returns the live entry count for every dumpable map in one batch call.
+     * Unsupported map types (ringbuf, perf_event_array, etc.) are marked with
+     * unsupported: true and count: null.
+     */
+    mapEntryCounts: publicProcedure.query(async () => {
+      const maps = getLatestMaps();
+      const bpftoolPath = getBpftoolPath();
+      const demo = isDemoMode();
 
-    // ── Code Inspector ─────────────────────────────────────────────────────
+      const results = await Promise.all(
+        maps.map(async (map) => {
+          const result = demo
+            ? buildMockMapDump(map.id, map.rawType, map.name)
+            : await dumpMapEntries(map.id, map.rawType, map.name, bpftoolPath);
+          return {
+            mapId: map.id,
+            count: result.unsupported || result.error ? null : result.totalEntries,
+            unsupported: result.unsupported ?? false,
+          };
+        }),
+      );
+      return results;
+    }),
+
+    // ── Code Inspector ──────────────────────────────────────────────────────────────────
     /**
      * Fetch the full code dump for a single BPF program:
      * xlated bytecode, CFG DOT, jited assembly (when available),

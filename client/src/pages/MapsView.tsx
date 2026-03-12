@@ -1,4 +1,5 @@
 import { useState, useMemo } from "react";
+import { trpc } from "@/lib/trpc";
 import { useEbpf } from "@/contexts/EbpfContext";
 import { MAP_TYPE_META } from "../../../shared/ebpf-types";
 import type { BpfMap } from "../../../shared/ebpf-types";
@@ -68,12 +69,14 @@ function MapCard({
   selected,
   onClick,
   onDumpEntries,
+  entryCount,
 }: {
   map: BpfMap;
   programs: Array<{ id: number; name: string; color: string; rawType: string }>;
   selected: boolean;
   onClick: () => void;
   onDumpEntries: (e: React.MouseEvent) => void;
+  entryCount: number | null | undefined; // null = unsupported, undefined = loading
 }) {
   const meta = MAP_TYPE_META[map.type] ?? MAP_TYPE_META["unknown"]!;
   const isShared = map.usedByProgIds.length > 1;
@@ -132,7 +135,18 @@ function MapCard({
         </div>
         <div className="bg-black/30 rounded-lg p-2 text-center">
           <div className="text-[10px] text-white/40 uppercase tracking-wide mb-0.5">Entries</div>
-          <div className="text-xs font-mono text-white/80">{formatEntries(map.maxEntries)}</div>
+          {entryCount !== undefined ? (
+            <div className="flex flex-col items-center gap-0.5">
+              <div className="text-xs font-mono text-white/80">
+                {entryCount === null ? "—" : formatEntries(entryCount)}
+              </div>
+              {entryCount !== null && (
+                <div className="text-[9px] text-cyan-400/60 font-mono">live</div>
+              )}
+            </div>
+          ) : (
+            <div className="text-xs font-mono text-white/30">{formatEntries(map.maxEntries)}</div>
+          )}
         </div>
       </div>
 
@@ -400,6 +414,19 @@ export default function MapsView() {
   // Maps are delivered live via the SSE stream (EbpfContext.maps).
   // They update on every poller tick — no tRPC polling needed.
 
+  // Fetch live entry counts for all maps in one batch call (refreshed every 30s)
+  const { data: entryCounts } = trpc.ebpf.mapEntryCounts.useQuery(undefined, {
+    staleTime: 30_000,
+    refetchInterval: 30_000,
+  });
+  const entryCountMap = useMemo(() => {
+    const m = new Map<number, number | null>();
+    if (entryCounts) {
+      for (const { mapId, count } of entryCounts) m.set(mapId, count);
+    }
+    return m;
+  }, [entryCounts]);
+
   const [search, setSearch] = useState("");
   const [category, setCategory] = useState<string>("all");
   const [selectedMap, setSelectedMap] = useState<BpfMap | null>(null);
@@ -542,6 +569,7 @@ export default function MapsView() {
                     e.stopPropagation();
                     setDumpMap(map);
                   }}
+                  entryCount={entryCountMap.size > 0 ? entryCountMap.get(map.id) : undefined}
                 />
               ))}
             </div>

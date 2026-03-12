@@ -428,3 +428,13 @@
 - [x] Toast notification on successful export
 - [x] Export button hidden when no entries are loaded
 - [x] 265 tests pass, TS clean
+
+## Feature: Live entry count badge on Maps list
+- [x] Add mapEntryCounts tRPC query: returns { mapId, count, unsupported }[] for all maps in one batch call
+- [x] Server: reuses dumpMapEntries / buildMockMapDump and returns totalEntries per map
+- [x] Maps view: Entries stat cell shows live count with a subtle "live" label in cyan
+- [x] Badge styled subtly (muted, small font) — doesn't compete with map type badge
+- [x] Counts fetched in background (staleTime 30s, refetchInterval 30s) — no loading spinner on the map row
+- [x] Unsupported map types show "—" instead of a count
+- [x] While counts are loading, falls back to static maxEntries in muted white
+- [x] 265 tests pass, TS clean
