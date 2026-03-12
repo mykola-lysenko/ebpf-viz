@@ -124,6 +124,148 @@ describe("bytesToIPv4", () => {
   });
 });
 
+// ── Replicated new helpers ───────────────────────────────────────────────────
+
+function readU32LE(bytes: Uint8Array): number {
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  return view.getUint32(0, true);
+}
+function readU32BE(bytes: Uint8Array): number {
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  return view.getUint32(0, false);
+}
+function readU64LEAsString(bytes: Uint8Array): string {
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  const lo = view.getUint32(0, true);
+  const hi = view.getUint32(4, true);
+  const hiStr = (hi * 4294967296).toFixed(0);
+  const total = BigInt(hiStr) + BigInt(lo);
+  return total.toString();
+}
+function bytesToU32LE(bytes: Uint8Array): string {
+  if (bytes.length !== 4) return `(need 4B, got ${bytes.length}B)`;
+  return String(readU32LE(bytes));
+}
+function bytesToU32BE(bytes: Uint8Array): string {
+  if (bytes.length !== 4) return `(need 4B, got ${bytes.length}B)`;
+  return String(readU32BE(bytes));
+}
+function bytesToU64LE(bytes: Uint8Array): string {
+  if (bytes.length !== 8) return `(need 8B, got ${bytes.length}B)`;
+  return readU64LEAsString(bytes);
+}
+const CGROUP_ATTACH_TYPES: Record<number, string> = {
+  0: "ingress", 1: "egress", 2: "sock_create", 3: "sock_ops",
+  4: "device", 7: "inet_connect",
+};
+function bytesToCgroupId(bytes: Uint8Array): string {
+  if (bytes.length === 8) return `inode: ${readU64LEAsString(bytes)}`;
+  if (bytes.length === 12) {
+    const inode = readU64LEAsString(bytes.slice(0, 8));
+    const attachType = readU32LE(bytes.slice(8, 12));
+    const attachName = CGROUP_ATTACH_TYPES[attachType] ?? `type_${attachType}`;
+    return `inode: ${inode}, attach: ${attachName}`;
+  }
+  return `(need 8B or 12B, got ${bytes.length}B)`;
+}
+const IP_PROTOCOLS: Record<number, string> = {
+  1: "ICMP", 6: "TCP", 17: "UDP", 58: "IPv6-ICMP",
+};
+function bytesToProtocol(bytes: Uint8Array): string {
+  if (bytes.length !== 1) return `(need 1B, got ${bytes.length}B)`;
+  const proto = bytes[0];
+  const name = IP_PROTOCOLS[proto];
+  return name ? `${proto} (${name})` : `${proto}`;
+}
+
+// ── Tests for new helpers ─────────────────────────────────────────────────────
+
+describe("bytesToU32LE", () => {
+  it("converts 4 LE bytes to decimal", () => {
+    // 0x00000000 = 0
+    expect(bytesToU32LE(new Uint8Array([0, 0, 0, 0]))).toBe("0");
+    // 0x01000000 in LE = 1
+    expect(bytesToU32LE(new Uint8Array([1, 0, 0, 0]))).toBe("1");
+    // 0x0a000000 in LE = 10
+    expect(bytesToU32LE(new Uint8Array([10, 0, 0, 0]))).toBe("10");
+    // 0xffffffff = 4294967295
+    expect(bytesToU32LE(new Uint8Array([0xff, 0xff, 0xff, 0xff]))).toBe("4294967295");
+  });
+  it("returns error for wrong byte count", () => {
+    expect(bytesToU32LE(new Uint8Array(2))).toBe("(need 4B, got 2B)");
+    expect(bytesToU32LE(new Uint8Array(8))).toBe("(need 4B, got 8B)");
+  });
+});
+
+describe("bytesToU32BE", () => {
+  it("converts 4 BE bytes to decimal", () => {
+    expect(bytesToU32BE(new Uint8Array([0, 0, 0, 0]))).toBe("0");
+    // 0x00000001 in BE = 1
+    expect(bytesToU32BE(new Uint8Array([0, 0, 0, 1]))).toBe("1");
+    // 0x0000000a in BE = 10
+    expect(bytesToU32BE(new Uint8Array([0, 0, 0, 10]))).toBe("10");
+    // 0xffffffff = 4294967295
+    expect(bytesToU32BE(new Uint8Array([0xff, 0xff, 0xff, 0xff]))).toBe("4294967295");
+  });
+  it("returns error for wrong byte count", () => {
+    expect(bytesToU32BE(new Uint8Array(2))).toBe("(need 4B, got 2B)");
+  });
+});
+
+describe("bytesToU64LE", () => {
+  it("converts 8 LE bytes to decimal", () => {
+    expect(bytesToU64LE(new Uint8Array(8))).toBe("0");
+    // value = 1
+    expect(bytesToU64LE(new Uint8Array([1, 0, 0, 0, 0, 0, 0, 0]))).toBe("1");
+    // value = 2^32 = 4294967296
+    expect(bytesToU64LE(new Uint8Array([0, 0, 0, 0, 1, 0, 0, 0]))).toBe("4294967296");
+    // value = 2^32 + 1 = 4294967297
+    expect(bytesToU64LE(new Uint8Array([1, 0, 0, 0, 1, 0, 0, 0]))).toBe("4294967297");
+  });
+  it("returns error for wrong byte count", () => {
+    expect(bytesToU64LE(new Uint8Array(4))).toBe("(need 8B, got 4B)");
+  });
+});
+
+describe("bytesToCgroupId", () => {
+  it("handles 8-byte inode-only key", () => {
+    const bytes = new Uint8Array([42, 0, 0, 0, 0, 0, 0, 0]);
+    expect(bytesToCgroupId(bytes)).toBe("inode: 42");
+  });
+  it("handles 12-byte key with attach type", () => {
+    const bytes = new Uint8Array(12);
+    bytes[0] = 100; // inode = 100
+    bytes[8] = 1;   // attach type = 1 (egress)
+    expect(bytesToCgroupId(bytes)).toBe("inode: 100, attach: egress");
+  });
+  it("handles unknown attach type", () => {
+    const bytes = new Uint8Array(12);
+    bytes[0] = 1;
+    bytes[8] = 99; // unknown
+    expect(bytesToCgroupId(bytes)).toBe("inode: 1, attach: type_99");
+  });
+  it("returns error for wrong byte count", () => {
+    expect(bytesToCgroupId(new Uint8Array(4))).toBe("(need 8B or 12B, got 4B)");
+  });
+});
+
+describe("bytesToProtocol", () => {
+  it("converts 1 byte to protocol name", () => {
+    expect(bytesToProtocol(new Uint8Array([6]))).toBe("6 (TCP)");
+    expect(bytesToProtocol(new Uint8Array([17]))).toBe("17 (UDP)");
+    expect(bytesToProtocol(new Uint8Array([1]))).toBe("1 (ICMP)");
+    expect(bytesToProtocol(new Uint8Array([58]))).toBe("58 (IPv6-ICMP)");
+  });
+  it("returns plain decimal for unknown protocols", () => {
+    expect(bytesToProtocol(new Uint8Array([200]))).toBe("200");
+    expect(bytesToProtocol(new Uint8Array([0]))).toBe("0");
+  });
+  it("returns error for wrong byte count", () => {
+    expect(bytesToProtocol(new Uint8Array(2))).toBe("(need 1B, got 2B)");
+    expect(bytesToProtocol(new Uint8Array(4))).toBe("(need 1B, got 4B)");
+  });
+});
+
 describe("bytesToPort", () => {
   it("converts 2 big-endian bytes to decimal port", () => {
     expect(bytesToPort(new Uint8Array([0x00, 0x50]))).toBe("80 (http)");

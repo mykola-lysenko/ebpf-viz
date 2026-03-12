@@ -306,3 +306,13 @@
 - [x] Extend InterpretMode to include "port"
 - [x] Add Port option to INTERPRET_OPTIONS in MapEntriesModal
 - [x] 5 new unit tests for bytesToPort — all 229 tests pass
+
+## Feature: Extended map value interpretations (Index, U64 LE, U32 BE, Cgroup ID, Protocol)
+- [x] Add bytesToU32LE() — 4 bytes LE → decimal (array index, CPU ID)
+- [x] Add bytesToU64LE() — 8 bytes LE → decimal (counters, timestamps, cgroup inode IDs); uses DataView split to avoid float precision loss
+- [x] Add bytesToU32BE() — 4 bytes BE → decimal
+- [x] Add bytesToCgroupId() — 8-byte inode-only or 12-byte inode+attach_type; 21 attach type names
+- [x] Add bytesToProtocol() — 1 byte → "N (name)" for 23 well-known IP protocols
+- [x] Extend InterpretMode (9 options total) and INTERPRET_OPTIONS with all five
+- [x] Auto-detect best default: array/percpu_array → key=U32 LE; cgroup_storage/percpu_cgroup_storage/cgrp_storage → key=Cgroup
+- [x] 13 new unit tests — all 242 tests pass

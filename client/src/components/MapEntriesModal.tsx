@@ -3,7 +3,8 @@
  * Full-screen modal that shows the entries of a BPF map by calling
  * trpc.ebpf.mapDump.  Supports:
  *  - Hex / Decimal / BTF display modes for keys and values
- *  - Raw / IPv4 / IPv6 value interpretation (independent for key and value)
+ *  - Raw / IPv4 / IPv6 / MAC / Port / Index / U32BE / U64LE / CgroupID / Protocol interpretation
+ *  - Auto-detection of best default interpretation based on map type
  *  - Pagination (50 rows per page)
  *  - Copy-to-clipboard for individual cells
  *  - Per-CPU value expansion
@@ -31,7 +32,16 @@ import { Button } from "@/components/ui/button";
 // ─── Types ────────────────────────────────────────────────────────────────────
 
 type DisplayMode = "hex" | "decimal" | "btf";
-type InterpretMode = "raw" | "ipv4" | "ipv6" | "mac" | "port";
+type InterpretMode =
+  | "raw"
+  | "ipv4" | "ipv6"
+  | "mac"
+  | "port"
+  | "u32le"   // 4-byte little-endian unsigned (array index)
+  | "u32be"   // 4-byte big-endian unsigned
+  | "u64le"   // 8-byte little-endian unsigned (counters, cgroup inode IDs)
+  | "cgroupid" // 8-byte cgroup inode + 4-byte attach type
+  | "proto";  // 1-byte IP protocol number
 
 interface MapEntriesModalProps {
   mapId: number;
@@ -162,6 +172,106 @@ function bytesToMAC(bytes: Uint8Array): string {
     .join(":");
 }
 
+/** IP protocol numbers → name */
+const IP_PROTOCOLS: Record<number, string> = {
+  0: "HOPOPT", 1: "ICMP", 2: "IGMP", 4: "IPv4",
+  6: "TCP", 8: "EGP", 9: "IGP", 17: "UDP",
+  33: "DCCP", 41: "IPv6", 43: "IPv6-Route", 44: "IPv6-Frag",
+  47: "GRE", 50: "ESP", 51: "AH", 58: "IPv6-ICMP",
+  89: "OSPF", 103: "PIM", 112: "VRRP", 115: "L2TP",
+  132: "SCTP", 136: "UDPLite", 137: "MPLS-in-IP",
+};
+
+/** BPF cgroup attach types → short name */
+const CGROUP_ATTACH_TYPES: Record<number, string> = {
+  0: "ingress", 1: "egress", 2: "sock_create", 3: "sock_ops",
+  4: "device", 5: "inet4_bind", 6: "inet6_bind",
+  7: "inet_connect", 8: "inet_post_bind4", 9: "inet_post_bind6",
+  10: "inet4_getpeername", 11: "inet6_getpeername",
+  12: "inet4_getsockname", 13: "inet6_getsockname",
+  14: "udp4_sendmsg", 15: "udp6_sendmsg",
+  16: "udp4_recvmsg", 17: "udp6_recvmsg",
+  18: "getsockopt", 19: "setsockopt",
+  20: "sk_lookup",
+};
+
+/**
+ * Read a 32-bit little-endian unsigned integer from exactly 4 bytes.
+ * Uses DataView to avoid BigInt (compatible with ES2017 target).
+ */
+function readU32LE(bytes: Uint8Array): number {
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  return view.getUint32(0, true /* little-endian */);
+}
+
+/**
+ * Read a 32-bit big-endian unsigned integer from exactly 4 bytes.
+ */
+function readU32BE(bytes: Uint8Array): number {
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  return view.getUint32(0, false /* big-endian */);
+}
+
+/**
+ * Read a 64-bit little-endian unsigned integer from exactly 8 bytes.
+ * JavaScript numbers lose precision above 2^53, so we split into two 32-bit
+ * halves and combine as a decimal string to preserve all digits.
+ */
+function readU64LEAsString(bytes: Uint8Array): string {
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  const lo = view.getUint32(0, true);
+  const hi = view.getUint32(4, true);
+  // Combine: value = hi * 2^32 + lo
+  // Use string arithmetic to avoid floating-point precision loss
+  const hiStr = (hi * 4294967296).toFixed(0); // hi * 2^32 as integer string
+  const total = BigInt(hiStr) + BigInt(lo);
+  return total.toString();
+}
+
+/** 4-byte little-endian → decimal (array index, CPU ID, etc.) */
+function bytesToU32LE(bytes: Uint8Array): string {
+  if (bytes.length !== 4) return `(need 4B, got ${bytes.length}B)`;
+  return String(readU32LE(bytes));
+}
+
+/** 4-byte big-endian → decimal */
+function bytesToU32BE(bytes: Uint8Array): string {
+  if (bytes.length !== 4) return `(need 4B, got ${bytes.length}B)`;
+  return String(readU32BE(bytes));
+}
+
+/** 8-byte little-endian → decimal (counters, cgroup inode IDs, timestamps) */
+function bytesToU64LE(bytes: Uint8Array): string {
+  if (bytes.length !== 8) return `(need 8B, got ${bytes.length}B)`;
+  return readU64LEAsString(bytes);
+}
+
+/**
+ * Cgroup storage key: 8-byte inode ID (LE) + 4-byte attach type (LE).
+ * Total 12 bytes. Returns "inode: N, attach: T".
+ */
+function bytesToCgroupId(bytes: Uint8Array): string {
+  if (bytes.length === 8) {
+    // Some maps use just the 8-byte inode ID
+    return `inode: ${readU64LEAsString(bytes)}`;
+  }
+  if (bytes.length === 12) {
+    const inode = readU64LEAsString(bytes.slice(0, 8));
+    const attachType = readU32LE(bytes.slice(8, 12));
+    const attachName = CGROUP_ATTACH_TYPES[attachType] ?? `type_${attachType}`;
+    return `inode: ${inode}, attach: ${attachName}`;
+  }
+  return `(need 8B or 12B, got ${bytes.length}B)`;
+}
+
+/** 1-byte IP protocol number → "N (name)" */
+function bytesToProtocol(bytes: Uint8Array): string {
+  if (bytes.length !== 1) return `(need 1B, got ${bytes.length}B)`;
+  const proto = bytes[0];
+  const name = IP_PROTOCOLS[proto];
+  return name ? `${proto} (${name})` : `${proto}`;
+}
+
 /**
  * Apply an interpretation mode to a raw hex string.
  * Returns the interpreted string, or the original hex if interpretation is "raw"
@@ -177,7 +287,23 @@ function interpretHex(hex: string, mode: InterpretMode): string {
   if (mode === "ipv6") return bytesToIPv6(bytes);
   if (mode === "mac") return bytesToMAC(bytes);
   if (mode === "port") return bytesToPort(bytes);
+  if (mode === "u32le") return bytesToU32LE(bytes);
+  if (mode === "u32be") return bytesToU32BE(bytes);
+  if (mode === "u64le") return bytesToU64LE(bytes);
+  if (mode === "cgroupid") return bytesToCgroupId(bytes);
+  if (mode === "proto") return bytesToProtocol(bytes);
   return hex;
+}
+
+/**
+ * Auto-detect the best default key interpretation based on map type.
+ * Returns "raw" when no specific interpretation is warranted.
+ */
+function defaultKeyInterpret(mapType: string): InterpretMode {
+  const t = mapType.toLowerCase();
+  if (t === "array" || t === "percpu_array") return "u32le";
+  if (t === "cgroup_storage" || t === "percpu_cgroup_storage" || t === "cgrp_storage") return "cgroupid";
+  return "raw";
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -224,11 +350,16 @@ function CopyButton({ text }: { text: string }) {
 // ─── Interpret toggle ──────────────────────────────────────────────────────────
 
 const INTERPRET_OPTIONS: { value: InterpretMode; label: string; title: string }[] = [
-  { value: "raw",  label: "Raw",  title: "Show raw bytes as-is" },
-  { value: "ipv4", label: "IPv4", title: "Interpret bytes as IPv4 address (4 bytes, network order)" },
-  { value: "ipv6", label: "IPv6", title: "Interpret bytes as IPv6 address (16 bytes, network order)" },
-  { value: "mac",  label: "MAC",  title: "Interpret bytes as MAC/hardware address (6 bytes, aa:bb:cc:dd:ee:ff)" },
-  { value: "port", label: "Port", title: "Interpret bytes as TCP/UDP port number (2 bytes, big-endian)" },
+  { value: "raw",      label: "Raw",      title: "Show raw bytes as-is" },
+  { value: "ipv4",     label: "IPv4",     title: "Interpret bytes as IPv4 address (4 bytes, network order)" },
+  { value: "ipv6",     label: "IPv6",     title: "Interpret bytes as IPv6 address (16 bytes, network order)" },
+  { value: "mac",      label: "MAC",      title: "Interpret bytes as MAC/hardware address (6 bytes, aa:bb:cc:dd:ee:ff)" },
+  { value: "port",     label: "Port",     title: "Interpret bytes as TCP/UDP port number (2 bytes, big-endian)" },
+  { value: "u32le",    label: "U32 LE",   title: "Interpret 4 bytes as unsigned 32-bit integer (little-endian) — array index, CPU ID" },
+  { value: "u32be",    label: "U32 BE",   title: "Interpret 4 bytes as unsigned 32-bit integer (big-endian)" },
+  { value: "u64le",    label: "U64 LE",   title: "Interpret 8 bytes as unsigned 64-bit integer (little-endian) — counters, timestamps, cgroup inode IDs" },
+  { value: "cgroupid", label: "Cgroup",   title: "Interpret 8 or 12 bytes as cgroup storage key (inode ID + attach type)" },
+  { value: "proto",    label: "Proto",    title: "Interpret 1 byte as IP protocol number (6=TCP, 17=UDP, 1=ICMP, …)" },
 ];
 
 function InterpretToggle({
@@ -400,7 +531,7 @@ export function MapEntriesModal({
   onClose,
 }: MapEntriesModalProps) {
   const [mode, setMode] = useState<DisplayMode>("hex");
-  const [keyInterpret, setKeyInterpret] = useState<InterpretMode>("raw");
+  const [keyInterpret, setKeyInterpret] = useState<InterpretMode>(() => defaultKeyInterpret(mapType));
   const [valInterpret, setValInterpret] = useState<InterpretMode>("raw");
   const [page, setPage] = useState(0);
 
