@@ -472,17 +472,20 @@ function OsMapCanvas() {
   // Download the full topology snapshot as JSON for performance testing
   const handleDownload = useCallback(() => {
     if (!snapshot) return;
+    // Produce a file that is directly re-uploadable via "Load Snapshot" in the UI.
+    // The _ebpfVizSnapshot flag tells the loader this is a pre-parsed snapshot
+    // (not a raw capture-snapshot.sh output), so it can be used as-is.
     const payload = {
-      exportedAt: new Date().toISOString(),
+      _ebpfVizSnapshot: true,
+      _version: 1,
+      capturedAt: new Date().toISOString(),
+      timestamp: snapshot.timestamp,
       hostname: snapshot.hostname ?? "unknown",
       kernelVersion: snapshot.kernelVersion ?? "unknown",
+      bpftoolVersion: snapshot.bpftoolVersion ?? "unknown",
+      demoMode: snapshot.demoMode,
+      // Full parsed snapshot — can be rendered directly without server-side processing
       snapshot,
-      layout: {
-        nodeCount: nodes.length,
-        edgeCount: edges.length,
-        nodes: nodes.map(n => ({ id: n.id, type: n.type, position: n.position, width: n.width, height: n.height })),
-        edges: edges.map(e => ({ id: e.id, source: e.source, target: e.target, type: e.type })),
-      },
     };
     const json = JSON.stringify(payload, null, 2);
     const blob = new Blob([json], { type: "application/json" });
@@ -490,12 +493,12 @@ function OsMapCanvas() {
     const a = document.createElement("a");
     const ts = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
     a.href = url;
-    a.download = `ebpf-topology-${snapshot.hostname ?? "host"}-${ts}.json`;
+    a.download = `ebpf-snapshot-${snapshot.hostname ?? "host"}-${ts}.json`;
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
     URL.revokeObjectURL(url);
-  }, [snapshot, nodes, edges]);
+  }, [snapshot]);
 
   return (
     <div style={{ width: "100%", height: "100%", position: "relative" }}>

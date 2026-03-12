@@ -458,3 +458,23 @@
 - [x] Install .git/hooks/pre-commit that runs build-standalone.sh before every commit
 - [x] Hook stages the updated ebpf-viz-standalone.tar.gz automatically
 - [x] Verified: build succeeds, produces 2.1 MB tarball (2526 modules, 6s build)
+
+## Feature: BPF Snapshot workflow (capture / upload / render)
+- [x] capture-snapshot.sh: self-contained bash script, bpftool only (no jq/node/python)
+- [x] Script auto-discovers bpftool (BPFTOOL_PATH env, which, common paths)
+- [x] Script outputs ebpf-snapshot-<hostname>-<timestamp>.json with _ebpfVizSnapshot:true marker
+- [x] Script prints scp instructions after capture
+- [x] Extend topology download (OS Map) to export full EbpfSnapshot with _ebpfVizSnapshot:true marker
+- [x] Renamed download file to ebpf-snapshot-<host>-<ts>.json (directly re-uploadable)
+- [x] Add "Load Snapshot" button in the app header (FolderOpen icon, accepts .json)
+- [x] Add AppMode type ("live" | "demo" | "snapshot") to EbpfContext
+- [x] Add loadSnapshot(file) and clearSnapshot() to EbpfContext
+- [x] Add snapshotMeta (filename, capturedAt, hostname, kernelVersion) to EbpfContext
+- [x] Loaded snapshot takes priority over live SSE stream
+- [x] Mode indicator in sidebar: Camera icon + filename + XCircle clear button in snapshot mode
+- [x] Mode indicator in TopBar: SNAPSHOT badge with filename + X clear button
+- [x] Capture time shown in TopBar instead of live time in snapshot mode
+- [x] Refresh button disabled in snapshot mode
+- [x] Snapshot is ephemeral (in-memory only, lost on refresh)
+- [x] All existing views work transparently in snapshot mode (snapshot replaces live data)
+- [x] 265 tests pass, TS clean

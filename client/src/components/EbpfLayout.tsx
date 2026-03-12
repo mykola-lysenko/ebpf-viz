@@ -1,10 +1,10 @@
-import { useState } from "react";
+import { useState, useRef, useCallback } from "react";
 import { Link, useLocation } from "wouter";
 import {
   Cpu, Network, FolderTree, List, Settings,
   LayoutDashboard, RefreshCw, Wifi, WifiOff,
   ChevronLeft, ChevronRight, Search, X, Map, Database,
-  Radio
+  Radio, Upload, FolderOpen, Camera, XCircle
 } from "lucide-react";
 import { EbpfProvider, useEbpf } from "@/contexts/EbpfContext";
 import type { StreamStatus } from "@/hooks/useEbpfStream";
@@ -13,6 +13,7 @@ import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 
 const NAV_ITEMS = [
@@ -51,7 +52,7 @@ function StreamStatusDot({ status }: { status: StreamStatus }) {
 
 function Sidebar({ collapsed, onToggle }: { collapsed: boolean; onToggle: () => void }) {
   const [location] = useLocation();
-  const { snapshot, streamStatus, refresh, isLoading, demoMode } = useEbpf();
+  const { snapshot, streamStatus, refresh, isLoading, demoMode, appMode, snapshotMeta, clearSnapshot } = useEbpf();
 
   return (
     <aside
@@ -82,14 +83,41 @@ function Sidebar({ collapsed, onToggle }: { collapsed: boolean; onToggle: () => 
       {/* Status bar */}
       {!collapsed && (
         <div className="px-3 py-2 border-b border-border">
-          <div className="flex items-center justify-between">
-            <StreamStatusDot status={streamStatus} />
-            {demoMode && (
-              <Badge variant="outline" className="text-[10px] px-1.5 py-0 border-amber-500/50 text-amber-400">
-                DEMO
-              </Badge>
-            )}
-          </div>
+          {appMode === "snapshot" ? (
+            <div>
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <Camera size={12} className="text-violet-400 shrink-0" />
+                  <span className="text-xs text-violet-400">Snapshot</span>
+                </div>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <button
+                      onClick={clearSnapshot}
+                      className="text-muted-foreground hover:text-foreground transition-colors"
+                    >
+                      <XCircle size={13} />
+                    </button>
+                  </TooltipTrigger>
+                  <TooltipContent side="right">Clear snapshot — return to live mode</TooltipContent>
+                </Tooltip>
+              </div>
+              {snapshotMeta && (
+                <div className="text-[10px] text-muted-foreground mt-1 font-mono truncate" title={snapshotMeta.filename}>
+                  {snapshotMeta.filename}
+                </div>
+              )}
+            </div>
+          ) : (
+            <div className="flex items-center justify-between">
+              <StreamStatusDot status={streamStatus} />
+              {demoMode && (
+                <Badge variant="outline" className="text-[10px] px-1.5 py-0 border-amber-500/50 text-amber-400">
+                  DEMO
+                </Badge>
+              )}
+            </div>
+          )}
           {snapshot && (
             <div className="text-xs text-muted-foreground mt-1 font-mono">
               {snapshot.stats.total} programs · {snapshot.kernelVersion}
@@ -144,12 +172,14 @@ function Sidebar({ collapsed, onToggle }: { collapsed: boolean; onToggle: () => 
               size="icon"
               className="w-8 h-8 text-muted-foreground hover:text-foreground"
               onClick={refresh}
-              disabled={isLoading}
+              disabled={isLoading || appMode === "snapshot"}
             >
               <RefreshCw size={14} className={cn(isLoading && "animate-spin")} />
             </Button>
           </TooltipTrigger>
-          <TooltipContent side={collapsed ? "right" : "top"}>Force refresh</TooltipContent>
+          <TooltipContent side={collapsed ? "right" : "top"}>
+            {appMode === "snapshot" ? "Refresh disabled in snapshot mode" : "Force refresh"}
+          </TooltipContent>
         </Tooltip>
 
         <Button
@@ -166,7 +196,29 @@ function Sidebar({ collapsed, onToggle }: { collapsed: boolean; onToggle: () => 
 }
 
 function TopBar() {
-  const { searchQuery, setSearchQuery, snapshot, demoMode, streamStatus } = useEbpf();
+  const { searchQuery, setSearchQuery, snapshot, demoMode, streamStatus, appMode, snapshotMeta, loadSnapshot, clearSnapshot } = useEbpf();
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const [isLoading, setIsLoading] = useState(false);
+
+  const handleFileChange = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setIsLoading(true);
+    try {
+      await loadSnapshot(file);
+      toast.success(`Snapshot loaded: ${file.name}`, {
+        description: `${snapshot?.stats.total ?? "?"} programs captured`,
+      });
+    } catch (err) {
+      toast.error("Failed to load snapshot", {
+        description: err instanceof Error ? err.message : "Unknown error",
+      });
+    } finally {
+      setIsLoading(false);
+      // Reset so the same file can be re-selected
+      if (fileInputRef.current) fileInputRef.current.value = "";
+    }
+  }, [loadSnapshot, snapshot]);
 
   const statusIcon = {
     live:         <Wifi size={14} />,
@@ -211,33 +263,99 @@ function TopBar() {
       </div>
 
       <div className="flex items-center gap-3 ml-auto">
-        {demoMode && (
+        {/* Mode badges */}
+        {appMode === "snapshot" && (
+          <div className="flex items-center gap-1.5">
+            <Badge variant="outline" className="border-violet-500/50 text-violet-400 text-xs gap-1">
+              <Camera size={10} />
+              SNAPSHOT
+            </Badge>
+            {snapshotMeta && (
+              <span className="text-[10px] text-muted-foreground font-mono hidden md:block max-w-[160px] truncate" title={snapshotMeta.filename}>
+                {snapshotMeta.filename}
+              </span>
+            )}
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <button
+                  onClick={clearSnapshot}
+                  className="text-muted-foreground hover:text-foreground transition-colors"
+                >
+                  <X size={13} />
+                </button>
+              </TooltipTrigger>
+              <TooltipContent>Clear snapshot — return to live mode</TooltipContent>
+            </Tooltip>
+          </div>
+        )}
+        {appMode === "demo" && (
           <Badge variant="outline" className="border-amber-500/50 text-amber-400 text-xs">
             DEMO MODE
           </Badge>
         )}
 
+        {/* Snapshot timestamp or live time */}
         {snapshot && (
           <span className="text-xs text-muted-foreground font-mono hidden sm:block">
-            {new Date(snapshot.timestamp).toLocaleTimeString()}
+            {appMode === "snapshot" && snapshotMeta
+              ? new Date(snapshotMeta.capturedAt).toLocaleString()
+              : new Date(snapshot.timestamp).toLocaleTimeString()}
           </span>
         )}
 
+        {/* Load Snapshot button */}
         <Tooltip>
           <TooltipTrigger asChild>
-            <div className={cn("flex items-center gap-1.5 px-2 py-1 rounded text-xs", statusColor)}>
-              {statusIcon}
-              <span className="hidden sm:inline">{statusLabel}</span>
-            </div>
+            <Button
+              variant="ghost"
+              size="sm"
+              className={cn(
+                "h-8 gap-1.5 text-xs",
+                appMode === "snapshot"
+                  ? "text-violet-400 hover:text-violet-300"
+                  : "text-muted-foreground hover:text-foreground"
+              )}
+              onClick={() => fileInputRef.current?.click()}
+              disabled={isLoading}
+            >
+              {isLoading ? (
+                <RefreshCw size={13} className="animate-spin" />
+              ) : (
+                <FolderOpen size={13} />
+              )}
+              <span className="hidden sm:inline">Load Snapshot</span>
+            </Button>
           </TooltipTrigger>
           <TooltipContent>
-            {streamStatus === "live"
-              ? "Receiving live updates via SSE"
-              : streamStatus === "offline"
-              ? "Connection lost — check server"
-              : "Establishing SSE connection…"}
+            Load a snapshot JSON file (from OS Map download or capture-snapshot.sh)
           </TooltipContent>
         </Tooltip>
+        <input
+          ref={fileInputRef}
+          type="file"
+          accept=".json,application/json"
+          className="hidden"
+          onChange={handleFileChange}
+        />
+
+        {/* Stream status (hidden in snapshot mode) */}
+        {appMode !== "snapshot" && (
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <div className={cn("flex items-center gap-1.5 px-2 py-1 rounded text-xs", statusColor)}>
+                {statusIcon}
+                <span className="hidden sm:inline">{statusLabel}</span>
+              </div>
+            </TooltipTrigger>
+            <TooltipContent>
+              {streamStatus === "live"
+                ? "Receiving live updates via SSE"
+                : streamStatus === "offline"
+                ? "Connection lost — check server"
+                : "Establishing SSE connection…"}
+            </TooltipContent>
+          </Tooltip>
+        )}
       </div>
     </header>
   );
