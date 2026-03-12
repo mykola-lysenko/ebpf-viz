@@ -478,3 +478,9 @@
 - [x] Snapshot is ephemeral (in-memory only, lost on refresh)
 - [x] All existing views work transparently in snapshot mode (snapshot replaces live data)
 - [x] 265 tests pass, TS clean
+
+## Bug/UX: Orphaned program banner shows count only
+- [x] Show each orphaned program's name and ID in the banner
+- [x] Show last-known owning process comm + PID (from pids field) or "owning process PID unknown" if pids is empty
+- [x] Add "View in Programs →" link to the Programs table
+- [x] 265 tests pass, TS clean

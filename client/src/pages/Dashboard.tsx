@@ -236,6 +236,7 @@ export default function Dashboard() {
 
   const { stats, programs, networkInterfaces, cgroupTree, kernelZones } = snapshot;
   const recentProgs = [...programs].sort((a, b) => b.loadedAt - a.loadedAt).slice(0, 8);
+  const orphanedProgs = programs.filter(p => p.orphaned);
   const netProgs = networkInterfaces.reduce((acc, i) => acc + i.allPrograms.length, 0);
   const cgroupProgs = programs.filter(p => p.type.startsWith("cgroup") || p.type === "sock_ops").length;
 
@@ -277,12 +278,33 @@ export default function Dashboard() {
       </div>
 
       {/* Orphaned warning */}
-      {stats.orphaned > 0 && (
-        <div className="flex items-center gap-3 p-3 rounded-xl bg-destructive/10 border border-destructive/30">
-          <AlertTriangle size={16} className="text-destructive shrink-0" />
-          <p className="text-sm text-destructive/80">
-            {stats.orphaned} orphaned program{stats.orphaned > 1 ? "s" : ""} detected — owning process has exited.
-          </p>
+      {orphanedProgs.length > 0 && (
+        <div className="p-4 rounded-xl bg-destructive/10 border border-destructive/30 space-y-2">
+          <div className="flex items-center gap-2">
+            <AlertTriangle size={15} className="text-destructive shrink-0" />
+            <span className="text-sm font-semibold text-destructive">
+              {orphanedProgs.length} orphaned program{orphanedProgs.length > 1 ? "s" : ""} detected
+            </span>
+            <Link href="/programs" className="ml-auto text-xs text-destructive/60 hover:text-destructive underline underline-offset-2">
+              View in Programs →
+            </Link>
+          </div>
+          <div className="space-y-1.5 pl-5">
+            {orphanedProgs.map(p => {
+              const ownerParts = (p.pids ?? []).map(({ pid, comm }) => `${comm} (PID ${pid})`);
+              const ownerStr = ownerParts.length > 0
+                ? `last owned by ${ownerParts.join(", ")}`
+                : "owning process PID unknown";
+              return (
+                <div key={p.id} className="flex items-baseline gap-2 text-xs">
+                  <span className="font-mono text-destructive/90 font-semibold">{p.name}</span>
+                  <span className="text-destructive/50">#{p.id}</span>
+                  <span className="text-destructive/60">·</span>
+                  <span className="text-destructive/60">{ownerStr}</span>
+                </div>
+              );
+            })}
+          </div>
         </div>
       )}
 
