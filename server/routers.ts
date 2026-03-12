@@ -11,10 +11,12 @@ import {
   buildActivitySummary,
   isStatsEnabled,
   getBpftoolPath,
+  isDemoMode,
 } from "./ebpf-poller";
 import { fetchProgDump } from "./ebpf-dump";
 import { buildMockProgDump } from "./ebpf-mock-dump";
 import { dumpMapEntries } from "./ebpf-map-dump";
+import { buildMockMapDump } from "./ebpf-mock-map-dump";
 
 export const appRouter = router({
   ebpf: router({
@@ -96,10 +98,15 @@ export const appRouter = router({
     mapDump: publicProcedure
       .input(z.object({ id: z.number() }))
       .query(async ({ input }) => {
+        const snap = getLatestSnapshot();
         const maps = getLatestMaps();
         const map = maps.find(m => m.id === input.id);
         const mapType = map?.rawType ?? "unknown";
         const mapName = map?.name ?? `map#${input.id}`;
+        // In demo mode, return realistic mock entries — real map IDs don't exist in the kernel
+        if (isDemoMode()) {
+          return buildMockMapDump(input.id, mapType, mapName);
+        }
         const bpftoolPath = getBpftoolPath();
         return dumpMapEntries(input.id, mapType, mapName, bpftoolPath);
       }),

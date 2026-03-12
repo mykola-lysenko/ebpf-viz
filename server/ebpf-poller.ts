@@ -309,7 +309,11 @@ export function triggerPoll(): Promise<void> {
 // Re-export ring buffer accessors for use in routers
 export { getAllHistories, getHistory, buildActivitySummary };
 
-/** Returns the currently configured bpftool binary path */
+/** Returns true when the poller is running in demo mode (DEMO_MODE env var or auto-fallback). */
+export function isDemoMode(): boolean {
+  return config.demoMode;
+}
+
 export function getBpftoolPath(): string {
   return config.bpftoolPath;
 }

@@ -324,3 +324,18 @@
 - [x] Storage key format: "ebpf-viz:interp:<mapType>" → {key, val}
 - [x] Silently ignores localStorage errors (private browsing, quota exceeded)
 - [x] 242 tests pass, TS clean
+
+## Feature: Populate demo mode maps with realistic mock entries
+- [x] Add buildMockMapDump(mapId, mapType, mapName) in server/ebpf-mock-map-dump.ts
+- [x] xdp_blocked_ips (hash): 8 blocked IPv4 addresses with U64 LE drop counters
+- [x] xdp_stats (percpu_array): 8 XDP action buckets with per-CPU U64 LE counters
+- [x] lb_backends (lpm_trie): 5 prefix+IPv4 entries with backend IP+port
+- [x] tc_flow_table (hash): 6 TCP/UDP/ICMP flow tuples with byte counters
+- [x] pid_filter (hash): 8 PID entries with U32 LE flag values
+- [x] syscall_filter (hash): 8 syscall numbers with U32 LE flag values
+- [x] rtt_histogram (array): 100 buckets with realistic RTT distribution
+- [x] conn_track (lru_hash): 8 TCP/UDP connection tuples with timestamps
+- [x] config_map (array): 16 config flags/values
+- [x] exec_events (perf_event_array) and sock_redirect (sockmap) marked unsupported
+- [x] Wire via isDemoMode() export from ebpf-poller.ts
+- [x] 242 tests pass, standalone bundle verified: 10 maps with entries, 2 unsupported
