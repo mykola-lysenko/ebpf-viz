@@ -70,6 +70,7 @@ function MapCard({
   onClick,
   onDumpEntries,
   entryCount,
+  isSnapshotMode,
 }: {
   map: BpfMap;
   programs: Array<{ id: number; name: string; color: string; rawType: string }>;
@@ -77,10 +78,11 @@ function MapCard({
   onClick: () => void;
   onDumpEntries: (e: React.MouseEvent) => void;
   entryCount: number | null | undefined; // null = unsupported, undefined = loading
+  isSnapshotMode?: boolean;
 }) {
   const meta = MAP_TYPE_META[map.type] ?? MAP_TYPE_META["unknown"]!;
   const isShared = map.usedByProgIds.length > 1;
-  const canDump = !UNSUPPORTED_DUMP_TYPES.has(map.rawType);
+  const canDump = !UNSUPPORTED_DUMP_TYPES.has(map.rawType) && !isSnapshotMode;
 
   return (
     <div
@@ -211,10 +213,10 @@ function MapCard({
       {!canDump && (
         <div className="w-full flex items-center justify-center gap-1.5 py-1.5 rounded-lg text-xs
           bg-white/3 border border-white/5 text-white/20 cursor-default"
-          title={`${map.rawType} maps cannot be enumerated`}
+          title={isSnapshotMode ? "Map entry dump not available in snapshot mode" : `${map.rawType} maps cannot be enumerated`}
         >
           <List className="w-3 h-3" />
-          Not dumpable
+          {isSnapshotMode ? "Snapshot mode" : "Not dumpable"}
         </div>
       )}
 
@@ -233,15 +235,17 @@ function MapDetailPanel({
   programs,
   onClose,
   onDumpEntries,
+  isSnapshotMode,
 }: {
   map: BpfMap;
   programs: Array<{ id: number; name: string; color: string; rawType: string; type: string }>;
   onClose: () => void;
   onDumpEntries: () => void;
+  isSnapshotMode?: boolean;
 }) {
   const meta = MAP_TYPE_META[map.type] ?? MAP_TYPE_META["unknown"]!;
   const [copied, setCopied] = useState<string | null>(null);
-  const canDump = !UNSUPPORTED_DUMP_TYPES.has(map.rawType);
+  const canDump = !UNSUPPORTED_DUMP_TYPES.has(map.rawType) && !isSnapshotMode;
 
   const copy = (text: string, key: string) => {
     navigator.clipboard.writeText(text).then(() => {
@@ -289,10 +293,10 @@ function MapDetailPanel({
               : "bg-white/5 border border-white/10 text-white/25 cursor-not-allowed"
             }
           `}
-          title={!canDump ? `${map.rawType} maps cannot be enumerated` : undefined}
+          title={!canDump ? (isSnapshotMode ? "Map entry dump not available in snapshot mode" : `${map.rawType} maps cannot be enumerated`) : undefined}
         >
           <List className="w-4 h-4" />
-          {canDump ? "Inspect Map Entries" : "Entries not available"}
+          {canDump ? "Inspect Map Entries" : (isSnapshotMode ? "Snapshot mode — not available" : "Entries not available")}
         </button>
 
         {/* Identity */}
@@ -410,14 +414,16 @@ function MapDetailPanel({
 // ─── Main page ─────────────────────────────────────────────────────────────
 
 export default function MapsView() {
-  const { snapshot, maps } = useEbpf();
+  const { snapshot, maps, appMode } = useEbpf();
   // Maps are delivered live via the SSE stream (EbpfContext.maps).
-  // They update on every poller tick — no tRPC polling needed.
+  // In snapshot mode, maps come from the loaded snapshot file.
 
-  // Fetch live entry counts for all maps in one batch call (refreshed every 30s)
+  // Fetch live entry counts for all maps in one batch call (refreshed every 30s).
+  // Disabled in snapshot mode — map IDs from the snapshot don’t exist on the local kernel.
   const { data: entryCounts } = trpc.ebpf.mapEntryCounts.useQuery(undefined, {
     staleTime: 30_000,
     refetchInterval: 30_000,
+    enabled: appMode !== "snapshot",
   });
   const entryCountMap = useMemo(() => {
     const m = new Map<number, number | null>();
@@ -570,6 +576,7 @@ export default function MapsView() {
                     setDumpMap(map);
                   }}
                   entryCount={entryCountMap.size > 0 ? entryCountMap.get(map.id) : undefined}
+                  isSnapshotMode={appMode === "snapshot"}
                 />
               ))}
             </div>
@@ -584,6 +591,7 @@ export default function MapsView() {
           programs={selectedPrograms}
           onClose={() => setSelectedMap(null)}
           onDumpEntries={() => setDumpMap(selectedMap)}
+          isSnapshotMode={appMode === "snapshot"}
         />
       )}
 

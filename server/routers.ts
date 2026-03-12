@@ -15,6 +15,7 @@ import {
 } from "./ebpf-poller";
 import { fetchProgDump } from "./ebpf-dump";
 import { buildSnapshot } from "./ebpf-parser";
+import { parseMaps } from "./ebpf-map-parser";
 import { buildMockProgDump } from "./ebpf-mock-dump";
 import { dumpMapEntries } from "./ebpf-map-dump";
 import { buildMockMapDump } from "./ebpf-mock-map-dump";
@@ -197,7 +198,9 @@ export const appRouter = router({
         );
         // Preserve the original capture timestamp if provided
         if (input.timestamp) snap.timestamp = input.timestamp;
-        return snap;
+        // Parse maps from raw data and cross-reference with programs
+        const maps = parseMaps((input.raw.maps ?? []) as import("../shared/ebpf-types").RawBpfMap[], snap.programs);
+        return { snapshot: snap, maps };
       }),
 
     // ── Runtime statistics ─────────────────────────────────────────────────

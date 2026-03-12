@@ -354,12 +354,22 @@ function MapLegend() {
 // ─── Inner canvas (needs ReactFlowProvider context) ───────────────────────────
 
 function OsMapCanvas() {
-  const { snapshot, searchQuery, setSelectedProgram } = useEbpf();
-  // Maps arrive via SSE push — no polling needed here
-  const mapsQuery = trpc.ebpf.maps.useQuery(undefined, { staleTime: Infinity, refetchOnWindowFocus: false });
+  const { snapshot, searchQuery, setSelectedProgram, maps: contextMaps, appMode } = useEbpf();
+  // In snapshot mode, maps come from EbpfContext (parsed from the snapshot file).
+  // In live/demo mode, maps arrive via the SSE stream (also in EbpfContext).
+  // We also keep a live tRPC query as a fallback for live mode in case the SSE
+  // stream hasn't delivered maps yet.
+  const mapsQuery = trpc.ebpf.maps.useQuery(undefined, {
+    staleTime: Infinity,
+    refetchOnWindowFocus: false,
+    enabled: appMode !== "snapshot",
+  });
   // Stabilize the maps array reference — a new [] on every render would cause
   // useOsMapLayout's useMemo to recompute every render, creating an infinite loop.
-  const maps = useMemo(() => mapsQuery.data ?? [], [mapsQuery.data]);
+  const maps = useMemo(() => {
+    if (appMode === "snapshot") return contextMaps;
+    return contextMaps.length > 0 ? contextMaps : (mapsQuery.data ?? []);
+  }, [appMode, contextMaps, mapsQuery.data]);
   // zoom must be declared before useOsMapLayout so the LOD can be derived from it
   const [zoom, setZoom] = useState(0.35);
   // maxCgroupDepth: undefined = show all; 0 = root only; N = show up to depth N
@@ -555,6 +565,7 @@ function OsMapCanvas() {
     // Produce a file that is directly re-uploadable via "Load Snapshot" in the UI.
     // The _ebpfVizSnapshot flag tells the loader this is a pre-parsed snapshot
     // (not a raw capture-snapshot.sh output), so it can be used as-is.
+    // maps is included so the Maps tab is populated on re-upload.
     const payload = {
       _ebpfVizSnapshot: true,
       _version: 1,
@@ -566,6 +577,8 @@ function OsMapCanvas() {
       demoMode: snapshot.demoMode,
       // Full parsed snapshot — can be rendered directly without server-side processing
       snapshot,
+      // Parsed maps — included so the Maps tab is populated on re-upload
+      maps,
     };
     const json = JSON.stringify(payload, null, 2);
     const blob = new Blob([json], { type: "application/json" });

@@ -514,3 +514,13 @@
 - [x] Blue X button clears the depth limit when active
 - [x] CgroupNode component: shows "+ N hidden" dashed badge when collapsedChildren > 0
 - [x] 265 tests pass, TS clean
+
+## Bug: Maps tab empty in Snapshot mode
+- [x] Diagnose why MapsView shows no maps when a snapshot is loaded
+- [x] Fix parseSnapshot mutation to return { snapshot, maps } instead of just snapshot
+- [x] Add snapshotMaps state to EbpfContext; maps field now uses snapshotMaps in snapshot mode
+- [x] Fix OsMapCanvas to use context maps in snapshot mode (disable live tRPC query)
+- [x] Disable mapEntryCounts query in snapshot mode (map IDs don't exist on local kernel)
+- [x] Disable Dump Entries button in snapshot mode with clear tooltip
+- [x] Fix Download Topology JSON to include maps for round-trip re-upload support
+- [x] Verified: parseSnapshot returns { snapshot: { programs: 1 }, maps: 3 } with correct cross-refs

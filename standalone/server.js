@@ -79912,6 +79912,39 @@ var appRouter = router({
         return null;
       }
     }),
+    // ── Snapshot parsing ───────────────────────────────────────────────────
+    /**
+     * Parse a raw bpftool snapshot (from capture-snapshot.sh) into a full EbpfSnapshot.
+     * Accepts the raw JSON envelope with { raw: { progs, maps, net, cgroups }, hostname, kernelVersion, ... }
+     * and runs the full server-side buildSnapshot() pipeline.
+     */
+    parseSnapshot: publicProcedure.input(external_exports.object({
+      raw: external_exports.object({
+        progs: external_exports.array(external_exports.any()),
+        maps: external_exports.array(external_exports.any()).optional(),
+        net: external_exports.array(external_exports.any()).optional(),
+        cgroups: external_exports.array(external_exports.any()).optional()
+      }),
+      hostname: external_exports.string().optional(),
+      kernelVersion: external_exports.string().optional(),
+      bpftoolVersion: external_exports.string().optional(),
+      capturedAt: external_exports.string().optional(),
+      timestamp: external_exports.number().optional()
+    })).mutation(({ input }) => {
+      const snap = buildSnapshot(
+        input.raw.progs,
+        input.raw.net ?? [],
+        input.raw.cgroups ?? [],
+        {
+          hostname: input.hostname ?? "unknown",
+          kernelVersion: input.kernelVersion ?? "unknown",
+          bpftoolVersion: input.bpftoolVersion ?? "unknown",
+          demoMode: false
+        }
+      );
+      if (input.timestamp) snap.timestamp = input.timestamp;
+      return snap;
+    }),
     // ── Runtime statistics ─────────────────────────────────────────────────
     /**
      * Full ring-buffer history for all programs.

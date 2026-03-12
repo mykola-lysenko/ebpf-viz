@@ -63,6 +63,7 @@ export function EbpfProvider({ children }: { children: React.ReactNode }) {
 
   // ── Snapshot mode state ────────────────────────────────────────────────────
   const [loadedSnapshot, setLoadedSnapshot] = useState<EbpfSnapshot | null>(null);
+  const [snapshotMaps, setSnapshotMaps] = useState<BpfMap[]>([]);
   const [snapshotMeta, setSnapshotMeta] = useState<SnapshotMeta | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
@@ -83,7 +84,7 @@ export function EbpfProvider({ children }: { children: React.ReactNode }) {
 
   // ── Active snapshot: loaded snapshot takes priority over live stream ───────
   const snapshot = loadedSnapshot ?? liveSnapshot ?? null;
-  const maps: BpfMap[] = loadedSnapshot ? [] : liveMaps;
+  const maps: BpfMap[] = loadedSnapshot ? snapshotMaps : liveMaps;
 
   const isLoading = loadedSnapshot === null && liveSnapshot === null && streamStatus === "connecting";
 
@@ -120,13 +121,19 @@ export function EbpfProvider({ children }: { children: React.ReactNode }) {
 
     let ebpfSnapshot: EbpfSnapshot;
 
+    let parsedMaps: BpfMap[] = [];
+
     if (obj.snapshot && typeof obj.snapshot === "object") {
       // Format 1: pre-parsed snapshot embedded in the file
       ebpfSnapshot = obj.snapshot as EbpfSnapshot;
+      // Format 1 files may also carry a top-level "maps" array (exported via Download Topology)
+      if (Array.isArray(obj.maps)) {
+        parsedMaps = obj.maps as BpfMap[];
+      }
     } else if (obj.raw && typeof obj.raw === "object") {
       // Format 2: raw bpftool outputs — send to server for parsing via parseSnapshot mutation
       const rawObj = obj.raw as Record<string, unknown>;
-      ebpfSnapshot = await parseSnapshotMutation.mutateAsync({
+      const result = await parseSnapshotMutation.mutateAsync({
         raw: {
           progs: (rawObj.progs as unknown[]) ?? [],
           maps: rawObj.maps as unknown[] | undefined,
@@ -139,12 +146,15 @@ export function EbpfProvider({ children }: { children: React.ReactNode }) {
         capturedAt: obj.capturedAt as string | undefined,
         timestamp: obj.timestamp as number | undefined,
       });
+      ebpfSnapshot = result.snapshot;
+      parsedMaps = result.maps;
     } else {
       throw new Error("Snapshot file is missing the 'snapshot' or 'raw' field.");
     }
 
     const capturedAt = (obj.capturedAt as string) ?? new Date(ebpfSnapshot.timestamp).toISOString();
     setLoadedSnapshot(ebpfSnapshot);
+    setSnapshotMaps(parsedMaps);
     setSnapshotMeta({
       filename: file.name,
       capturedAt,
@@ -155,6 +165,7 @@ export function EbpfProvider({ children }: { children: React.ReactNode }) {
 
   const clearSnapshot = useCallback(() => {
     setLoadedSnapshot(null);
+    setSnapshotMaps([]);
     setSnapshotMeta(null);
   }, []);
 
