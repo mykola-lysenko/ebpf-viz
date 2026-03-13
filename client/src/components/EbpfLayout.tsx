@@ -196,9 +196,11 @@ function Sidebar({ collapsed, onToggle }: { collapsed: boolean; onToggle: () => 
 }
 
 function TopBar() {
-  const { searchQuery, setSearchQuery, snapshot, demoMode, streamStatus, appMode, snapshotMeta, loadSnapshot, clearSnapshot } = useEbpf();
+  const { searchQuery, setSearchQuery, snapshot, demoMode, streamStatus, appMode, snapshotMeta, loadSnapshot, loadMapDumps, clearSnapshot, snapshotMapDumps } = useEbpf();
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const mapDumpsInputRef = useRef<HTMLInputElement>(null);
   const [isLoading, setIsLoading] = useState(false);
+  const [isDumpsLoading, setIsDumpsLoading] = useState(false);
 
   const handleFileChange = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -219,6 +221,25 @@ function TopBar() {
       if (fileInputRef.current) fileInputRef.current.value = "";
     }
   }, [loadSnapshot, snapshot]);
+
+  const handleMapDumpsChange = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setIsDumpsLoading(true);
+    try {
+      const { loaded } = await loadMapDumps(file);
+      toast.success(`Map dumps loaded: ${file.name}`, {
+        description: `${loaded} map${loaded === 1 ? "" : "s"} with entry data`,
+      });
+    } catch (err) {
+      toast.error("Failed to load map dumps", {
+        description: err instanceof Error ? err.message : "Unknown error",
+      });
+    } finally {
+      setIsDumpsLoading(false);
+      if (mapDumpsInputRef.current) mapDumpsInputRef.current.value = "";
+    }
+  }, [loadMapDumps]);
 
   const statusIcon = {
     live:         <Wifi size={14} />,
@@ -303,6 +324,52 @@ function TopBar() {
           </span>
         )}
 
+        {/* Load Map Dumps button — only shown in snapshot mode */}
+        {appMode === "snapshot" && (
+          <>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className={cn(
+                    "h-8 gap-1.5 text-xs",
+                    Object.keys(snapshotMapDumps).length > 0
+                      ? "text-cyan-400 hover:text-cyan-300"
+                      : "text-muted-foreground hover:text-foreground"
+                  )}
+                  onClick={() => mapDumpsInputRef.current?.click()}
+                  disabled={isDumpsLoading}
+                >
+                  {isDumpsLoading ? (
+                    <RefreshCw size={13} className="animate-spin" />
+                  ) : (
+                    <Database size={13} />
+                  )}
+                  <span className="hidden sm:inline">
+                    {Object.keys(snapshotMapDumps).length > 0
+                      ? `Map Dumps (${Object.keys(snapshotMapDumps).length})`
+                      : "Load Map Dumps"}
+                  </span>
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent>
+                {Object.keys(snapshotMapDumps).length > 0
+                  ? `${Object.keys(snapshotMapDumps).length} maps with entry data loaded — click to reload`
+                  : "Load a map dump file (from capture-snapshot.sh --dump-maps) to inspect map entries"}
+              </TooltipContent>
+            </Tooltip>
+            <input
+              ref={mapDumpsInputRef}
+              type="file"
+              accept=".json,application/json"
+              className="hidden"
+              data-testid="map-dumps-input"
+              onChange={handleMapDumpsChange}
+            />
+          </>
+        )}
+
         {/* Load Snapshot button */}
         <Tooltip>
           <TooltipTrigger asChild>
@@ -335,6 +402,7 @@ function TopBar() {
           type="file"
           accept=".json,application/json"
           className="hidden"
+          data-testid="snapshot-input"
           onChange={handleFileChange}
         />
 

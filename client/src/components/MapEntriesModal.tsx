@@ -13,7 +13,7 @@
 
 import { useState, useMemo, useRef, useCallback, useEffect } from "react";
 import { trpc } from "@/lib/trpc";
-import type { MapEntry } from "../../../shared/ebpf-types";
+import type { MapEntry, MapDumpResult } from "../../../shared/ebpf-types";
 import {
   X,
   Copy,
@@ -69,6 +69,8 @@ interface MapEntriesModalProps {
   /** Byte length of the value field — used to filter interpretation options */
   valueBytes?: number;
   onClose: () => void;
+  /** Pre-loaded dump from snapshot mode — skips the live tRPC query when provided */
+  snapshotDump?: MapDumpResult;
 }
 
 // ─── IP interpretation helpers ────────────────────────────────────────────────
@@ -790,6 +792,7 @@ export function MapEntriesModal({
   keyBytes,
   valueBytes,
   onClose,
+  snapshotDump,
 }: MapEntriesModalProps) {
   const [mode, setMode] = useState<DisplayMode>("hex");
   const [keyInterpret, setKeyInterpret] = useState<InterpretMode>(() => {
@@ -822,8 +825,16 @@ export function MapEntriesModal({
     saveInterpretPrefs(mapType, keyInterpret, v);
   };
 
-  const { data, isLoading, isError, refetch, isFetching } =
-    trpc.ebpf.mapDump.useQuery({ id: mapId }, { staleTime: 10_000 });
+  // In snapshot mode, use pre-loaded dump data; otherwise call the live tRPC query
+  const liveQuery = trpc.ebpf.mapDump.useQuery(
+    { id: mapId },
+    { staleTime: 10_000, enabled: !snapshotDump }
+  );
+  const data = snapshotDump ?? liveQuery.data;
+  const isLoading = snapshotDump ? false : liveQuery.isLoading;
+  const isError = snapshotDump ? false : liveQuery.isError;
+  const isFetching = snapshotDump ? false : liveQuery.isFetching;
+  const refetch = snapshotDump ? (() => Promise.resolve()) : liveQuery.refetch;
 
   // Auto-select BTF mode when BTF data is available
   const hasBtf = data?.btfDecoded ?? false;

@@ -71,6 +71,7 @@ function MapCard({
   onDumpEntries,
   entryCount,
   isSnapshotMode,
+  hasDumpData,
 }: {
   map: BpfMap;
   programs: Array<{ id: number; name: string; color: string; rawType: string }>;
@@ -79,10 +80,11 @@ function MapCard({
   onDumpEntries: (e: React.MouseEvent) => void;
   entryCount: number | null | undefined; // null = unsupported, undefined = loading
   isSnapshotMode?: boolean;
+  hasDumpData?: boolean;
 }) {
   const meta = MAP_TYPE_META[map.type] ?? MAP_TYPE_META["unknown"]!;
   const isShared = map.usedByProgIds.length > 1;
-  const canDump = !UNSUPPORTED_DUMP_TYPES.has(map.rawType) && !isSnapshotMode;
+  const canDump = !UNSUPPORTED_DUMP_TYPES.has(map.rawType) && (!isSnapshotMode || hasDumpData);
 
   return (
     <div
@@ -213,10 +215,10 @@ function MapCard({
       {!canDump && (
         <div className="w-full flex items-center justify-center gap-1.5 py-1.5 rounded-lg text-xs
           bg-white/3 border border-white/5 text-white/20 cursor-default"
-          title={isSnapshotMode ? "Map entry dump not available in snapshot mode" : `${map.rawType} maps cannot be enumerated`}
+          title={isSnapshotMode && !hasDumpData ? "Load a map dump file to inspect entries in snapshot mode" : `${map.rawType} maps cannot be enumerated`}
         >
           <List className="w-3 h-3" />
-          {isSnapshotMode ? "Snapshot mode" : "Not dumpable"}
+          {isSnapshotMode && !hasDumpData ? "Load map dumps" : "Not dumpable"}
         </div>
       )}
 
@@ -236,16 +238,18 @@ function MapDetailPanel({
   onClose,
   onDumpEntries,
   isSnapshotMode,
+  hasDumpData,
 }: {
   map: BpfMap;
   programs: Array<{ id: number; name: string; color: string; rawType: string; type: string }>;
   onClose: () => void;
   onDumpEntries: () => void;
   isSnapshotMode?: boolean;
+  hasDumpData?: boolean;
 }) {
   const meta = MAP_TYPE_META[map.type] ?? MAP_TYPE_META["unknown"]!;
   const [copied, setCopied] = useState<string | null>(null);
-  const canDump = !UNSUPPORTED_DUMP_TYPES.has(map.rawType) && !isSnapshotMode;
+  const canDump = !UNSUPPORTED_DUMP_TYPES.has(map.rawType) && (!isSnapshotMode || hasDumpData);
 
   const copy = (text: string, key: string) => {
     navigator.clipboard.writeText(text).then(() => {
@@ -293,10 +297,10 @@ function MapDetailPanel({
               : "bg-white/5 border border-white/10 text-white/25 cursor-not-allowed"
             }
           `}
-          title={!canDump ? (isSnapshotMode ? "Map entry dump not available in snapshot mode" : `${map.rawType} maps cannot be enumerated`) : undefined}
+          title={!canDump ? (isSnapshotMode && !hasDumpData ? "Load a map dump file to inspect entries" : `${map.rawType} maps cannot be enumerated`) : undefined}
         >
           <List className="w-4 h-4" />
-          {canDump ? "Inspect Map Entries" : (isSnapshotMode ? "Snapshot mode — not available" : "Entries not available")}
+          {canDump ? "Inspect Map Entries" : (isSnapshotMode && !hasDumpData ? "Load map dumps to inspect" : "Entries not available")}
         </button>
 
         {/* Identity */}
@@ -414,7 +418,7 @@ function MapDetailPanel({
 // ─── Main page ─────────────────────────────────────────────────────────────
 
 export default function MapsView() {
-  const { snapshot, maps, appMode } = useEbpf();
+  const { snapshot, maps, appMode, snapshotMapDumps } = useEbpf();
   // Maps are delivered live via the SSE stream (EbpfContext.maps).
   // In snapshot mode, maps come from the loaded snapshot file.
 
@@ -577,6 +581,7 @@ export default function MapsView() {
                   }}
                   entryCount={entryCountMap.size > 0 ? entryCountMap.get(map.id) : undefined}
                   isSnapshotMode={appMode === "snapshot"}
+                  hasDumpData={appMode === "snapshot" && !!snapshotMapDumps[map.id]}
                 />
               ))}
             </div>
@@ -592,6 +597,7 @@ export default function MapsView() {
           onClose={() => setSelectedMap(null)}
           onDumpEntries={() => setDumpMap(selectedMap)}
           isSnapshotMode={appMode === "snapshot"}
+          hasDumpData={appMode === "snapshot" && !!snapshotMapDumps[selectedMap.id]}
         />
       )}
 
@@ -605,6 +611,7 @@ export default function MapsView() {
           keyBytes={dumpMap.bytesKey}
           valueBytes={dumpMap.bytesValue}
           onClose={() => setDumpMap(null)}
+          snapshotDump={appMode === "snapshot" ? snapshotMapDumps[dumpMap.id] : undefined}
         />
       )}
     </div>

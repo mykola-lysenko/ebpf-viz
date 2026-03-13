@@ -17,7 +17,8 @@ import { fetchProgDump } from "./ebpf-dump";
 import { buildSnapshot } from "./ebpf-parser";
 import { parseMaps } from "./ebpf-map-parser";
 import { buildMockProgDump } from "./ebpf-mock-dump";
-import { dumpMapEntries } from "./ebpf-map-dump";
+import { dumpMapEntries, parseEntry } from "./ebpf-map-dump";
+import type { RawMapEntry, MapDumpResult } from "../shared/ebpf-types";
 import { buildMockMapDump } from "./ebpf-mock-map-dump";
 
 export const appRouter = router({
@@ -201,6 +202,59 @@ export const appRouter = router({
         // Parse maps from raw data and cross-reference with programs
         const maps = parseMaps((input.raw.maps ?? []) as import("../shared/ebpf-types").RawBpfMap[], snap.programs);
         return { snapshot: snap, maps };
+      }),
+
+    /**
+     * Parse a map dump file produced by `capture-snapshot.sh --dump-maps`.
+     * Accepts { _ebpfVizMapDumps: true, mapDumps: { [mapId]: RawMapEntry[] } }
+     * and returns a Record<number, MapDumpResult> keyed by map ID.
+     * The client stores this in EbpfContext and uses it to serve mapDump queries
+     * in snapshot mode without calling the live bpftool.
+     */
+    parseMapDumps: publicProcedure
+      .input(z.object({
+        mapDumps: z.record(z.string(), z.array(z.any())),
+        // Optional: BpfMap metadata to enrich the results
+        maps: z.array(z.object({
+          id: z.number(),
+          rawType: z.string(),
+          name: z.string(),
+        })).optional(),
+      }))
+      .mutation(({ input }) => {
+        const result: Record<number, MapDumpResult> = {};
+        const mapsById = new Map((input.maps ?? []).map(m => [m.id, m]));
+
+        for (const [idStr, rawEntries] of Object.entries(input.mapDumps)) {
+          const mapId = parseInt(idStr, 10);
+          if (isNaN(mapId)) continue;
+
+          const mapMeta = mapsById.get(mapId);
+          const mapType = mapMeta?.rawType ?? "unknown";
+          const mapName = mapMeta?.name ?? `map#${mapId}`;
+
+          const entries = (rawEntries as RawMapEntry[]).slice(0, 200).map((r, i) => parseEntry(r, i));
+          const btfDecoded = entries.length > 0 && (
+            (rawEntries[0] as RawMapEntry).key !== undefined &&
+            !Array.isArray((rawEntries[0] as RawMapEntry).key) &&
+            typeof (rawEntries[0] as RawMapEntry).key === "object"
+          );
+
+          result[mapId] = {
+            mapId,
+            mapType,
+            mapName,
+            totalEntries: entries.length,
+            truncated: (rawEntries as unknown[]).length > 200,
+            maxReturned: 200,
+            btfDecoded,
+            error: null,
+            unsupported: false,
+            entries,
+          };
+        }
+
+        return result;
       }),
 
     // ── Runtime statistics ─────────────────────────────────────────────────

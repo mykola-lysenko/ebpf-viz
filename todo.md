@@ -530,3 +530,16 @@
 - [x] Verify maps count > 0 in server response — CONFIRMED
 - [x] Trace why maps don't appear in Maps tab — traced via Playwright browser test
 - [x] VERIFIED FIXED via Playwright: setSnapshotMaps(1452), maps=1452, Maps tab shows 1452 maps
+
+## Feature: Separate map dump file (Option D)
+- [x] capture-snapshot.sh: add --dump-maps flag; produces ebpf-mapdumps-<host>-<ts>.json with { _ebpfVizMapDumps: true, mapDumps: { [id]: RawMapEntry[] } }
+- [x] capture-snapshot.sh: cap at 200 entries per map; skip UNSUPPORTED_TYPES; print file size + scp instructions
+- [x] server/routers.ts: add parseMapDumps mutation: accepts SnapshotMapDumps JSON, returns parsed MapDumpResult[] keyed by mapId
+- [x] EbpfContext: add snapshotMapDumps state; add loadMapDumps(file) function
+- [x] EbpfContext: expose loadMapDumps and snapshotMapDumps via context
+- [x] UI: add "Load Map Dumps" button in app header (next to Load Snapshot), only visible in snapshot mode
+- [x] UI: re-enable Dump Entries button in snapshot mode when snapshotMapDumps has data for that map
+- [x] UI: MapEntriesModal accepts snapshotDump prop; skips live tRPC query when present
+- [x] UI: Dump Entries button tooltip shows "Snapshot mode" when no dump data available
+- [x] VERIFIED via Playwright: parseMapDumps called, Map Dumps (5) shown, 5 Dump Entries buttons enabled
+- [x] 265 tests pass, TS clean
