@@ -1,4 +1,4 @@
-import { exec, execSync } from "child_process";
+import { exec, execFile, execSync } from "child_process";
 import { promisify } from "util";
 import { hostname } from "os";
 import type { BpfMap, EbpfSnapshot, PollingConfig, RawBpfMap, RawBpfProg, RawCgroupEntry, RawNetSnapshot } from "../shared/ebpf-types";
@@ -14,6 +14,7 @@ import {
 } from "./ebpf-stats-ring";
 
 const execAsync = promisify(exec);
+const execFileAsync = promisify(execFile);
 
 // ─── Config ──────────────────────────────────────────────────────────────────
 
@@ -105,22 +106,22 @@ async function getSystemInfo(): Promise<void> {
   } catch { kernelVersion = "unknown"; }
 
   try {
-    const cmd = `${config.bpftoolPath} version 2>/dev/null | head -1`;
-    const { stdout } = await execAsync(cmd);
-    bpftoolVersion = stdout.trim();
+    const { stdout } = await execFileAsync(config.bpftoolPath, ["version"], { timeout: 5000 });
+    bpftoolVersion = stdout.trim().split("\n")[0];
   } catch { bpftoolVersion = "built from source"; }
 }
 
 // ─── Run bpftool commands ──────────────────────────────────────────────────
 
 async function runBpftool(args: string): Promise<string> {
-  const prefix = config.sudo ? "sudo " : "";
-  const cmd = `${prefix}${config.bpftoolPath} -j ${args} 2>/dev/null`;
+  const argv = ["-j", ...args.split(/\s+/)];
+  const cmd = config.sudo ? "sudo" : config.bpftoolPath;
+  const fullArgv = config.sudo ? [config.bpftoolPath, ...argv] : argv;
   // Raise maxBuffer from the Node default (1 MB) to 32 MB.
   // On systems with 200+ BPF programs, bpftool map list / prog list JSON output
   // can easily exceed 1 MB, causing exec() to throw ERR_CHILD_PROCESS_STDIO_MAXBUFFER
   // and silently returning an empty result.
-  const { stdout } = await execAsync(cmd, { timeout: 10000, maxBuffer: 32 * 1024 * 1024 });
+  const { stdout } = await execFileAsync(cmd, fullArgv, { timeout: 10000, maxBuffer: 32 * 1024 * 1024 });
   return stdout.trim();
 }
 
@@ -345,4 +346,8 @@ export function isDemoMode(): boolean {
 
 export function getBpftoolPath(): string {
   return config.bpftoolPath;
+}
+
+export function isSudoEnabled(): boolean {
+  return config.sudo;
 }
