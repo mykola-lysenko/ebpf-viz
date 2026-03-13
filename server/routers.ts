@@ -12,6 +12,7 @@ import {
   isStatsEnabled,
   getBpftoolPath,
   isDemoMode,
+  isSudoEnabled,
 } from "./ebpf-poller";
 import { fetchProgDump } from "./ebpf-dump";
 import { buildSnapshot } from "./ebpf-parser";
@@ -49,7 +50,7 @@ export const appRouter = router({
         z.object({
           intervalMs: z.number().min(1000).max(60000).optional(),
           demoMode: z.boolean().optional(),
-          bpftoolPath: z.string().optional(),
+          bpftoolPath: z.string().regex(/^[/a-zA-Z0-9._-]+$/, "bpftoolPath must be an absolute path containing only alphanumeric characters, slashes, dots, underscores, and hyphens").optional(),
           sudo: z.boolean().optional(),
         })
       )
@@ -111,7 +112,7 @@ export const appRouter = router({
           return buildMockMapDump(input.id, mapType, mapName);
         }
         const bpftoolPath = getBpftoolPath();
-        return dumpMapEntries(input.id, mapType, mapName, bpftoolPath);
+        return dumpMapEntries(input.id, mapType, mapName, bpftoolPath, isSudoEnabled());
       }),
     // ── Map entry counts ──────────────────────────────────────────────────────────────────
     /**
@@ -122,13 +123,14 @@ export const appRouter = router({
     mapEntryCounts: publicProcedure.query(async () => {
       const maps = getLatestMaps();
       const bpftoolPath = getBpftoolPath();
+      const sudo = isSudoEnabled();
       const demo = isDemoMode();
 
       const results = await Promise.all(
         maps.map(async (map) => {
           const result = demo
             ? buildMockMapDump(map.id, map.rawType, map.name)
-            : await dumpMapEntries(map.id, map.rawType, map.name, bpftoolPath);
+            : await dumpMapEntries(map.id, map.rawType, map.name, bpftoolPath, sudo);
           return {
             mapId: map.id,
             count: result.unsupported || result.error ? null : result.totalEntries,

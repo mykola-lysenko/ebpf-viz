@@ -10,11 +10,11 @@
  * For perf_event_array / ringbuf the value is { "error": "..." }.
  */
 
-import { exec } from "child_process";
+import { execFile } from "child_process";
 import { promisify } from "util";
 import type { MapDumpResult, MapEntry, RawMapEntry } from "../shared/ebpf-types";
 
-const execAsync = promisify(exec);
+const execFileAsync = promisify(execFile);
 
 // Map types that bpftool cannot dump (kernel-internal or write-only)
 const UNSUPPORTED_TYPES = new Set([
@@ -189,6 +189,7 @@ export async function dumpMapEntries(
   mapType: string,
   mapName: string,
   bpftoolPath: string,
+  sudo: boolean = true,
 ): Promise<MapDumpResult> {
   const base: Omit<MapDumpResult, "entries"> = {
     mapId,
@@ -213,8 +214,11 @@ export async function dumpMapEntries(
   }
 
   try {
-    const cmd = `sudo ${bpftoolPath} -jp map dump id ${mapId}`;
-    const { stdout, stderr } = await execAsync(cmd, {
+    const cmd = sudo ? "sudo" : bpftoolPath;
+    const argv = sudo
+      ? [bpftoolPath, "-jp", "map", "dump", "id", String(mapId)]
+      : ["-jp", "map", "dump", "id", String(mapId)];
+    const { stdout, stderr } = await execFileAsync(cmd, argv, {
       timeout: 10_000,
       maxBuffer: 20 * 1024 * 1024,
     });
