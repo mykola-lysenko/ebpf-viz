@@ -543,3 +543,9 @@
 - [x] UI: Dump Entries button tooltip shows "Snapshot mode" when no dump data available
 - [x] VERIFIED via Playwright: parseMapDumps called, Map Dumps (5) shown, 5 Dump Entries buttons enabled
 - [x] 265 tests pass, TS clean
+
+## Cleanup: Remove standalone/ folder from git
+- [x] git rm -r standalone/ from tracking
+- [x] Add standalone/ to .gitignore
+- [x] Keep ebpf-viz-standalone.tar.gz in git
+- [x] Save checkpoint
