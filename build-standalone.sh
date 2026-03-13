@@ -12,17 +12,28 @@ STUB_DIR="$SCRIPT_DIR/.standalone-stubs"
 echo "=== eBPF Viz — Standalone Build ==="
 echo ""
 
+# ── Pre-flight: check Node.js version ─────────────────────────────────────────
+if ! command -v node &>/dev/null; then
+  echo "ERROR: Node.js is not installed or not on PATH." >&2
+  exit 1
+fi
+
+NODE_MAJOR=$(node -e "process.stdout.write(String(process.versions.node.split('.')[0]))")
+if [ "$NODE_MAJOR" -lt 20 ]; then
+  echo "ERROR: Node.js >= 20 is required to BUILD the standalone package (found: $(node --version))." >&2
+  echo "The built package will still run on Node.js >= 16 on the target server." >&2
+  echo "Use nvm, fnm, or asdf to install a newer Node.js for building." >&2
+  exit 1
+fi
+
 # ── 1. Install dependencies ────────────────────────────────────────────────────
 echo "[1/6] Installing dependencies..."
 cd "$SCRIPT_DIR"
-if command -v pnpm &>/dev/null; then
-  pnpm install --frozen-lockfile
-elif command -v npm &>/dev/null; then
-  npm ci
-else
-  echo "ERROR: neither pnpm nor npm found. Install Node.js first." >&2
-  exit 1
+if ! command -v pnpm &>/dev/null; then
+  echo "  pnpm not found — enabling corepack..."
+  corepack enable
 fi
+pnpm install --frozen-lockfile
 
 # ── 2. Build the frontend (Vite) ───────────────────────────────────────────────
 echo "[2/6] Building frontend (Vite)..."
