@@ -1,0 +1,84 @@
+name: Release Standalone Tarball
+
+on:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: write   # needed to create/update releases and upload assets
+
+jobs:
+  build-and-release:
+    name: Build standalone tarball and publish release
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: '10'
+          run_install: false
+
+      - name: Get pnpm store directory
+        id: pnpm-cache
+        shell: bash
+        run: echo "STORE_PATH=$(pnpm store path --silent)" >> $GITHUB_OUTPUT
+
+      - name: Cache pnpm store
+        uses: actions/cache@v4
+        with:
+          path: ${{ steps.pnpm-cache.outputs.STORE_PATH }}
+          key: ${{ runner.os }}-pnpm-store-${{ hashFiles('**/pnpm-lock.yaml') }}
+          restore-keys: |
+            ${{ runner.os }}-pnpm-store-
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Run test suite
+        run: pnpm test
+
+      - name: Build standalone tarball
+        run: bash build-standalone.sh
+
+      - name: Compute short SHA and timestamp
+        id: meta
+        run: |
+          echo "sha=$(git rev-parse --short HEAD)" >> $GITHUB_OUTPUT
+          echo "date=$(date -u +%Y-%m-%d)" >> $GITHUB_OUTPUT
+
+      - name: Delete existing rolling release (if any)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release delete latest --yes 2>/dev/null || true
+          git push origin :refs/tags/latest 2>/dev/null || true
+
+      - name: Create rolling release and upload tarball
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create latest \
+            --title "Latest build (${{ steps.meta.outputs.date }} · ${{ steps.meta.outputs.sha }})" \
+            --notes "Automatically built from \`main\` at commit \`${{ steps.meta.outputs.sha }}\`.
+
+          **Download:** \`ebpf-viz-standalone.tar.gz\`
+
+          **Quick start (requires Node.js ≥ 16):**
+          \`\`\`bash
+          tar -xzf ebpf-viz-standalone.tar.gz
+          cp standalone/.env.example standalone/.env
+          # edit standalone/.env if needed
+          ./standalone/start.sh --demo   # or omit --demo for live bpftool mode
+          \`\`\`" \
+            --prerelease \
+            ebpf-viz-standalone.tar.gz

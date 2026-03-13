@@ -111,3 +111,5 @@ temp/
 
 # Standalone build output folder (keep tarball, not the folder)
 standalone/
+
+ebpf-viz-standalone.tar.gz
