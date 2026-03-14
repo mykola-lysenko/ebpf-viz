@@ -80,18 +80,6 @@ const vite = { createServer, defineConfig, mergeConfig };
 export default vite;
 STUB
 
-# vite-plugin-manus-runtime — ESM stub
-cat > "$STUB_DIR/vite-plugin-manus-runtime.mjs" << 'STUB'
-export function vitePluginManusRuntime() { return { name: 'manus-runtime-stub' }; }
-export default vitePluginManusRuntime;
-STUB
-
-# @builder.io/vite-plugin-jsx-loc — ESM stub
-cat > "$STUB_DIR/vite-plugin-jsx-loc.mjs" << 'STUB'
-export function jsxLocPlugin() { return { name: 'jsx-loc-stub' }; }
-export default jsxLocPlugin;
-STUB
-
 # @tailwindcss/vite — ESM stub (default export only)
 cat > "$STUB_DIR/tailwindcss-vite.mjs" << 'STUB'
 function tailwindcss() { return { name: 'tailwindcss-stub' }; }
@@ -163,20 +151,6 @@ NODE_ENV=production
 # Set to "true" to start in demo mode (synthetic data, no bpftool required).
 # Useful for testing the UI without a Linux kernel with BPF support.
 # DEMO_MODE=false
-
-# ── Authentication (optional) ─────────────────────────────────────────────────
-# Leave these blank to run without authentication (all endpoints are public).
-# All eBPF data procedures are public by default — auth is only needed if you
-# want to restrict access to the settings/admin endpoints.
-# JWT_SECRET=
-# VITE_APP_ID=
-# OAUTH_SERVER_URL=
-# VITE_OAUTH_PORTAL_URL=
-
-# ── Database (optional) ───────────────────────────────────────────────────────
-# Only required if you enable authentication above.
-# Without a DATABASE_URL the server skips DB init and runs in auth-less mode.
-# DATABASE_URL=mysql://user:password@host:3306/ebpf_viz
 ENVEXAMPLE
 
 # Write the start script
