@@ -18,7 +18,7 @@ import { fetchProgDump } from "./ebpf-dump";
 import { buildSnapshot } from "./ebpf-parser";
 import { parseMaps } from "./ebpf-map-parser";
 import { buildMockProgDump } from "./ebpf-mock-dump";
-import { dumpMapEntries, parseEntry } from "./ebpf-map-dump";
+import { dumpMapEntries, parseEntry, MAX_DUMP_ENTRIES } from "./ebpf-map-dump";
 import type { RawMapEntry, MapDumpResult } from "../shared/ebpf-types";
 import { buildMockMapDump } from "./ebpf-mock-map-dump";
 
@@ -245,7 +245,7 @@ export const appRouter = router({
           const mapType = mapMeta?.rawType ?? "unknown";
           const mapName = mapMeta?.name ?? `map#${mapId}`;
 
-          const entries = (rawEntries as RawMapEntry[]).slice(0, 200).map((r, i) => parseEntry(r, i));
+          const entries = (rawEntries as RawMapEntry[]).slice(0, MAX_DUMP_ENTRIES).map((r, i) => parseEntry(r, i));
           const btfDecoded = entries.length > 0 && (
             (rawEntries[0] as RawMapEntry).key !== undefined &&
             !Array.isArray((rawEntries[0] as RawMapEntry).key) &&
@@ -257,8 +257,8 @@ export const appRouter = router({
             mapType,
             mapName,
             totalEntries: entries.length,
-            truncated: (rawEntries as unknown[]).length > 200,
-            maxReturned: 200,
+            truncated: (rawEntries as unknown[]).length > MAX_DUMP_ENTRIES,
+            maxReturned: MAX_DUMP_ENTRIES,
             btfDecoded,
             error: null,
             unsupported: false,
