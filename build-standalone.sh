@@ -12,19 +12,40 @@ STUB_DIR="$SCRIPT_DIR/.standalone-stubs"
 echo "=== eBPF Viz — Standalone Build ==="
 echo ""
 
-# ── Pre-flight: check Node.js version ─────────────────────────────────────────
-if ! command -v node &>/dev/null; then
-  echo "ERROR: Node.js is not installed or not on PATH." >&2
-  exit 1
-fi
+# ── Pre-flight: ensure Node.js >= 20 ──────────────────────────────────────────
+MIN_NODE=22
 
-NODE_MAJOR=$(node -e "process.stdout.write(String(process.versions.node.split('.')[0]))")
-if [ "$NODE_MAJOR" -lt 20 ]; then
-  echo "ERROR: Node.js >= 20 is required to BUILD the standalone package (found: $(node --version))." >&2
-  echo "The built package will still run on Node.js >= 16 on the target server." >&2
-  echo "Use nvm, fnm, or asdf to install a newer Node.js for building." >&2
-  exit 1
+ensure_node_version() {
+  if ! command -v node &>/dev/null; then
+    return 1
+  fi
+  local major
+  major=$(node -e "process.stdout.write(String(process.versions.node.split('.')[0]))")
+  [ "$major" -ge "$MIN_NODE" ]
+}
+
+if ! ensure_node_version; then
+  echo "  Node.js >= $MIN_NODE is required to build (found: $(node --version 2>/dev/null || echo 'none'))."
+  echo "  Attempting to switch via nvm..."
+
+  # Try to load nvm
+  export NVM_DIR="${NVM_DIR:-$HOME/.nvm}"
+  if [ -s "$NVM_DIR/nvm.sh" ]; then
+    # shellcheck disable=SC1091
+    source "$NVM_DIR/nvm.sh"
+    nvm install "$MIN_NODE" --no-progress 2>/dev/null || true
+    nvm use "$MIN_NODE"
+  fi
+
+  if ! ensure_node_version; then
+    echo "" >&2
+    echo "ERROR: Could not find or switch to Node.js >= $MIN_NODE." >&2
+    echo "The built package will still run on Node.js >= 16 on the target server." >&2
+    echo "Install nvm (https://github.com/nvm-sh/nvm) and re-run this script." >&2
+    exit 1
+  fi
 fi
+echo "  Using Node.js $(node --version)"
 
 # ── 1. Install dependencies ────────────────────────────────────────────────────
 echo "[1/6] Installing dependencies..."
