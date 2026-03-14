@@ -34,8 +34,6 @@ await esbuild.build({
   },
   alias: {
     'vite': path.join(STUBS_DIR, 'vite.mjs'),
-    'vite-plugin-manus-runtime': path.join(STUBS_DIR, 'vite-plugin-manus-runtime.mjs'),
-    '@builder.io/vite-plugin-jsx-loc': path.join(STUBS_DIR, 'vite-plugin-jsx-loc.mjs'),
     '@tailwindcss/vite': path.join(STUBS_DIR, 'tailwindcss-vite.mjs'),
     '@vitejs/plugin-react': path.join(STUBS_DIR, 'vitejs-plugin-react.mjs'),
   },
