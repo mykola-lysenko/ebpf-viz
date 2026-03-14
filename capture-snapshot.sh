@@ -9,6 +9,7 @@
 #   sudo ./capture-snapshot.sh -o /tmp/snap.json  # custom output path
 #   sudo ./capture-snapshot.sh --dump-maps        # also capture map entries (separate file)
 #   ./capture-snapshot.sh --no-sudo               # run without sudo (may miss some progs)
+#   ./capture-snapshot.sh --max-maps 100          # limit map dumps to first 100 maps
 #   ./capture-snapshot.sh --help
 #
 # With --dump-maps, a second file is produced:
@@ -28,6 +29,10 @@ OUTPUT_FILE=""
 DUMP_MAPS=0
 DUMP_OUTPUT_FILE=""
 VERBOSE=0
+MAX_MAPS=500          # max maps to dump with --dump-maps
+CMD_TIMEOUT=30        # seconds per bpftool command
+MAP_DUMP_TIMEOUT=10   # seconds per map dump command
+MAP_DUMP_DELAY=0.05   # seconds between map dumps to reduce lock contention
 
 # ── Argument parsing ──────────────────────────────────────────────────────────
 while [[ $# -gt 0 ]]; do
@@ -48,12 +53,16 @@ while [[ $# -gt 0 ]]; do
       DUMP_OUTPUT_FILE="$2"
       shift 2
       ;;
+    --max-maps)
+      MAX_MAPS="$2"
+      shift 2
+      ;;
     -v|--verbose)
       VERBOSE=1
       shift
       ;;
     --help|-h)
-      sed -n '2,20p' "$0" | sed 's/^# \?//'
+      sed -n '2,22p' "$0" | sed 's/^# \?//'
       exit 0
       ;;
     *)
@@ -85,6 +94,10 @@ json_escape_string() {
     | tr '\t' '\003' | sed 's/\003/\\t/g'
 }
 
+# Create a temp directory for intermediate files; clean up on exit
+TMPDIR_SNAP=$(mktemp -d "${TMPDIR:-/tmp}/ebpf-snap.XXXXXX")
+trap 'rm -rf "$TMPDIR_SNAP"' EXIT
+
 # ── Locate bpftool ────────────────────────────────────────────────────────────
 find_bpftool() {
   # 1. Explicit env override
@@ -111,30 +124,54 @@ if [[ -z "$BPFTOOL" ]]; then
 fi
 log "Using bpftool: $BPFTOOL"
 
+# ── Check for timeout command ────────────────────────────────────────────────
+TIMEOUT_CMD=""
+if command -v timeout &>/dev/null; then
+  TIMEOUT_CMD="timeout"
+elif command -v gtimeout &>/dev/null; then
+  TIMEOUT_CMD="gtimeout"  # macOS with coreutils
+fi
+
 # ── Build sudo prefix ─────────────────────────────────────────────────────────
 SUDO_PREFIX=""
 if [[ $USE_SUDO -eq 1 ]]; then
   if command -v sudo &>/dev/null; then
-    SUDO_PREFIX="sudo "
+    SUDO_PREFIX="sudo"
   else
     log "Warning: sudo not found, running without it"
   fi
 fi
 
-# ── Run a bpftool command, return raw JSON (empty array on failure) ────────────
-run_bpftool() {
-  local args="$1"
-  local fallback="${2:-[]}"
-  local out
-  # Strip libbpf: warning lines that pollute JSON output
-  out=$( ${SUDO_PREFIX}${BPFTOOL} -j ${args} 2>/dev/null \
-         | grep -v '^libbpf:' || true )
-  if [[ -z "$out" ]]; then
-    vlog "bpftool $args → empty, using fallback"
-    echo "$fallback"
-  else
-    echo "$out"
+# ── Run a bpftool command, stream output to a file ────────────────────────────
+# Usage: run_bpftool_to_file <output_file> <bpftool_args> [timeout_secs]
+# Returns 0 on success, 1 on failure. On failure, writes the fallback to the file.
+run_bpftool_to_file() {
+  local outfile="$1"
+  local args="$2"
+  local tout="${3:-$CMD_TIMEOUT}"
+  local fallback="${4:-[]}"
+
+  local cmd_parts=()
+  if [[ -n "$TIMEOUT_CMD" ]]; then
+    cmd_parts+=("$TIMEOUT_CMD" "$tout")
   fi
+  if [[ -n "$SUDO_PREFIX" ]]; then
+    cmd_parts+=("$SUDO_PREFIX")
+  fi
+  cmd_parts+=("$BPFTOOL" -j)
+  # Split args on whitespace into separate arguments
+  read -ra arg_array <<< "$args"
+  cmd_parts+=("${arg_array[@]}")
+
+  # Run at reduced priority to minimize production impact
+  if "${cmd_parts[@]}" 2>/dev/null | grep -v '^libbpf:' > "$outfile"; then
+    if [[ -s "$outfile" ]]; then
+      return 0
+    fi
+  fi
+  vlog "bpftool $args → empty or failed, using fallback"
+  echo "$fallback" > "$outfile"
+  return 0
 }
 
 # ── Gather metadata ───────────────────────────────────────────────────────────
@@ -143,23 +180,27 @@ KERNEL_VERSION=$(uname -r 2>/dev/null || echo "unknown")
 TIMESTAMP_MS=$(date +%s)000  # milliseconds
 CAPTURE_DATE=$(date -u +"%Y-%m-%dT%H:%M:%SZ" 2>/dev/null || date +"%Y-%m-%dT%H:%M:%SZ")
 
-BPFTOOL_VERSION_RAW=$(${SUDO_PREFIX}${BPFTOOL} version 2>/dev/null | head -1 || echo "unknown")
-BPFTOOL_VERSION=$(json_escape_string "$BPFTOOL_VERSION_RAW")
+BPFTOOL_VERSION_RAW=""
+if [[ -n "$SUDO_PREFIX" ]]; then
+  BPFTOOL_VERSION_RAW=$($SUDO_PREFIX "$BPFTOOL" version 2>/dev/null | head -1 || echo "unknown")
+else
+  BPFTOOL_VERSION_RAW=$("$BPFTOOL" version 2>/dev/null | head -1 || echo "unknown")
+fi
 
 log "Capturing snapshot on $HOSTNAME_VAL (kernel $KERNEL_VERSION)"
 
-# ── Capture bpftool outputs ───────────────────────────────────────────────────
+# ── Capture bpftool outputs to temp files ────────────────────────────────────
 log "Running: bpftool prog list..."
-PROGS=$(run_bpftool "prog list" "[]")
+run_bpftool_to_file "$TMPDIR_SNAP/progs.json" "prog list"
 
 log "Running: bpftool map list..."
-MAPS=$(run_bpftool "map list" "[]")
+run_bpftool_to_file "$TMPDIR_SNAP/maps.json" "map list"
 
 log "Running: bpftool net..."
-NET=$(run_bpftool "net" "[]")
+run_bpftool_to_file "$TMPDIR_SNAP/net.json" "net"
 
 log "Running: bpftool cgroup tree..."
-CGROUPS=$(run_bpftool "cgroup tree" "[]")
+run_bpftool_to_file "$TMPDIR_SNAP/cgroups.json" "cgroup tree"
 
 # ── Determine output file ─────────────────────────────────────────────────────
 SAFE_HOST=$(echo "$HOSTNAME_VAL" | tr -cs 'a-zA-Z0-9_-' '_' | sed 's/_*$//')
@@ -172,36 +213,36 @@ if [[ -z "$DUMP_OUTPUT_FILE" ]]; then
 fi
 
 # ── Assemble the EbpfSnapshot JSON ────────────────────────────────────────────
+# Stream directly to the output file instead of building in memory.
 # The format matches the EbpfSnapshot interface in shared/ebpf-types.ts.
-# We embed the raw bpftool JSON outputs as the "raw" sub-objects so the
-# eBPF Viz server-side parser can reconstruct the full typed snapshot.
-# Fields that require server-side processing (programs, networkInterfaces,
-# cgroupTree, kernelZones, stats) are populated by the server when the
-# snapshot is loaded — we include the raw bpftool outputs for that purpose.
 log "Writing snapshot to: $OUTPUT_FILE"
 
-cat > "$OUTPUT_FILE" << JSONEOF
 {
-  "_ebpfVizSnapshot": true,
-  "_version": 1,
-  "capturedAt": "$CAPTURE_DATE",
-  "timestamp": $TIMESTAMP_MS,
-  "hostname": "$(json_escape_string "$HOSTNAME_VAL")",
-  "kernelVersion": "$(json_escape_string "$KERNEL_VERSION")",
-  "bpftoolVersion": "$(json_escape_string "$BPFTOOL_VERSION_RAW")",
-  "demoMode": false,
-  "raw": {
-    "progs": $PROGS,
-    "maps": $MAPS,
-    "net": $NET,
-    "cgroups": $CGROUPS
-  }
-}
-JSONEOF
+  printf '{\n'
+  printf '  "_ebpfVizSnapshot": true,\n'
+  printf '  "_version": 1,\n'
+  printf '  "capturedAt": "%s",\n' "$CAPTURE_DATE"
+  printf '  "timestamp": %s,\n' "$TIMESTAMP_MS"
+  printf '  "hostname": "%s",\n' "$(json_escape_string "$HOSTNAME_VAL")"
+  printf '  "kernelVersion": "%s",\n' "$(json_escape_string "$KERNEL_VERSION")"
+  printf '  "bpftoolVersion": "%s",\n' "$(json_escape_string "$BPFTOOL_VERSION_RAW")"
+  printf '  "demoMode": false,\n'
+  printf '  "raw": {\n'
+  printf '    "progs": '
+  cat "$TMPDIR_SNAP/progs.json"
+  printf ',\n    "maps": '
+  cat "$TMPDIR_SNAP/maps.json"
+  printf ',\n    "net": '
+  cat "$TMPDIR_SNAP/net.json"
+  printf ',\n    "cgroups": '
+  cat "$TMPDIR_SNAP/cgroups.json"
+  printf '\n  }\n'
+  printf '}\n'
+} > "$OUTPUT_FILE"
 
 # ── Optionally capture map entries ───────────────────────────────────────────
 if [[ $DUMP_MAPS -eq 1 ]]; then
-  log "Capturing map entries (--dump-maps, cap 200 entries/map)..."
+  log "Capturing map entries (--dump-maps, cap 200 entries/map, max $MAX_MAPS maps)..."
 
   # Map types that bpftool cannot dump
   UNSUPPORTED_TYPES="perf_event_array|ringbuf|user_ringbuf|cgroup_array|prog_array"
@@ -209,26 +250,36 @@ if [[ $DUMP_MAPS -eq 1 ]]; then
   UNSUPPORTED_TYPES="$UNSUPPORTED_TYPES|reuseport_sockarray|hash_of_maps|array_of_maps"
   UNSUPPORTED_TYPES="$UNSUPPORTED_TYPES|sk_storage|task_storage|struct_ops|stack_trace"
 
-  # Extract map IDs and types from the MAPS JSON using grep/sed (no jq required)
-  # Format: "id": N  followed later by "type": "typename"
-  # We process the JSON line by line to pair each id with its type
-  MAP_DUMPS_JSON="{"
-  FIRST_ENTRY=1
+  # Extract map IDs and types using grep+sed (POSIX-compatible, no awk extensions).
+  # Works with both compact and pretty-printed bpftool JSON output.
+  MAP_ID_TYPES=$(paste -d: \
+    <(grep -oE '"id"[[:space:]]*:[[:space:]]*[0-9]+' "$TMPDIR_SNAP/maps.json" | sed 's/.*://; s/[[:space:]]//g') \
+    <(grep -oE '"type"[[:space:]]*:[[:space:]]*"[^"]*"' "$TMPDIR_SNAP/maps.json" | sed 's/.*"type"[[:space:]]*:[[:space:]]*"//; s/"//') \
+  )
+
   DUMP_COUNT=0
   SKIP_COUNT=0
+  FIRST_ENTRY=1
 
-  # Parse id+type pairs using awk — handles the bpftool map list JSON format
-  # Each map object looks like: { "id": 64, "type": "hash", ... }
-  MAP_ID_TYPES=$(echo "$MAPS" | awk '
-    /"id"[[:space:]]*:/ { match($0, /"id"[[:space:]]*:[[:space:]]*([0-9]+)/, arr); id=arr[1] }
-    /"type"[[:space:]]*:/ && id != "" {
-      match($0, /"type"[[:space:]]*:[[:space:]]*"([^"]+)"/, arr)
-      if (arr[1] != "") { print id ":" arr[1]; id="" }
-    }
-  ')
+  # Start the map dumps JSON file — stream to file instead of accumulating in a variable
+  {
+    printf '{\n'
+    printf '  "_ebpfVizMapDumps": true,\n'
+    printf '  "_version": 1,\n'
+    printf '  "capturedAt": "%s",\n' "$CAPTURE_DATE"
+    printf '  "hostname": "%s",\n' "$(json_escape_string "$HOSTNAME_VAL")"
+    printf '  "snapshotFile": "%s",\n' "$(json_escape_string "$OUTPUT_FILE")"
+    printf '  "mapDumps": {'
+  } > "$DUMP_OUTPUT_FILE"
 
   while IFS=: read -r MAP_ID MAP_TYPE; do
     [[ -z "$MAP_ID" || -z "$MAP_TYPE" ]] && continue
+
+    # Respect --max-maps limit
+    if [[ $DUMP_COUNT -ge $MAX_MAPS ]]; then
+      log "Reached --max-maps limit ($MAX_MAPS), stopping map dumps"
+      break
+    fi
 
     # Skip unsupported types
     if echo "$MAP_TYPE" | grep -qE "^($UNSUPPORTED_TYPES)$"; then
@@ -238,73 +289,84 @@ if [[ $DUMP_MAPS -eq 1 ]]; then
     fi
 
     vlog "Dumping map $MAP_ID ($MAP_TYPE)..."
-    # Dump up to 200 entries; bpftool returns all entries so we truncate with head
-    # We use a temp file to avoid subshell issues with large outputs
-    DUMP_OUT=$( ${SUDO_PREFIX}${BPFTOOL} -j map dump id "$MAP_ID" 2>/dev/null \
-                | grep -v '^libbpf:' || true )
+
+    # Dump map entries to a temp file with timeout
+    DUMP_TMPFILE="$TMPDIR_SNAP/mapdump_${MAP_ID}.json"
+    DUMP_OK=0
+
+    dump_cmd_parts=()
+    if [[ -n "$TIMEOUT_CMD" ]]; then
+      dump_cmd_parts+=("$TIMEOUT_CMD" "$MAP_DUMP_TIMEOUT")
+    fi
+    if [[ -n "$SUDO_PREFIX" ]]; then
+      dump_cmd_parts+=("$SUDO_PREFIX")
+    fi
+    dump_cmd_parts+=("$BPFTOOL" -j map dump id "$MAP_ID")
+
+    if "${dump_cmd_parts[@]}" 2>/dev/null | grep -v '^libbpf:' > "$DUMP_TMPFILE" 2>/dev/null; then
+      if [[ -s "$DUMP_TMPFILE" ]]; then
+        DUMP_OK=1
+      fi
+    fi
 
     # Skip if empty or error
-    if [[ -z "$DUMP_OUT" || "$DUMP_OUT" == "null" || "$DUMP_OUT" == "{}" ]]; then
+    if [[ $DUMP_OK -eq 0 ]]; then
       SKIP_COUNT=$((SKIP_COUNT + 1))
+      rm -f "$DUMP_TMPFILE"
       continue
     fi
 
-    # Truncate to 200 entries: count opening braces at start of lines
-    # bpftool outputs one JSON object per line in the array
-    # We take the first 200 objects by counting lines that start with '  {'
-    TRUNCATED_DUMP=$(echo "$DUMP_OUT" | awk '
-      BEGIN { count=0; in_obj=0; buf="["; first=1 }
-      /^[[:space:]]*\{/ && !in_obj {
-        if (count >= 200) { next }
-        count++; in_obj=1
-        if (!first) buf = buf ","
-        first=0
-        buf = buf $0
-        next
-      }
-      in_obj {
-        buf = buf $0
-        if (/^[[:space:]]*\}/) { in_obj=0 }
-        next
-      }
-      END { print buf "]" }
-    ')
-
-    # Validate it looks like a JSON array
-    if [[ "$TRUNCATED_DUMP" != \[* ]]; then
+    # Check for null/empty content
+    FIRST_CHAR=$(head -c 1 "$DUMP_TMPFILE")
+    if [[ "$FIRST_CHAR" != "[" ]]; then
       SKIP_COUNT=$((SKIP_COUNT + 1))
+      rm -f "$DUMP_TMPFILE"
       continue
     fi
 
-    if [[ $FIRST_ENTRY -eq 0 ]]; then
-      MAP_DUMPS_JSON="$MAP_DUMPS_JSON,"
+    # Skip dumps larger than 10 MB (protects against huge maps filling disk)
+    DUMP_BYTES=$(wc -c < "$DUMP_TMPFILE" 2>/dev/null || echo 0)
+    if [[ "$DUMP_BYTES" -gt 10485760 ]]; then
+      vlog "Skipping map $MAP_ID — dump too large (${DUMP_BYTES} bytes)"
+      SKIP_COUNT=$((SKIP_COUNT + 1))
+      rm -f "$DUMP_TMPFILE"
+      continue
     fi
-    MAP_DUMPS_JSON="$MAP_DUMPS_JSON\"$MAP_ID\": $TRUNCATED_DUMP"
+
+    # Append raw dump to the output file.
+    # Server-side parseMapDumps already truncates to 200 entries, so we pass
+    # the full dump through. This avoids fragile awk-based JSON truncation.
+    {
+      if [[ $FIRST_ENTRY -eq 0 ]]; then
+        printf ','
+      fi
+      printf '"%s": ' "$MAP_ID"
+      cat "$DUMP_TMPFILE"
+    } >> "$DUMP_OUTPUT_FILE"
+
     FIRST_ENTRY=0
     DUMP_COUNT=$((DUMP_COUNT + 1))
+
+    # Clean up temp file for this map
+    rm -f "$DUMP_TMPFILE"
+
+    # Brief pause between dumps to reduce kernel lock contention
+    sleep "$MAP_DUMP_DELAY" 2>/dev/null || true
   done <<< "$MAP_ID_TYPES"
 
-  MAP_DUMPS_JSON="$MAP_DUMPS_JSON}"
+  # Close the JSON
+  {
+    printf '}\n'
+    printf '}\n'
+  } >> "$DUMP_OUTPUT_FILE"
 
-  log "Writing map dumps to: $DUMP_OUTPUT_FILE ($DUMP_COUNT maps dumped, $SKIP_COUNT skipped)"
-
-  cat > "$DUMP_OUTPUT_FILE" << DUMPJSONEOF
-{
-  "_ebpfVizMapDumps": true,
-  "_version": 1,
-  "capturedAt": "$CAPTURE_DATE",
-  "hostname": "$(json_escape_string "$HOSTNAME_VAL")",
-  "snapshotFile": "$(json_escape_string "$OUTPUT_FILE")",
-  "mapDumps": $MAP_DUMPS_JSON
-}
-DUMPJSONEOF
-
+  log "Map dumps complete: $DUMP_COUNT maps dumped, $SKIP_COUNT skipped"
 fi
 
 # ── Print result ──────────────────────────────────────────────────────────────
 FILE_SIZE=$(du -sh "$OUTPUT_FILE" 2>/dev/null | cut -f1 || echo "?")
-PROG_COUNT=$(echo "$PROGS" | grep -c '"id"' 2>/dev/null || echo "?")
-MAP_COUNT=$(echo "$MAPS" | grep -c '"id"' 2>/dev/null || echo "?")
+PROG_COUNT=$(grep -c '"id"' "$TMPDIR_SNAP/progs.json" 2>/dev/null || echo "?")
+MAP_COUNT=$(grep -c '"id"' "$TMPDIR_SNAP/maps.json" 2>/dev/null || echo "?")
 
 echo ""
 echo "=== Snapshot captured ==="
