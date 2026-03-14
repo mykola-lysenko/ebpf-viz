@@ -10,16 +10,15 @@
 import { execFile } from "child_process";
 import { promisify } from "util";
 import type { ProgDump, XlatedInsn, JitedInsn } from "../shared/ebpf-types";
-import { resolveBpftoolPath } from "./ebpf-poller";
+import { getBpftoolPath, isSudoEnabled } from "./ebpf-poller";
 
 const execFileAsync = promisify(execFile);
 
-const BPFTOOL = resolveBpftoolPath();
-const SUDO = process.env.BPFTOOL_SUDO !== "false";
-
 async function run(args: string[]): Promise<{ stdout: string; stderr: string }> {
-  const cmd = SUDO ? "sudo" : BPFTOOL;
-  const argv = SUDO ? [BPFTOOL, ...args] : args;
+  const bpftool = getBpftoolPath();
+  const sudo = isSudoEnabled();
+  const cmd = sudo ? "sudo" : bpftool;
+  const argv = sudo ? [bpftool, ...args] : args;
   try {
     const result = await execFileAsync(cmd, argv, {
       timeout: 10_000,
@@ -149,7 +148,13 @@ export async function fetchProgDump(progId: number, hasBtf: boolean, isJited: bo
     jitedUnavailableReason = "This program was not JIT-compiled (jited=false). JIT compilation requires CONFIG_BPF_JIT and net.core.bpf_jit_enable=1.";
   } else {
     // Ensure kptr_restrict=0 so kernel pointers are visible
-    await run(["bash", "-c", "sysctl -w kernel.kptr_restrict=0"]).catch(() => {});
+    try {
+      const sysctlCmd = isSudoEnabled() ? "sudo" : "sysctl";
+      const sysctlArgv = isSudoEnabled()
+        ? ["sysctl", "-w", "kernel.kptr_restrict=0"]
+        : ["-w", "kernel.kptr_restrict=0"];
+      await execFileAsync(sysctlCmd, sysctlArgv, { timeout: 5_000 });
+    } catch { /* best-effort — JIT dump may still work */ }
 
     const { stdout: jitedOut, stderr: jitedErr } = await run(["-jp", "prog", "dump", "jited", "id", String(progId)]);
     const parsed = parseJitedJson(jitedOut);
@@ -174,7 +179,7 @@ export async function fetchProgDump(progId: number, hasBtf: boolean, isJited: bo
     jitedUnavailableReason,
     hasLineInfo,
     hasBtf,
-    btfId: hasBtf ? undefined : undefined, // populated by caller if needed
+    btfId: undefined, // populated by caller if needed
   };
 }
 
