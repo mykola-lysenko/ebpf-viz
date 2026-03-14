@@ -226,15 +226,25 @@ export async function dumpMapEntries(
     return parseMapDumpOutput(stdout, stderr, mapId, mapType, mapName);
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err);
-    // bpftool exits with non-zero for empty maps on some kernel versions — treat as empty
-    if (msg.includes("No such file") || msg.includes("not found")) {
+    const errCode = (err as NodeJS.ErrnoException)?.code;
+
+    // Binary not found — ENOENT or shell "command not found"
+    if (errCode === "ENOENT" || msg.includes("command not found")) {
       return {
         ...base,
         entries: [],
         error: `bpftool not found at ${bpftoolPath}. Install bpftool or set the BPFTOOL_PATH environment variable to its location (e.g. BPFTOOL_PATH=/usr/sbin/bpftool).`,
       };
     }
-    // Empty hash map returns exit code 255 with "[]" on stdout — handle gracefully
-    return { ...base, entries: [], error: null };
+
+    // bpftool exits with non-zero for empty hash maps on some kernel versions.
+    // When it does, err.stdout may still contain valid JSON (e.g. "[]").
+    const stdout = (err as any)?.stdout ?? "";
+    if (stdout.trim()) {
+      return parseMapDumpOutput(stdout, (err as any)?.stderr ?? "", mapId, mapType, mapName);
+    }
+
+    // All other errors — surface them to the user instead of silently swallowing
+    return { ...base, entries: [], error: msg };
   }
 }
