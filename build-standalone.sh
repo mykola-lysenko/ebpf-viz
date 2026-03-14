@@ -200,6 +200,12 @@ if [ "$NODE_MAJOR" -lt 16 ]; then
   exit 1
 fi
 
+# ── Install optional deps for Node 16 (undici for fetch/Headers) ──────────────
+if [ "$NODE_MAJOR" -lt 18 ] && [ ! -d "$SCRIPT_DIR/node_modules/undici" ]; then
+  echo "[compat] Node.js < 18 detected — installing undici for fetch/Headers support..."
+  (cd "$SCRIPT_DIR" && npm install --no-save 2>/dev/null) || echo "[compat] Warning: could not install undici. tRPC may not work."
+fi
+
 # ── Load .env if present ───────────────────────────────────────────────────────
 if [ -f "$SCRIPT_DIR/.env" ]; then
   set -o allexport
@@ -247,13 +253,24 @@ STARTSCRIPT
 chmod +x "$OUT_DIR/start.sh"
 
 # Write a minimal package.json (ESM bundle)
+# undici is an optional dependency for Node 16 (provides fetch/Headers globals).
+# On Node 18+ it's a no-op — the globals are built in.
 cat > "$OUT_DIR/package.json" << 'PKGJSON'
 {
   "name": "ebpf-viz-standalone",
   "version": "1.0.0",
-  "type": "module"
+  "type": "module",
+  "optionalDependencies": {
+    "undici": "5"
+  }
 }
 PKGJSON
+
+# Install undici for Node 16 compatibility (provides fetch/Headers globals).
+# Bundled in the tarball so the standalone package works on Node 16
+# without requiring npm on the target machine.
+echo "  Installing undici (Node 16 polyfill)..."
+(cd "$OUT_DIR" && npm install --production 2>&1 | tail -3)
 
 # ── 6. Create the tarball ──────────────────────────────────────────────────────
 echo "[6/6] Creating tarball: $TARBALL"
