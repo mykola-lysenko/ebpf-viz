@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useCallback, useMemo, useRef } from "react";
+import React, { createContext, useContext, useState, useCallback, useMemo } from "react";
 import { trpc } from "@/lib/trpc";
 import { useEbpfStream } from "@/hooks/useEbpfStream";
 import type { BpfProgram, BpfMap, EbpfSnapshot, ProgHistory, ActivitySummary, MapDumpResult } from "../../../shared/ebpf-types";
@@ -70,7 +70,6 @@ export function EbpfProvider({ children }: { children: React.ReactNode }) {
   const [snapshotMaps, setSnapshotMaps] = useState<BpfMap[]>([]);
   const [snapshotMeta, setSnapshotMeta] = useState<SnapshotMeta | null>(null);
   const [snapshotMapDumps, setSnapshotMapDumps] = useState<Record<number, MapDumpResult>>({});
-  const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   // ── SSE live stream ────────────────────────────────────────────────────────
   const {
@@ -250,36 +249,50 @@ export function EbpfProvider({ children }: { children: React.ReactNode }) {
     void v;
   }, []);
 
+  const error = appMode !== "snapshot" && streamStatus === "offline"
+    ? "Stream disconnected — check server"
+    : null;
+  const demoMode = appMode === "demo";
+  const statsEnabled = pollerStatus?.statsEnabled ?? false;
+  const activityValue = activity ?? null;
+
+  const contextValue = useMemo<EbpfContextValue>(() => ({
+    snapshot: snapshot ?? null,
+    isLoading,
+    error,
+    selectedProgram,
+    setSelectedProgram,
+    searchQuery,
+    setSearchQuery,
+    typeFilter,
+    setTypeFilter,
+    filteredPrograms,
+    streamStatus,
+    autoRefresh,
+    setAutoRefresh,
+    refreshInterval,
+    setRefreshInterval,
+    refresh,
+    demoMode,
+    appMode,
+    snapshotMeta,
+    loadSnapshot,
+    loadMapDumps,
+    clearSnapshot,
+    snapshotMapDumps,
+    historyMap,
+    activity: activityValue,
+    statsEnabled,
+    maps,
+  }), [
+    snapshot, isLoading, error, selectedProgram, searchQuery, typeFilter,
+    filteredPrograms, streamStatus, autoRefresh, refreshInterval, refresh,
+    demoMode, appMode, snapshotMeta, loadSnapshot, loadMapDumps, clearSnapshot,
+    snapshotMapDumps, historyMap, activityValue, statsEnabled, maps,
+  ]);
+
   return (
-    <EbpfContext.Provider value={{
-      snapshot: snapshot ?? null,
-      isLoading,
-      error: appMode !== "snapshot" && streamStatus === "offline" ? "Stream disconnected — check server" : null,
-      selectedProgram,
-      setSelectedProgram,
-      searchQuery,
-      setSearchQuery,
-      typeFilter,
-      setTypeFilter,
-      filteredPrograms,
-      streamStatus,
-      autoRefresh,
-      setAutoRefresh,
-      refreshInterval,
-      setRefreshInterval,
-      refresh,
-      demoMode: appMode === "demo",
-      appMode,
-      snapshotMeta,
-      loadSnapshot,
-      loadMapDumps,
-      clearSnapshot,
-      snapshotMapDumps,
-      historyMap,
-      activity: activity ?? null,
-      statsEnabled: pollerStatus?.statsEnabled ?? false,
-      maps,
-    }}>
+    <EbpfContext.Provider value={contextValue}>
       {children}
     </EbpfContext.Provider>
   );
