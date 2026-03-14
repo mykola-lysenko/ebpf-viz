@@ -126,18 +126,28 @@ export const appRouter = router({
       const sudo = isSudoEnabled();
       const demo = isDemoMode();
 
-      const results = await Promise.all(
-        maps.map(async (map) => {
-          const result = demo
-            ? buildMockMapDump(map.id, map.rawType, map.name)
-            : await dumpMapEntries(map.id, map.rawType, map.name, bpftoolPath, sudo);
-          return {
-            mapId: map.id,
-            count: result.unsupported || result.error ? null : result.totalEntries,
-            unsupported: result.unsupported ?? false,
-          };
-        }),
-      );
+      // Process maps in batches to avoid spawning hundreds of concurrent
+      // bpftool processes on systems with many maps (each has 20MB maxBuffer).
+      const BATCH_SIZE = 8;
+      const results: { mapId: number; count: number | null; unsupported: boolean }[] = [];
+
+      for (let i = 0; i < maps.length; i += BATCH_SIZE) {
+        const batch = maps.slice(i, i + BATCH_SIZE);
+        const batchResults = await Promise.all(
+          batch.map(async (map) => {
+            const result = demo
+              ? buildMockMapDump(map.id, map.rawType, map.name)
+              : await dumpMapEntries(map.id, map.rawType, map.name, bpftoolPath, sudo);
+            return {
+              mapId: map.id,
+              count: result.unsupported || result.error ? null : result.totalEntries,
+              unsupported: result.unsupported ?? false,
+            };
+          }),
+        );
+        results.push(...batchResults);
+      }
+
       return results;
     }),
 
