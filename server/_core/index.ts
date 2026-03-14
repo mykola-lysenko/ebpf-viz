@@ -242,7 +242,9 @@ async function startServer() {
 
 startServer().catch(console.error);
 
-// Start eBPF polling service
+// Start eBPF polling service. The first poll runs in the background so
+// the HTTP server is ready immediately — SSE clients get data as soon
+// as the first poll completes.
 startPoller().catch(err => {
   console.error("[ebpf-poller] Failed to start:", err);
 });

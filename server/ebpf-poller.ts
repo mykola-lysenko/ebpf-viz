@@ -174,6 +174,7 @@ async function poll(): Promise<void> {
   if (isPolling) return;
   isPolling = true;
 
+  const pollStart = Date.now();
   try {
     let progs: RawBpfProg[];
     let net: RawNetSnapshot[];
@@ -221,6 +222,11 @@ async function poll(): Promise<void> {
     latestSnapshot = snap;
     lastError = null;
 
+    const elapsed = Date.now() - pollStart;
+    if (elapsed > 2000 || !latestSnapshot) {
+      console.log(`[ebpf-poller] poll completed in ${elapsed}ms — ${snap.stats.total} programs, ${latestMaps.length} maps`);
+    }
+
     for (const cb of Array.from(listeners)) {
       try { cb(snap); } catch { /* ignore listener errors */ }
     }
@@ -252,15 +258,19 @@ async function poll(): Promise<void> {
 // ─── Public API ────────────────────────────────────────────────────────────
 
 export async function startPoller(): Promise<void> {
-  await getSystemInfo();
+  // Run system info discovery and bpftool checks in background so the
+  // HTTP server can start accepting connections immediately.  SSE clients
+  // receive a "ping" until the first snapshot is ready, then get the full
+  // data bundle automatically via the subscriber callback.
 
   // Log if demo mode was requested via env var
   if (config.demoMode) {
     console.log("[ebpf-poller] Demo mode enabled via DEMO_MODE env var — using synthetic data");
     statsEnabled = true;
   } else {
-    // Check if bpftool is actually available
+    // Check if bpftool is actually available (runs in background)
     try {
+      await getSystemInfo();
       await runBpftool("version");
       // Only try to enable stats when we have a real bpftool
       await ensureBpfStatsEnabled();
@@ -271,7 +281,10 @@ export async function startPoller(): Promise<void> {
     }
   }
 
-  await poll(); // immediate first poll
+  // First poll runs in background — don't block server startup
+  poll().catch(err => {
+    console.error("[ebpf-poller] first poll failed:", err);
+  });
 
   if (pollingTimer) clearInterval(pollingTimer);
   pollingTimer = setInterval(poll, config.intervalMs);
