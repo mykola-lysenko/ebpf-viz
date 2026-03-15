@@ -118,7 +118,7 @@ export async function fetchProgDump(progId: number, hasBtf: boolean, isJited: bo
   let xlatedError = "";
 
   if (hasBtf) {
-    // Try linum first — gives us source annotations
+    // Try linum first — gives us file:line source annotations (richest output)
     const linumResult = await run(["-jp", "prog", "dump", "xlated", "id", String(progId), "linum"]);
     if (!linumResult.failed && linumResult.stdout.trim()) {
       xlated = parseXlatedLinum(linumResult.stdout);
@@ -134,6 +134,20 @@ export async function fetchProgDump(progId: number, hasBtf: boolean, isJited: bo
       xlatedError = xlatedResult.stderr.trim();
     } else {
       xlated = parseXlatedJson(xlatedResult.stdout);
+    }
+  }
+
+  // If JSON parsing produced no source annotations, try text-mode xlated.
+  // bpftool text output embeds "; <C source>" lines even when the linum flag
+  // isn't used, as long as the kernel has BTF/DWARF info for the program.
+  if (!hasLineInfo && xlated.length > 0) {
+    const textResult = await run(["prog", "dump", "xlated", "id", String(progId)]);
+    if (!textResult.failed && textResult.stdout.trim()) {
+      const textXlated = parseXlatedLinum(textResult.stdout);
+      if (textXlated.some(i => i.linum !== undefined)) {
+        xlated = textXlated;
+        hasLineInfo = true;
+      }
     }
   }
 
