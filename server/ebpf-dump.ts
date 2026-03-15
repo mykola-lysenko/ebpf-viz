@@ -14,7 +14,7 @@ import { getBpftoolPath, isSudoEnabled } from "./ebpf-poller";
 
 const execFileAsync = promisify(execFile);
 
-async function run(args: string[]): Promise<{ stdout: string; stderr: string }> {
+async function run(args: string[]): Promise<{ stdout: string; stderr: string; failed: boolean }> {
   const bpftool = getBpftoolPath();
   const sudo = isSudoEnabled();
   const cmd = sudo ? "sudo" : bpftool;
@@ -24,9 +24,9 @@ async function run(args: string[]): Promise<{ stdout: string; stderr: string }> 
       timeout: 10_000,
       maxBuffer: 8 * 1024 * 1024, // 8 MB — large programs can produce big dumps
     });
-    return { stdout: result.stdout, stderr: result.stderr };
+    return { stdout: result.stdout, stderr: result.stderr, failed: false };
   } catch (err: any) {
-    return { stdout: err.stdout ?? "", stderr: err.stderr ?? String(err) };
+    return { stdout: err.stdout ?? "", stderr: err.stderr ?? String(err), failed: true };
   }
 }
 
@@ -114,27 +114,34 @@ export async function fetchProgDump(progId: number, hasBtf: boolean, isJited: bo
   // ── 1. BPF bytecode (xlated) ─────────────────────────────────────────────
   let xlated: XlatedInsn[] = [];
   let hasLineInfo = false;
+  let xlatedFailed = false;
+  let xlatedError = "";
 
   if (hasBtf) {
     // Try linum first — gives us source annotations
-    const { stdout: linumOut } = await run(["-jp", "prog", "dump", "xlated", "id", String(progId), "linum"]);
-    if (linumOut.trim()) {
-      xlated = parseXlatedLinum(linumOut);
+    const linumResult = await run(["-jp", "prog", "dump", "xlated", "id", String(progId), "linum"]);
+    if (!linumResult.failed && linumResult.stdout.trim()) {
+      xlated = parseXlatedLinum(linumResult.stdout);
       hasLineInfo = xlated.some(i => i.linum !== undefined);
     }
   }
 
   if (xlated.length === 0) {
     // Fall back to plain JSON xlated
-    const { stdout: xlatedOut } = await run(["-jp", "prog", "dump", "xlated", "id", String(progId)]);
-    xlated = parseXlatedJson(xlatedOut);
+    const xlatedResult = await run(["-jp", "prog", "dump", "xlated", "id", String(progId)]);
+    if (xlatedResult.failed) {
+      xlatedFailed = true;
+      xlatedError = xlatedResult.stderr.trim();
+    } else {
+      xlated = parseXlatedJson(xlatedResult.stdout);
+    }
   }
 
   // ── 2. CFG in DOT format ─────────────────────────────────────────────────
   let cfgDot = "";
-  const { stdout: dotOut } = await run(["prog", "dump", "xlated", "id", String(progId), "visual"]);
-  if (dotOut.trim().startsWith("digraph")) {
-    cfgDot = dotOut;
+  const dotResult = await run(["prog", "dump", "xlated", "id", String(progId), "visual"]);
+  if (!dotResult.failed && dotResult.stdout.trim().startsWith("digraph")) {
+    cfgDot = dotResult.stdout;
   } else {
     // Build a minimal DOT from xlated if visual failed
     cfgDot = buildMinimalDot(xlated);
@@ -156,18 +163,33 @@ export async function fetchProgDump(progId: number, hasBtf: boolean, isJited: bo
       await execFileAsync(sysctlCmd, sysctlArgv, { timeout: 5_000 });
     } catch { /* best-effort — JIT dump may still work */ }
 
-    const { stdout: jitedOut, stderr: jitedErr } = await run(["-jp", "prog", "dump", "jited", "id", String(progId)]);
-    const parsed = parseJitedJson(jitedOut);
+    const jitedResult = await run(["-jp", "prog", "dump", "jited", "id", String(progId)]);
+    const parsed = jitedResult.failed ? [] : parseJitedJson(jitedResult.stdout);
 
     if (parsed.length > 0) {
       jited = parsed;
     } else {
+      const jitedErr = jitedResult.stderr;
       jitedUnavailableReason =
         jitedErr.includes("kptr_restrict")
           ? "JIT dump blocked by kernel.kptr_restrict. Run: sudo sysctl -w kernel.kptr_restrict=0"
           : jitedErr.includes("no instructions")
           ? "No JIT instructions returned. The program may have been loaded before JIT was enabled."
           : `JIT dump unavailable: ${jitedErr.trim() || "unknown error"}`;
+    }
+  }
+
+  // Build error message if the critical xlated dump failed
+  let error: string | undefined;
+  if (xlatedFailed) {
+    if (xlatedError.includes("ENOENT") || xlatedError.includes("not found")) {
+      error = `bpftool not found. Check that the configured path is correct.`;
+    } else if (xlatedError.includes("EACCES") || xlatedError.includes("permission denied") || xlatedError.includes("Operation not permitted")) {
+      error = `Permission denied. Try enabling sudo in Settings.`;
+    } else if (xlatedError.includes("ETIMEDOUT") || xlatedError.includes("timed out")) {
+      error = `bpftool timed out dumping program ${progId}.`;
+    } else {
+      error = `Failed to dump program ${progId}: ${xlatedError || "unknown error"}`;
     }
   }
 
@@ -180,6 +202,7 @@ export async function fetchProgDump(progId: number, hasBtf: boolean, isJited: bo
     hasLineInfo,
     hasBtf,
     btfId: undefined, // populated by caller if needed
+    error,
   };
 }
 
