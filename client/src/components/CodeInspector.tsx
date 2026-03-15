@@ -157,7 +157,7 @@ function buildJumpMap(insns: XlatedInsn[]): Map<number, number[]> {
 
 // ─── Bytecode tab ─────────────────────────────────────────────────────────────
 
-function BytecodeTab({ insns, hasLineInfo }: { insns: XlatedInsn[]; hasLineInfo: boolean }) {
+function BytecodeTab({ insns }: { insns: XlatedInsn[] }) {
   const [highlightedLine, setHighlightedLine] = useState<number | null>(null);
   const lineRefs = useRef<Map<number, HTMLDivElement>>(new Map());
   const jumpMap = useMemo(() => buildJumpMap(insns), [insns]);
@@ -182,7 +182,7 @@ function BytecodeTab({ insns, hasLineInfo }: { insns: XlatedInsn[]; hasLineInfo:
   return (
     <div className="flex flex-col h-full">
       <div className="flex items-center justify-between px-4 py-2 border-b border-white/5 shrink-0">
-        <span className="text-xs text-slate-400">{insns.length} instructions{hasLineInfo ? " · with source annotations" : ""}</span>
+        <span className="text-xs text-slate-400">{insns.length} instructions</span>
         <button
           onClick={copyAll}
           className="flex items-center gap-1.5 text-xs text-slate-400 hover:text-white transition-colors px-2 py-1 rounded hover:bg-white/5"
@@ -202,15 +202,7 @@ function BytecodeTab({ insns, hasLineInfo }: { insns: XlatedInsn[]; hasLineInfo:
 
               return (
                 <React.Fragment key={insn.index}>
-                  {insn.linum && (
-                    <tr key={`linum-${insn.index}`} className="bg-emerald-950/30">
-                      <td colSpan={3} className="px-4 py-0.5 text-emerald-400/80 text-xs italic border-l-2 border-emerald-600/40">
-                        ; {insn.linum}
-                      </td>
-                    </tr>
-                  )}
                   <tr
-                    key={insn.index}
                     ref={el => { if (el) lineRefs.current.set(insn.index, el as any); }}
                     className={[
                       "group transition-colors",
@@ -425,8 +417,8 @@ function JitTab({ insns, unavailableReason }: { insns: JitedInsn[] | null; unava
 
 // ─── C Source tab ─────────────────────────────────────────────────────────────
 
-function SourceTab({ insns, hasBtf, hasLineInfo }: { insns: XlatedInsn[]; hasBtf: boolean; hasLineInfo: boolean }) {
-  if (!hasBtf || !hasLineInfo) {
+function SourceTab({ insns, hasLineInfo }: { insns: XlatedInsn[]; hasLineInfo: boolean }) {
+  if (!hasLineInfo) {
     return (
       <div className="flex flex-col items-center justify-center h-full gap-4 p-8 text-center">
         <div className="w-12 h-12 rounded-full bg-slate-800 flex items-center justify-center">
@@ -435,9 +427,7 @@ function SourceTab({ insns, hasBtf, hasLineInfo }: { insns: XlatedInsn[]; hasBtf
         <div>
           <p className="text-sm text-slate-300 font-medium mb-2">C source not available</p>
           <p className="text-xs text-slate-500 max-w-md leading-relaxed">
-            {!hasBtf
-              ? "This program has no BTF (BPF Type Format) information attached. Source annotations require programs compiled with clang -g and loaded with BTF enabled."
-              : "BTF is present but contains no line-number information. Recompile with clang -g to embed source annotations."}
+            No source annotations found in the bytecode dump. Source annotations require programs compiled with clang -g and loaded with BTF enabled.
           </p>
         </div>
         <div className="mt-2 p-3 bg-slate-900/60 rounded-lg border border-white/5 text-left max-w-md">
@@ -452,59 +442,33 @@ function SourceTab({ insns, hasBtf, hasLineInfo }: { insns: XlatedInsn[]; hasBtf
     );
   }
 
-  // Group instructions by source line
-  type InsnGroup = { linum: string | undefined; insns: XlatedInsn[] };
-  const groups: InsnGroup[] = [];
-  let currentLinum: string | undefined = undefined;
-  let currentGroupInsns: XlatedInsn[] = [];
-
-  const flushGroup = () => {
-    if (currentGroupInsns.length > 0) {
-      groups.push({ linum: currentLinum, insns: currentGroupInsns });
-    }
-  };
-
+  // Extract unique source lines in order of appearance
+  const sourceLines: string[] = [];
+  const seen = new Set<string>();
   for (const insn of insns) {
-    const linumKey: string | undefined = insn.linum;
-    if (linumKey !== currentLinum && currentGroupInsns.length > 0) {
-      flushGroup();
-      currentLinum = linumKey;
-      currentGroupInsns = [insn];
-    } else {
-      if (currentGroupInsns.length === 0) currentLinum = linumKey;
-      currentGroupInsns.push(insn);
+    if (insn.linum && !seen.has(insn.linum)) {
+      seen.add(insn.linum);
+      sourceLines.push(insn.linum);
     }
   }
-  flushGroup();
 
   return (
     <div className="flex flex-col h-full">
-      <div className="flex items-center px-4 py-2 border-b border-white/5 shrink-0">
-        <span className="text-xs text-slate-400">Source-annotated bytecode — C lines interleaved with BPF instructions</span>
+      <div className="flex items-center gap-2 px-4 py-2 border-b border-white/5 shrink-0">
+        <AlertTriangle size={12} className="text-amber-400 shrink-0" />
+        <span className="text-xs text-slate-400">
+          Reconstructed from BPF bytecode annotations — not the original source file.
+          Fragments may be incomplete or reordered by the compiler.
+        </span>
       </div>
-      <div className="flex-1 overflow-auto font-mono text-xs leading-relaxed">
-        {groups.map((group, gi) => (
-          <div key={gi} className="border-b border-white/[0.03]">
-            {group.linum && (
-              <div className="flex items-start gap-2 px-4 py-1.5 bg-emerald-950/20 border-l-2 border-emerald-600/50">
-                <FileCode size={10} className="text-emerald-500 mt-0.5 shrink-0" />
-                <span className="text-emerald-400/90 text-xs">{group.linum}</span>
-              </div>
-            )}
-            <table className="w-full border-collapse">
-              <tbody>
-                {group.insns.map(insn => (
-                  <tr key={insn.index} className="hover:bg-white/[0.03] transition-colors">
-                    <td className="pl-8 pr-2 py-0.5 text-slate-600 select-none w-12 text-right">
-                      {insn.index}
-                    </td>
-                    <td className="px-2 py-0.5 whitespace-nowrap">
-                      {highlightXlated(insn.disasm)}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+      <div className="flex-1 overflow-auto font-mono text-sm leading-relaxed p-4">
+        {sourceLines.map((line, idx) => (
+          <div
+            key={idx}
+            className="py-0.5 flex gap-3 hover:bg-white/[0.03] transition-colors rounded px-2"
+          >
+            <span className="text-slate-600 select-none w-8 text-right shrink-0">{idx + 1}</span>
+            <span className="text-emerald-400/90">{line}</span>
           </div>
         ))}
       </div>
@@ -561,8 +525,8 @@ export function CodeInspector({ program, onClose }: CodeInspectorProps) {
       id: "source",
       label: "C Source",
       icon: <FileCode size={13} />,
-      available: !!(dump?.hasBtf && dump?.hasLineInfo),
-      badge: dump?.hasBtf && dump?.hasLineInfo ? "BTF" : undefined,
+      available: !!dump?.hasLineInfo,
+      badge: dump?.hasLineInfo ? (dump?.hasBtf ? "BTF" : "annotations") : undefined,
     },
   ];
 
@@ -657,7 +621,7 @@ export function CodeInspector({ program, onClose }: CodeInspectorProps) {
                 </div>
               )}
               {activeTab === "bytecode" && (
-                <BytecodeTab insns={dump.xlated} hasLineInfo={dump.hasLineInfo} />
+                <BytecodeTab insns={dump.xlated} />
               )}
               {activeTab === "cfg" && (
                 <CfgTab dot={dump.cfgDot} />
@@ -666,7 +630,7 @@ export function CodeInspector({ program, onClose }: CodeInspectorProps) {
                 <JitTab insns={dump.jited} unavailableReason={dump.jitedUnavailableReason} />
               )}
               {activeTab === "source" && (
-                <SourceTab insns={dump.xlated} hasBtf={dump.hasBtf} hasLineInfo={dump.hasLineInfo} />
+                <SourceTab insns={dump.xlated} hasLineInfo={dump.hasLineInfo} />
               )}
             </>
           )}
