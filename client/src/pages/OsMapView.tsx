@@ -80,6 +80,8 @@ function MapToolbar({
   maxTreeDepth,
   maxCgroupDepth,
   onMaxCgroupDepthChange,
+  focusedProcess,
+  onClearFocus,
 }: {
   zoom: number;
   showLabels: boolean;
@@ -90,6 +92,8 @@ function MapToolbar({
   maxTreeDepth: number;
   maxCgroupDepth: number | undefined;
   onMaxCgroupDepthChange: (v: number | undefined) => void;
+  focusedProcess: { pid: number; comm: string } | null;
+  onClearFocus: () => void;
 }) {
   const { fitView, zoomIn, zoomOut } = useReactFlow();
 
@@ -120,6 +124,41 @@ function MapToolbar({
       <span style={{ fontSize: 10, fontFamily: "monospace", color: "oklch(0.55 0.01 240)" }}>
         {progCount} programs · {nodeCount} nodes
       </span>
+
+      {/* Focus mode indicator */}
+      {focusedProcess && (
+        <>
+          <div style={{ width: 1, height: 16, background: "oklch(0.25 0.01 240)" }} />
+          <div style={{
+            display: "flex",
+            alignItems: "center",
+            gap: 6,
+            padding: "3px 8px 3px 10px",
+            background: "#f59e0b18",
+            border: "1px solid #f59e0b40",
+            borderRadius: 6,
+          }}>
+            <Eye size={10} style={{ color: "#f59e0b" }} />
+            <span style={{ fontSize: 10, fontFamily: "monospace", color: "#f59e0b", whiteSpace: "nowrap" }}>
+              {focusedProcess.comm}
+              <span style={{ color: "#f59e0b80", marginLeft: 4 }}>pid {focusedProcess.pid}</span>
+            </span>
+            <button
+              onClick={onClearFocus}
+              title="Exit focus mode"
+              style={{
+                width: 16, height: 16, borderRadius: 4,
+                background: "#f59e0b20",
+                border: "1px solid #f59e0b40",
+                display: "flex", alignItems: "center", justifyContent: "center",
+                cursor: "pointer", color: "#f59e0b", padding: 0,
+              }}
+            >
+              <X size={9} />
+            </button>
+          </div>
+        </>
+      )}
 
       <div style={{ width: 1, height: 16, background: "oklch(0.25 0.01 240)" }} />
 
@@ -382,6 +421,7 @@ function OsMapCanvas() {
   const [nodes, setNodes, onNodesChange] = useNodesState(layout.nodes);
   const [edges, setEdges, onEdgesChange] = useEdgesState(layout.edges);
   const [showLabels, setShowLabels] = useState(true);
+  const [focusedProcessId, setFocusedProcessId] = useState<number | null>(null);
   const didFit = useRef(false);
   const fitAttempts = useRef(0);
 
@@ -480,43 +520,133 @@ function OsMapCanvas() {
     return nodeIds;
   }, [searchQuery, snapshot]);
 
+  // Focus mode: trace a process's programs to zones, interfaces, cgroups, and maps
+  const focusedNodeIds = useMemo(() => {
+    if (focusedProcessId === null || !snapshot) return null;
+    const proc = Array.from(
+      // Rebuild the process map to find which programs belong to this pid
+      snapshot.programs.reduce((acc, p) => {
+        if (p.pids) {
+          for (const { pid } of p.pids) {
+            if (pid === focusedProcessId) {
+              acc.add(p.id);
+            }
+          }
+        }
+        return acc;
+      }, new Set<number>())
+    );
+    if (proc.length === 0) return null;
+    const progIds = new Set(proc);
+
+    const nodeIds = new Set<string>();
+    // Always keep structural nodes
+    nodeIds.add("band-userspace");
+    nodeIds.add("band-kernel");
+    nodeIds.add("band-network");
+    nodeIds.add("label-zones");
+    nodeIds.add("label-cgroups");
+    nodeIds.add("label-maps");
+    // The focused process itself
+    nodeIds.add(`proc-${focusedProcessId}`);
+
+    // Zones containing the process's programs
+    snapshot.kernelZones.forEach(z => {
+      if (z.programs.some(p => progIds.has(p.id))) {
+        nodeIds.add(`zone-${z.zone}`);
+      }
+    });
+
+    // Cgroup nodes containing the process's programs
+    const snap = snapshot;
+    function walkCgroup(nodes: typeof snap.cgroupTree) {
+      nodes.forEach(n => {
+        if (n.programs.some(p => progIds.has(p.id))) {
+          nodeIds.add(`cgroup-${n.path}`);
+        }
+        walkCgroup(n.children);
+      });
+    }
+    walkCgroup(snapshot.cgroupTree);
+
+    // Network interfaces with the process's programs
+    snapshot.networkInterfaces.forEach(iface => {
+      if (iface.allPrograms.some(p => progIds.has(p.id))) {
+        nodeIds.add(`iface-${iface.name}`);
+      }
+    });
+
+    // BPF maps used by the process's programs
+    maps.forEach(map => {
+      if (map.usedByProgIds.some(id => progIds.has(id))) {
+        nodeIds.add(`map-${map.id}`);
+      }
+    });
+
+    return nodeIds;
+  }, [focusedProcessId, snapshot, maps]);
+
+  // Combine search and focus filters — if both active, intersect them
+  const activeFilter = useMemo(() => {
+    if (highlightedNodeIds && focusedNodeIds) {
+      // Intersection: node must match both search and focus
+      const combined = new Set<string>();
+      highlightedNodeIds.forEach(id => {
+        if (focusedNodeIds.has(id)) combined.add(id);
+      });
+      // Always keep structural nodes
+      ["band-userspace", "band-kernel", "band-network", "label-zones", "label-cgroups", "label-maps"].forEach(id => {
+        combined.add(id);
+      });
+      return combined;
+    }
+    return highlightedNodeIds ?? focusedNodeIds;
+  }, [highlightedNodeIds, focusedNodeIds]);
+
   // Derive LOD tier from current zoom (changes at only 2 thresholds, not on every tick)
   const lod = zoomToLod(zoom);
 
-  // Apply highlight opacity to nodes AND inject lod into data so node components
+  // Apply highlight/focus opacity to nodes AND inject lod into data so node components
   // don't need to call useViewport() individually (eliminates per-node re-renders on pan/zoom)
   const displayNodes = useMemo(() => {
     return nodes.map(n => ({
       ...n,
       data: { ...n.data, lod },
-      ...(highlightedNodeIds ? {
+      ...(activeFilter ? {
         style: {
           ...n.style,
-          opacity: highlightedNodeIds.has(n.id) ? 1 : 0.15,
+          opacity: activeFilter.has(n.id) ? 1 : 0.15,
           transition: "opacity 0.3s ease",
         },
       } : {}),
     }));
-  }, [nodes, highlightedNodeIds, lod]);
+  }, [nodes, activeFilter, lod]);
 
-  // Apply highlight opacity to edges
+  // Apply highlight/focus opacity to edges
   const displayEdges = useMemo(() => {
-    if (!highlightedNodeIds) return edges;
+    if (!activeFilter) return edges;
     return edges.map(e => ({
       ...e,
       style: {
         ...e.style,
-        opacity: (highlightedNodeIds.has(e.source) && highlightedNodeIds.has(e.target)) ? 1 : 0.05,
+        opacity: (activeFilter.has(e.source) && activeFilter.has(e.target)) ? 1 : 0.05,
       },
     }));
-  }, [edges, highlightedNodeIds]);
+  }, [edges, activeFilter]);
 
-  // Node click handler — extract program from zone/cgroup/interface and open detail panel
+  // Node click handler — extract program from zone/cgroup/interface and open detail panel,
+  // or toggle focus mode when clicking a process node.
   const onNodeClick: NodeMouseHandler = useCallback((_evt, node) => {
     if (!snapshot) return;
 
-    // Double-click to zoom-fit is handled by onNodeDoubleClick
     const type = node.type;
+
+    if (type === "processNode") {
+      const data = node.data as unknown as ProcessNodeData;
+      // Toggle focus: click same process again to exit
+      setFocusedProcessId(prev => prev === data.pid ? null : data.pid);
+      return;
+    }
 
     if (type === "zoneNode") {
       const data = node.data as unknown as ZoneNodeData;
@@ -536,6 +666,22 @@ function OsMapCanvas() {
     }
   }, [snapshot, setSelectedProgram]);
 
+  // Zoom to focused nodes when entering focus mode
+  useEffect(() => {
+    if (!focusedNodeIds || focusedNodeIds.size === 0) return;
+    // Filter to content nodes only (skip bands/labels) for a tighter fit
+    const contentNodeIds = Array.from(focusedNodeIds).filter(
+      id => !id.startsWith("band-") && !id.startsWith("label-")
+    );
+    const targetNodes = nodes.filter(n => contentNodeIds.includes(n.id));
+    if (targetNodes.length > 0) {
+      setTimeout(() => {
+        fitViewRef.current({ nodes: targetNodes, duration: 500, padding: 0.15 });
+      }, 50);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [focusedNodeIds]);
+
   // Double-click to zoom-fit node
   const onNodeDoubleClick: NodeMouseHandler = useCallback((_evt, node) => {
     fitView({
@@ -546,6 +692,18 @@ function OsMapCanvas() {
   }, [fitView]);
 
   const progCount = snapshot?.stats.total ?? 0;
+
+  // Resolve focused process info for the toolbar badge
+  const focusedProcess = useMemo(() => {
+    if (focusedProcessId === null || !snapshot) return null;
+    for (const p of snapshot.programs) {
+      if (p.pids) {
+        const match = p.pids.find(({ pid }) => pid === focusedProcessId);
+        if (match) return { pid: match.pid, comm: match.comm };
+      }
+    }
+    return null;
+  }, [focusedProcessId, snapshot]);
 
   // Compute the maximum cgroup depth in the current snapshot
   const maxTreeDepth = useMemo(() => {
@@ -658,6 +816,8 @@ function OsMapCanvas() {
             maxTreeDepth={maxTreeDepth}
             maxCgroupDepth={maxCgroupDepth}
             onMaxCgroupDepthChange={setMaxCgroupDepth}
+            focusedProcess={focusedProcess}
+            onClearFocus={() => setFocusedProcessId(null)}
           />
         </Panel>
 
