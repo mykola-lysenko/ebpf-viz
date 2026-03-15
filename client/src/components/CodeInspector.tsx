@@ -650,6 +650,12 @@ export function CodeInspector({ program, onClose }: CodeInspectorProps) {
 
           {dump && (
             <>
+              {dump.error && (
+                <div className="flex items-center gap-2 px-4 py-2 bg-amber-950/30 border-b border-amber-500/20 shrink-0">
+                  <AlertTriangle size={14} className="text-amber-400 shrink-0" />
+                  <span className="text-xs text-amber-300">{dump.error}</span>
+                </div>
+              )}
               {activeTab === "bytecode" && (
                 <BytecodeTab insns={dump.xlated} hasLineInfo={dump.hasLineInfo} />
               )}

@@ -290,6 +290,8 @@ export interface ProgDump {
   /** True when a BTF object is attached to this program */
   hasBtf: boolean;
   btfId?: number;
+  /** Non-null when bpftool failed — describes what went wrong */
+  error?: string;
 }
 
 // ─── BPF Maps ─────────────────────────────────────────────────────────────────
