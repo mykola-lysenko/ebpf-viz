@@ -431,9 +431,12 @@ function OsMapCanvas() {
   useEffect(() => {
     setNodes(layout.nodes);
     setEdges(layout.edges);
+    // Only auto-fit on initial load (not on LOD-driven relayouts, which would
+    // fight with focus mode or manual panning).
     if (!didFit.current && layout.nodes.length > 0) {
       const tryFit = (delay: number) => {
         setTimeout(() => {
+          isAnimating.current = true;
           const contentNodes = layout.nodes.filter(
             n => n.type === "zoneNode" || n.type === "cgroupNode" ||
                  n.type === "interfaceNode" || n.type === "processNode"
@@ -453,13 +456,19 @@ function OsMapCanvas() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [layout]);
 
-  // Track zoom for LOD
+  // Track zoom for LOD — but skip updates during animated transitions to
+  // avoid LOD-triggered layout recomputation mid-animation (which causes
+  // the viewport to fight with the animation and snap back).
+  const isAnimating = useRef(false);
+
   const onMoveEnd = useCallback(() => {
+    isAnimating.current = false;
     const vp = getViewport();
     setZoom(vp.zoom);
   }, [getViewport]);
 
   const onMove = useCallback(() => {
+    if (isAnimating.current) return;
     const vp = getViewport();
     setZoom(vp.zoom);
   }, [getViewport]);
@@ -666,24 +675,32 @@ function OsMapCanvas() {
     }
   }, [snapshot, setSelectedProgram]);
 
-  // Zoom to focused nodes when entering focus mode
+  // Zoom to focused nodes when entering focus mode.
+  // Also use focusedProcessId (not focusedNodeIds) as the trigger so we only
+  // zoom on user action, not on every layout recomputation.
+  const prevFocusedPid = useRef<number | null>(null);
   useEffect(() => {
-    if (!focusedNodeIds || focusedNodeIds.size === 0) return;
+    // Only zoom when the focused process actually changed (user clicked)
+    if (focusedProcessId === prevFocusedPid.current) return;
+    prevFocusedPid.current = focusedProcessId;
+    if (focusedProcessId === null || !focusedNodeIds || focusedNodeIds.size === 0) return;
     // Filter to content nodes only (skip bands/labels) for a tighter fit
     const contentNodeIds = Array.from(focusedNodeIds).filter(
       id => !id.startsWith("band-") && !id.startsWith("label-")
     );
     const targetNodes = nodes.filter(n => contentNodeIds.includes(n.id));
     if (targetNodes.length > 0) {
+      isAnimating.current = true;
       setTimeout(() => {
         fitViewRef.current({ nodes: targetNodes, duration: 500, padding: 0.15 });
       }, 50);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [focusedNodeIds]);
+  }, [focusedProcessId, focusedNodeIds]);
 
   // Double-click to zoom-fit node
   const onNodeDoubleClick: NodeMouseHandler = useCallback((_evt, node) => {
+    isAnimating.current = true;
     fitView({
       nodes: [node],
       duration: 500,
