@@ -456,19 +456,15 @@ function OsMapCanvas() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [layout]);
 
-  // Track zoom for LOD — but skip updates during animated transitions to
-  // avoid LOD-triggered layout recomputation mid-animation (which causes
-  // the viewport to fight with the animation and snap back).
+  // Track zoom for LOD.  Only update zoom state when a gesture or animation
+  // finishes (onMoveEnd), never mid-gesture (onMove).  Updating on every
+  // frame would trigger state → re-render, and if zoom crosses a LOD
+  // threshold mid-gesture, layout recomputes and all nodes get replaced,
+  // which disrupts the ongoing pan/zoom.
   const isAnimating = useRef(false);
 
   const onMoveEnd = useCallback(() => {
     isAnimating.current = false;
-    const vp = getViewport();
-    setZoom(vp.zoom);
-  }, [getViewport]);
-
-  const onMove = useCallback(() => {
-    if (isAnimating.current) return;
     const vp = getViewport();
     setZoom(vp.zoom);
   }, [getViewport]);
@@ -780,7 +776,6 @@ function OsMapCanvas() {
         onEdgesChange={onEdgesChange}
         onNodeClick={onNodeClick}
         onNodeDoubleClick={onNodeDoubleClick}
-        onMove={onMove}
         onMoveEnd={onMoveEnd}
         nodeTypes={OS_MAP_NODE_TYPES}
         minZoom={0.08}
