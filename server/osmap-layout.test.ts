@@ -191,6 +191,7 @@ function makeSnapshot(overrides: Partial<EbpfSnapshot> = {}): EbpfSnapshot {
         osiLayer: "kernel",
       },
     ],
+    programChains: [],
     stats: {
       total: 3,
       byType: { xdp: 1, cgroup_skb: 1, kprobe: 1 },

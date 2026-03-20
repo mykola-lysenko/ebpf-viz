@@ -8,6 +8,7 @@ import type {
   KernelZone,
   NetworkInterface,
   OsiLayer,
+  ProgramChain,
   RawBpfProg,
   RawCgroupEntry,
   RawNetSnapshot,
@@ -461,6 +462,105 @@ export function buildKernelZones(progs: Map<number, BpfProgram>): KernelAttachme
     }));
 }
 
+// ─── Build program chains (execution order at shared hook points) ────────
+
+/** Cgroup attach types where an early program can return 0 (deny) and
+ *  short-circuit subsequent programs. Networking and socket hooks. */
+const CGROUP_SHORT_CIRCUIT_TYPES = new Set([
+  "cgroup_inet_ingress", "cgroup_inet_egress",
+  "cgroup_inet4_bind", "cgroup_inet6_bind",
+  "cgroup_inet4_connect", "cgroup_inet6_connect",
+  "cgroup_inet4_post_bind", "cgroup_inet6_post_bind",
+  "cgroup_inet4_getpeername", "cgroup_inet6_getpeername",
+  "cgroup_inet4_getsockname", "cgroup_inet6_getsockname",
+  "cgroup_udp4_sendmsg", "cgroup_udp6_sendmsg",
+  "cgroup_udp4_recvmsg", "cgroup_udp6_recvmsg",
+  "cgroup_sock_ops",
+  "cgroup_device",
+  "cgroup_getsockopt", "cgroup_setsockopt",
+]);
+
+export function buildProgramChains(
+  progs: Map<number, BpfProgram>,
+  rawNet: RawNetSnapshot[],
+  rawCgroups: RawCgroupEntry[],
+): ProgramChain[] {
+  const chains: ProgramChain[] = [];
+
+  // ── Cgroup chains ──────────────────────────────────────────────────────
+  for (const cg of rawCgroups) {
+    // Group programs by attach_type, preserving order
+    const byType = new Map<string, Array<{ id: number; name: string; attachFlags?: string }>>();
+    for (const cp of cg.programs ?? []) {
+      if (!progs.has(cp.id)) continue;
+      if (!byType.has(cp.attach_type)) byType.set(cp.attach_type, []);
+      byType.get(cp.attach_type)!.push({
+        id: cp.id,
+        name: cp.name ?? progs.get(cp.id)!.name,
+        attachFlags: cp.attach_flags,
+      });
+    }
+
+    for (const [attachType, progList] of Array.from(byType.entries())) {
+      if (progList.length < 2) continue; // only chains with 2+ programs are interesting
+      const shortName = attachType.replace(/^cgroup_/, "");
+      chains.push({
+        hookId: `cgroup:${cg.cgroup}:${attachType}`,
+        hookLabel: shortName,
+        hookType: "cgroup",
+        attachPoint: cg.cgroup,
+        attachType,
+        programs: progList.map((p: { id: number; name: string; attachFlags?: string }, i: number) => ({
+          id: p.id,
+          position: i + 1,
+          name: p.name,
+          attachFlags: p.attachFlags,
+        })),
+        canShortCircuit: CGROUP_SHORT_CIRCUIT_TYPES.has(attachType),
+      });
+    }
+  }
+
+  // ── TC chains ──────────────────────────────────────────────────────────
+  const snapshot = rawNet[0] ?? {};
+  // Group TC entries by (devname, kind) preserving order
+  const tcByHook = new Map<string, Array<{ id: number; name: string }>>();
+  for (const entry of snapshot.tc ?? []) {
+    if (!progs.has(entry.id)) continue;
+    const key = `${entry.devname}:${entry.kind ?? "tc"}`;
+    if (!tcByHook.has(key)) tcByHook.set(key, []);
+    // Avoid duplicate entries (same prog on ingress+egress lists)
+    const list = tcByHook.get(key)!;
+    if (!list.some(p => p.id === entry.id)) {
+      list.push({
+        id: entry.id,
+        name: entry.name ?? progs.get(entry.id)!.name,
+      });
+    }
+  }
+
+  for (const [key, progList] of Array.from(tcByHook.entries())) {
+    if (progList.length < 2) continue;
+    const [devname, kind] = key.split(":");
+    const direction = kind.includes("ingress") ? "ingress" : kind.includes("egress") ? "egress" : kind;
+    chains.push({
+      hookId: `tc:${key}`,
+      hookLabel: `${devname} ${direction}`,
+      hookType: "tc",
+      attachPoint: devname,
+      attachType: kind,
+      programs: progList.map((p: { id: number; name: string }, i: number) => ({
+        id: p.id,
+        position: i + 1,
+        name: p.name,
+      })),
+      canShortCircuit: true, // TC programs can return TC_ACT_SHOT
+    });
+  }
+
+  return chains;
+}
+
 // ─── Master parse function ─────────────────────────────────────────────────
 
 export function buildSnapshot(
@@ -489,6 +589,7 @@ export function buildSnapshot(
     networkInterfaces: buildNetworkInterfaces(progMap, rawNet),
     cgroupTree: buildCgroupTree(progMap, rawCgroups),
     kernelZones: buildKernelZones(progMap),
+    programChains: buildProgramChains(progMap, rawNet, rawCgroups),
     stats: {
       total: programs.length,
       byType,

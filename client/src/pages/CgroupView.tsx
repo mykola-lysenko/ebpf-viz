@@ -1,10 +1,10 @@
 import React, { useState, useMemo } from "react";
 import { useEbpf } from "@/contexts/EbpfContext";
 import { ProgBadge } from "@/components/ProgBadge";
-import { FolderTree, Folder, FolderOpen, ChevronDown, ChevronRight } from "lucide-react";
+import { FolderTree, Folder, FolderOpen, ChevronDown, ChevronRight, AlertTriangle } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
-import type { CgroupNode } from "../../../shared/ebpf-types";
+import type { CgroupNode, ProgramChain } from "../../../shared/ebpf-types";
 
 // Palette of visually distinct colours for shared-tag dots
 const SHARED_TAG_PALETTE = [
@@ -126,6 +126,7 @@ function CgroupNodeRow({
   filteredIds,
   sharedTagMap,
   tagColorMap,
+  chainsByHook,
 }: {
   node: CgroupNode;
   depth: number;
@@ -133,6 +134,7 @@ function CgroupNodeRow({
   filteredIds: Set<number>;
   sharedTagMap: Map<string, Array<{ id: number; cgroupPath: string }>>;
   tagColorMap: Map<string, string>;
+  chainsByHook: Map<string, ProgramChain>;
 }) {
   const hasMatchingProgs = node.programs.some(p => filteredIds.has(p.id));
   const hasMatchingChildren = (n: CgroupNode): boolean =>
@@ -196,34 +198,84 @@ function CgroupNodeRow({
             )}
           </div>
 
-          {/* Programs */}
-          {visibleProgs.length > 0 && (
-            <div className="mt-2 space-y-1.5">
-              {visibleProgs.map(p => {
-                const cgroupAtt = p.attachments.find(a => a.cgroupPath === node.path);
-                const sharedColor = tagColorMap.get(p.tag);
-                const siblings = sharedTagMap.get(p.tag);
-                return (
-                  <div key={p.id} className="flex items-center gap-2 flex-wrap">
-                    <ProgBadge program={p} />
-                    {cgroupAtt && (
-                      <AttachTypeTag
-                        attachType={cgroupAtt.detail.split(" ")[0]}
-                        attachFlags={cgroupAtt.attachFlags}
-                      />
-                    )}
-                    {sharedColor && siblings && siblings.length > 1 && (
-                      <SharedTagDot
-                        tag={p.tag}
-                        color={sharedColor}
-                        siblings={siblings}
-                      />
-                    )}
-                  </div>
-                );
-              })}
-            </div>
-          )}
+          {/* Programs — grouped by attach_type, showing execution order for chains */}
+          {visibleProgs.length > 0 && (() => {
+            // Group by attach_type preserving order
+            const groups: Array<{ attachType: string; attachFlags?: string; progs: typeof visibleProgs }> = [];
+            const seen = new Map<string, number>();
+            for (const p of visibleProgs) {
+              const cgroupAtt = p.attachments.find(a => a.cgroupPath === node.path);
+              const at = cgroupAtt?.detail.split(" ")[0] ?? "unknown";
+              const idx = seen.get(at);
+              if (idx !== undefined) {
+                groups[idx].progs.push(p);
+              } else {
+                seen.set(at, groups.length);
+                groups.push({ attachType: at, attachFlags: cgroupAtt?.attachFlags, progs: [p] });
+              }
+            }
+            return (
+              <div className="mt-2 space-y-2">
+                {groups.map(g => {
+                  const chain = chainsByHook.get(`cgroup:${node.path}:${g.attachType}`);
+                  const isChain = chain && chain.programs.length >= 2;
+                  return (
+                    <div key={g.attachType}>
+                      {/* Attach type header with chain indicator */}
+                      <div className="flex items-center gap-1.5 mb-1">
+                        <AttachTypeTag attachType={g.attachType} attachFlags={g.attachFlags} />
+                        {isChain && (
+                          <span className="text-[9px] text-muted-foreground/60 flex items-center gap-0.5">
+                            chain of {chain.programs.length}
+                            {chain.canShortCircuit && (
+                              <span className="text-amber-400/70 flex items-center gap-0.5 ml-1">
+                                <AlertTriangle size={8} />
+                                can short-circuit
+                              </span>
+                            )}
+                          </span>
+                        )}
+                      </div>
+                      {/* Programs with optional position numbers */}
+                      <div className="space-y-1 ml-1">
+                        {g.progs.map(p => {
+                          const position = isChain
+                            ? chain.programs.find(cp => cp.id === p.id)?.position
+                            : undefined;
+                          const sharedColor = tagColorMap.get(p.tag);
+                          const siblings = sharedTagMap.get(p.tag);
+                          return (
+                            <div key={p.id} className="flex items-center gap-1.5">
+                              {position != null && (
+                                <span
+                                  className="w-4 h-4 rounded-full flex items-center justify-center text-[9px] font-bold shrink-0"
+                                  style={{
+                                    background: `${p.color}20`,
+                                    border: `1.5px solid ${p.color}`,
+                                    color: p.color,
+                                  }}
+                                >
+                                  {position}
+                                </span>
+                              )}
+                              <ProgBadge program={p} />
+                              {sharedColor && siblings && siblings.length > 1 && (
+                                <SharedTagDot
+                                  tag={p.tag}
+                                  color={sharedColor}
+                                  siblings={siblings}
+                                />
+                              )}
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            );
+          })()}
         </div>
       </div>
 
@@ -243,6 +295,7 @@ function CgroupNodeRow({
               filteredIds={filteredIds}
               sharedTagMap={sharedTagMap}
               tagColorMap={tagColorMap}
+              chainsByHook={chainsByHook}
             />
           ))}
         </div>
@@ -253,6 +306,12 @@ function CgroupNodeRow({
 
 export default function CgroupView() {
   const { snapshot, filteredPrograms, searchQuery } = useEbpf();
+
+  // Build chain lookup: hookId → ProgramChain for O(1) access in tree nodes
+  const chainsByHook = useMemo(() => {
+    if (!snapshot) return new Map<string, ProgramChain>();
+    return new Map(snapshot.programChains.map(c => [c.hookId, c]));
+  }, [snapshot]);
 
   // Build shared-tag maps: tags that appear on 2+ programs in the cgroup tree
   const { sharedTagMap, tagColorMap } = useMemo(() => {
@@ -351,6 +410,7 @@ export default function CgroupView() {
                 filteredIds={filteredIds}
                 sharedTagMap={sharedTagMap}
                 tagColorMap={tagColorMap}
+                chainsByHook={chainsByHook}
               />
             ))}
           </div>
