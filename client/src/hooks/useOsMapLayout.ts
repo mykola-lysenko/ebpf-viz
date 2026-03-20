@@ -28,8 +28,6 @@ const CGROUP_NODE_H = 80;
 const CGROUP_H_GAP = 32;
 const CGROUP_V_GAP = 24;
 
-const KERNEL_H_DYNAMIC = true; // computed from content
-
 // Network band (below kernel)
 const NET_BAND_TOP_MARGIN = 60;
 const IFACE_W = 220;
@@ -232,6 +230,9 @@ export function buildOsMapLayout(
 ): OsMapLayout {
   const nodes: Node[] = [];
   const edges: Edge[] = [];
+
+  // Pre-build a lookup map for O(1) program access by ID
+  const progById = new Map(snapshot.programs.map(p => [p.id, p]));
 
   // ── 1. Zones row (kernel-only — NIC zones are excluded) ─────────────────────
   //
@@ -459,7 +460,7 @@ export function buildOsMapLayout(
     // - NIC-type programs → point to the NIC interface node (if one exists)
     // - Kernel-type programs → point to the kernel zone node
     proc.programIds.forEach(progId => {
-      const prog = snapshot.programs.find(p => p.id === progId);
+      const prog = progById.get(progId);
       if (!prog) return;
       const zoneKey = progTypeToZone(prog.rawType);
 
@@ -565,7 +566,7 @@ export function buildOsMapLayout(
 
       // Edges from programs to this map
       map.usedByProgIds.forEach(progId => {
-        const prog = snapshot.programs.find(p => p.id === progId);
+        const prog = progById.get(progId);
         if (!prog) return;
         const zoneKey = progTypeToZone(prog.rawType);
 

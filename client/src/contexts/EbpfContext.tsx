@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useCallback, useMemo } from "react";
+import React, { createContext, useContext, useState, useCallback, useMemo, useRef } from "react";
 import { trpc } from "@/lib/trpc";
 import { useEbpfStream } from "@/hooks/useEbpfStream";
 import type { BpfProgram, BpfMap, EbpfSnapshot, ProgHistory, ActivitySummary, MapDumpResult } from "../../../shared/ebpf-types";
@@ -97,11 +97,23 @@ export function EbpfProvider({ children }: { children: React.ReactNode }) {
   const parseSnapshotMutation = trpc.ebpf.parseSnapshot.useMutation();
   // Server-side map dump parser for map dump files (capture-snapshot.sh --dump-maps output)
   const parseMapDumpsMutation = trpc.ebpf.parseMapDumps.useMutation();
+
+  // Stable refs for mutation functions — useMutation() returns new objects every
+  // render, which would destabilize any useCallback that depends on them.
+  const refreshMutateRef = useRef(refreshMutation.mutate);
+  refreshMutateRef.current = refreshMutation.mutate;
+  const parseSnapshotRef = useRef(parseSnapshotMutation.mutateAsync);
+  parseSnapshotRef.current = parseSnapshotMutation.mutateAsync;
+  const parseMapDumpsRef = useRef(parseMapDumpsMutation.mutateAsync);
+  parseMapDumpsRef.current = parseMapDumpsMutation.mutateAsync;
+  const refetchRef = useRef(refetch);
+  refetchRef.current = refetch;
+
   const refresh = useCallback(() => {
     if (loadedSnapshot) return; // no-op in snapshot mode
-    refreshMutation.mutate();
-    refetch();
-  }, [refreshMutation, refetch, loadedSnapshot]);
+    refreshMutateRef.current();
+    refetchRef.current();
+  }, [loadedSnapshot]);
 
   // ── Snapshot loading ───────────────────────────────────────────────────────
   const loadSnapshot = useCallback(async (file: File) => {
@@ -138,7 +150,7 @@ export function EbpfProvider({ children }: { children: React.ReactNode }) {
     } else if (obj.raw && typeof obj.raw === "object") {
       // Format 2: raw bpftool outputs — send to server for parsing via parseSnapshot mutation
       const rawObj = obj.raw as Record<string, unknown>;
-      const result = await parseSnapshotMutation.mutateAsync({
+      const result = await parseSnapshotRef.current({
         raw: {
           progs: (rawObj.progs as unknown[]) ?? [],
           maps: rawObj.maps as unknown[] | undefined,
@@ -166,11 +178,16 @@ export function EbpfProvider({ children }: { children: React.ReactNode }) {
       hostname: ebpfSnapshot.hostname ?? "unknown",
       kernelVersion: ebpfSnapshot.kernelVersion ?? "unknown",
     });
-  }, [parseSnapshotMutation]);
+  }, []);
 
   // ── Map dump loading ───────────────────────────────────────────────────────
+  const snapshotMapsRef = useRef(snapshotMaps);
+  snapshotMapsRef.current = snapshotMaps;
+  const loadedSnapshotRef = useRef(loadedSnapshot);
+  loadedSnapshotRef.current = loadedSnapshot;
+
   const loadMapDumps = useCallback(async (file: File): Promise<{ loaded: number }> => {
-    if (!loadedSnapshot) {
+    if (!loadedSnapshotRef.current) {
       throw new Error("Load a snapshot first before loading map dumps.");
     }
     const text = await file.text();
@@ -189,13 +206,14 @@ export function EbpfProvider({ children }: { children: React.ReactNode }) {
       throw new Error("Map dump file is missing the 'mapDumps' field.");
     }
     // Send to server for parsing (normalizes RawMapEntry → MapEntry)
-    const result = await parseMapDumpsMutation.mutateAsync({
+    const currentMaps = snapshotMapsRef.current;
+    const result = await parseMapDumpsRef.current({
       mapDumps: rawDumps as Record<string, unknown[]>,
-      maps: snapshotMaps.map(m => ({ id: m.id, rawType: m.rawType, name: m.name })),
+      maps: currentMaps.map(m => ({ id: m.id, rawType: m.rawType, name: m.name })),
     });
     setSnapshotMapDumps(result as Record<number, MapDumpResult>);
     return { loaded: Object.keys(result).length };
-  }, [loadedSnapshot, snapshotMaps, parseMapDumpsMutation]);
+  }, []);
 
   const clearSnapshot = useCallback(() => {
     setLoadedSnapshot(null);
@@ -284,11 +302,12 @@ export function EbpfProvider({ children }: { children: React.ReactNode }) {
     activity: activityValue,
     statsEnabled,
     maps,
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }), [
     snapshot, isLoading, error, selectedProgram, searchQuery, typeFilter,
-    filteredPrograms, streamStatus, autoRefresh, refreshInterval, refresh,
-    demoMode, appMode, snapshotMeta, loadSnapshot, loadMapDumps, clearSnapshot,
-    snapshotMapDumps, historyMap, activityValue, statsEnabled, maps,
+    filteredPrograms, streamStatus, autoRefresh, refreshInterval,
+    demoMode, appMode, snapshotMeta, snapshotMapDumps, historyMap,
+    activityValue, statsEnabled, maps,
   ]);
 
   return (

@@ -200,6 +200,57 @@ function ZoneCard({
 
 // ── Kernel diagram ────────────────────────────────────────────────────────────
 
+function ZoneNode({
+  zoneKey,
+  zoneMap,
+  historyMap,
+  maxZoneCps,
+}: {
+  zoneKey: string;
+  zoneMap: Map<string, KernelAttachmentZone>;
+  historyMap: Map<number, { latest?: { callsPerSec: number } | null }>;
+  maxZoneCps: number;
+}) {
+  const zone = zoneMap.get(zoneKey as KernelZone);
+  if (!zone) return null;
+  const color = ZONE_COLORS[zoneKey] ?? "#6b7280";
+  const hasProgs = zone.programs.length > 0;
+  const cps = zoneCallsPerSec(zone.programs, historyMap);
+  const heat = maxZoneCps > 0 ? Math.min(1, cps / maxZoneCps) : 0;
+  const isHot = heat > 0.01;
+
+  return (
+    <div
+      className="flex flex-col items-center gap-1 shrink-0 p-3 rounded-xl border transition-all min-w-[90px]"
+      style={{
+        borderColor: hasProgs ? `${color}50` : "oklch(0.22 0.015 240 / 0.6)",
+        background: isHot
+          ? `linear-gradient(180deg, ${color}${Math.round(heat * 0.25 * 255).toString(16).padStart(2, "0")} 0%, ${color}10 100%)`
+          : hasProgs ? `${color}10` : "oklch(0.13 0.015 240 / 0.5)",
+        boxShadow: isHot ? `0 0 ${Math.round(heat * 16)}px ${color}${Math.round(heat * 0.4 * 255).toString(16).padStart(2, "0")}` : undefined,
+        transition: "background 0.8s ease, box-shadow 0.8s ease",
+      }}
+    >
+      <span className="text-xl">{ZONE_ICONS[zoneKey]}</span>
+      <span className="text-[11px] font-semibold text-center leading-tight" style={{ color: hasProgs ? color : undefined }}>
+        {zone.label}
+      </span>
+      <Badge
+        variant="outline"
+        className="text-[10px] px-1.5 py-0"
+        style={{ borderColor: `${color}40`, color: hasProgs ? color : undefined }}
+      >
+        {zone.programs.length}
+      </Badge>
+      {isHot && (
+        <span className="text-[9px] font-mono tabular-nums" style={{ color }}>
+          {fmtCps(cps)}
+        </span>
+      )}
+    </div>
+  );
+}
+
 function KernelDiagram({
   zones,
   historyMap,
@@ -210,47 +261,6 @@ function KernelDiagram({
   maxZoneCps: number;
 }) {
   const zoneMap = new Map(zones.map(z => [z.zone, z]));
-
-  function ZoneNode({ zoneKey }: { zoneKey: string }) {
-    const zone = zoneMap.get(zoneKey as KernelZone);
-    if (!zone) return null;
-    const color = ZONE_COLORS[zoneKey] ?? "#6b7280";
-    const hasProgs = zone.programs.length > 0;
-    const cps = zoneCallsPerSec(zone.programs, historyMap);
-    const heat = maxZoneCps > 0 ? Math.min(1, cps / maxZoneCps) : 0;
-    const isHot = heat > 0.01;
-
-    return (
-      <div
-        className="flex flex-col items-center gap-1 shrink-0 p-3 rounded-xl border transition-all min-w-[90px]"
-        style={{
-          borderColor: hasProgs ? `${color}50` : "oklch(0.22 0.015 240 / 0.6)",
-          background: isHot
-            ? `linear-gradient(180deg, ${color}${Math.round(heat * 0.25 * 255).toString(16).padStart(2, "0")} 0%, ${color}10 100%)`
-            : hasProgs ? `${color}10` : "oklch(0.13 0.015 240 / 0.5)",
-          boxShadow: isHot ? `0 0 ${Math.round(heat * 16)}px ${color}${Math.round(heat * 0.4 * 255).toString(16).padStart(2, "0")}` : undefined,
-          transition: "background 0.8s ease, box-shadow 0.8s ease",
-        }}
-      >
-        <span className="text-xl">{ZONE_ICONS[zoneKey]}</span>
-        <span className="text-[11px] font-semibold text-center leading-tight" style={{ color: hasProgs ? color : undefined }}>
-          {zone.label}
-        </span>
-        <Badge
-          variant="outline"
-          className="text-[10px] px-1.5 py-0"
-          style={{ borderColor: `${color}40`, color: hasProgs ? color : undefined }}
-        >
-          {zone.programs.length}
-        </Badge>
-        {isHot && (
-          <span className="text-[9px] font-mono tabular-nums" style={{ color }}>
-            {fmtCps(cps)}
-          </span>
-        )}
-      </div>
-    );
-  }
 
   return (
     <div className="relative">
@@ -272,7 +282,7 @@ function KernelDiagram({
           <div className="flex items-center gap-2 overflow-x-auto pb-2">
             {PACKET_FLOW_ZONES.map((zoneKey, idx) => (
               <React.Fragment key={zoneKey}>
-                <ZoneNode zoneKey={zoneKey} />
+                <ZoneNode zoneKey={zoneKey} zoneMap={zoneMap} historyMap={historyMap} maxZoneCps={maxZoneCps} />
                 {idx < PACKET_FLOW_ZONES.length - 1 && (
                   <div className="text-muted-foreground text-lg shrink-0">→</div>
                 )}
@@ -290,7 +300,7 @@ function KernelDiagram({
           </div>
           <div className="grid grid-cols-3 sm:grid-cols-4 lg:grid-cols-7 gap-2">
             {SYSTEM_ZONES.map(zoneKey => (
-              <ZoneNode key={zoneKey} zoneKey={zoneKey} />
+              <ZoneNode key={zoneKey} zoneKey={zoneKey} zoneMap={zoneMap} historyMap={historyMap} maxZoneCps={maxZoneCps} />
             ))}
           </div>
         </div>
