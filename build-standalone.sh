@@ -287,7 +287,7 @@ echo "Tarball: $TARBALL"
 du -sh "$TARBALL"
 echo ""
 echo "Contents:"
-tar -tzf "$TARBALL" | head -20
+tar -tzf "$TARBALL" | head -20 || true
 echo ""
 echo "To deploy (requires Node.js >= 16):"
 echo "  scp ebpf-viz-standalone.tar.gz user@devserver:/opt/"
