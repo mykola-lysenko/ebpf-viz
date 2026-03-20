@@ -50,7 +50,7 @@ export const appRouter = router({
         z.object({
           intervalMs: z.number().min(1000).max(60000).optional(),
           demoMode: z.boolean().optional(),
-          bpftoolPath: z.string().regex(/^[/a-zA-Z0-9._-]+$/, "bpftoolPath must be an absolute path containing only alphanumeric characters, slashes, dots, underscores, and hyphens").optional(),
+          bpftoolPath: z.string().regex(/^\/[a-zA-Z0-9/_.-]+$/, "bpftoolPath must be an absolute path (starting with /) containing only alphanumeric characters, slashes, dots, underscores, and hyphens").refine(s => !s.includes(".."), "bpftoolPath must not contain '..'").optional(),
           sudo: z.boolean().optional(),
         })
       )
