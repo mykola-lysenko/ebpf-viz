@@ -177,6 +177,35 @@ export interface KernelAttachmentZone {
   osiLayer: OsiLayer;
 }
 
+// ─── Program chain (execution order at a hook point) ─────────────────────
+
+/** A chain of BPF programs attached to the same hook point, in execution order.
+ *  The kernel runs them sequentially — for networking hooks (TC, XDP, cgroup),
+ *  an early program can return a verdict (e.g. DROP) that prevents later
+ *  programs from executing. */
+export interface ProgramChain {
+  /** Unique identifier, e.g. "cgroup:/sys/fs/cgroup:cgroup_inet4_connect" */
+  hookId: string;
+  /** Human-readable label, e.g. "inet4_connect" */
+  hookLabel: string;
+  /** Hook category */
+  hookType: "cgroup" | "tc" | "xdp" | "netfilter";
+  /** Where attached: cgroup path or interface name */
+  attachPoint: string;
+  /** Specific attach type, e.g. "cgroup_inet4_connect", "clsact/ingress" */
+  attachType: string;
+  /** Programs in execution order (position is 1-based) */
+  programs: Array<{
+    id: number;
+    position: number;
+    name: string;
+    attachFlags?: string;
+  }>;
+  /** Whether an early program can short-circuit (drop/reject) and prevent
+   *  later programs from running. True for TC, cgroup networking hooks. */
+  canShortCircuit: boolean;
+}
+
 // ─── Top-level snapshot ────────────────────────────────────────────────────
 
 export interface EbpfSnapshot {
@@ -189,6 +218,8 @@ export interface EbpfSnapshot {
   networkInterfaces: NetworkInterface[];
   cgroupTree: CgroupNode[];
   kernelZones: KernelAttachmentZone[];
+  /** Ordered program chains — multiple programs on the same hook point */
+  programChains: ProgramChain[];
   stats: {
     total: number;
     byType: Record<string, number>;

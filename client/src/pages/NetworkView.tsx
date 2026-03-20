@@ -1,10 +1,10 @@
-import React, { useState } from "react";
+import React, { useState, useMemo } from "react";
 import { useEbpf } from "@/contexts/EbpfContext";
-import { ProgList } from "@/components/ProgBadge";
-import { Network, ChevronDown, ChevronRight, Wifi, Share2 } from "lucide-react";
+import { ProgBadge } from "@/components/ProgBadge";
+import { Network, ChevronDown, ChevronRight, Wifi, Share2, AlertTriangle } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
-import type { NetworkInterface } from "../../../shared/ebpf-types";
+import type { NetworkInterface, ProgramChain, BpfProgram } from "../../../shared/ebpf-types";
 
 const OSI_LAYERS = [
   {
@@ -42,11 +42,47 @@ const NIC_LAYERS = OSI_LAYERS.filter(l => l.key === "L2" || l.key === "L3");
 // Layers shown for sockmap interfaces
 const SOCKMAP_LAYERS = OSI_LAYERS.filter(l => l.key === "L4" || l.key === "L7");
 
-function OsiLayerRow({ layerDef, programs }: {
+function OsiLayerRow({ layerDef, programs, chains }: {
   layerDef: typeof OSI_LAYERS[0];
   programs: NetworkInterface["layers"]["L2"];
+  chains?: ProgramChain[];
 }) {
   const hasProgs = programs.length > 0;
+
+  // Build a position map from all relevant chains: progId → { position, chain }
+  const positionMap = useMemo(() => {
+    const map = new Map<number, { position: number; chain: ProgramChain }>();
+    if (!chains) return map;
+    for (const chain of chains) {
+      for (const cp of chain.programs) {
+        map.set(cp.id, { position: cp.position, chain });
+      }
+    }
+    return map;
+  }, [chains]);
+
+  // Group programs by chain, keeping unchained programs separate
+  const { chainGroups, unchained } = useMemo(() => {
+    const chainGroups = new Map<string, { chain: ProgramChain; progs: BpfProgram[] }>();
+    const unchained: BpfProgram[] = [];
+    for (const p of programs) {
+      const info = positionMap.get(p.id);
+      if (info) {
+        if (!chainGroups.has(info.chain.hookId)) {
+          chainGroups.set(info.chain.hookId, { chain: info.chain, progs: [] });
+        }
+        chainGroups.get(info.chain.hookId)!.progs.push(p);
+      } else {
+        unchained.push(p);
+      }
+    }
+    // Sort programs within each chain by position
+    for (const g of Array.from(chainGroups.values())) {
+      g.progs.sort((a, b) => (positionMap.get(a.id)?.position ?? 0) - (positionMap.get(b.id)?.position ?? 0));
+    }
+    return { chainGroups: Array.from(chainGroups.values()), unchained };
+  }, [programs, positionMap]);
+
   return (
     <div className={cn("osi-layer", hasProgs && "has-progs")}>
       <div
@@ -63,7 +99,57 @@ function OsiLayerRow({ layerDef, programs }: {
       <div className="flex-1 min-w-0">
         <div className="text-xs text-muted-foreground mb-1">{layerDef.description}</div>
         {hasProgs ? (
-          <ProgList programs={programs} maxVisible={8} />
+          <div className="space-y-2">
+            {/* Chain groups — programs shown in execution order */}
+            {chainGroups.map(({ chain, progs }) => (
+              <div key={chain.hookId}>
+                <div className="flex items-center gap-1.5 mb-1">
+                  <span className="text-[10px] text-muted-foreground/70 font-mono">
+                    {chain.attachType}
+                  </span>
+                  <span className="text-[9px] text-muted-foreground/50">
+                    chain of {chain.programs.length}
+                  </span>
+                  {chain.canShortCircuit && (
+                    <span className="text-[9px] text-amber-400/70 flex items-center gap-0.5">
+                      <AlertTriangle size={8} />
+                      can short-circuit
+                    </span>
+                  )}
+                </div>
+                <div className="flex flex-wrap gap-1.5 ml-1">
+                  {progs.map(p => {
+                    const pos = positionMap.get(p.id)?.position;
+                    return (
+                      <div key={p.id} className="flex items-center gap-1">
+                        {pos != null && (
+                          <span
+                            className="w-4 h-4 rounded-full flex items-center justify-center text-[9px] font-bold shrink-0"
+                            style={{
+                              background: `${p.color}20`,
+                              border: `1.5px solid ${p.color}`,
+                              color: p.color,
+                            }}
+                          >
+                            {pos}
+                          </span>
+                        )}
+                        <ProgBadge program={p} />
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            ))}
+            {/* Unchained programs */}
+            {unchained.length > 0 && (
+              <div className="flex flex-wrap gap-1.5">
+                {unchained.map(p => (
+                  <ProgBadge key={p.id} program={p} />
+                ))}
+              </div>
+            )}
+          </div>
         ) : (
           <span className="text-xs text-muted-foreground/50 italic">No programs attached</span>
         )}
@@ -79,13 +165,19 @@ function OsiLayerRow({ layerDef, programs }: {
   );
 }
 
-function InterfaceCard({ iface }: { iface: NetworkInterface }) {
+function InterfaceCard({ iface, tcChains }: { iface: NetworkInterface; tcChains: ProgramChain[] }) {
   const [expanded, setExpanded] = useState(iface.allPrograms.length > 0);
   const totalProgs = iface.allPrograms.length;
   const isSockmap = iface.kind === "sockmap";
 
   // NIC cards show L2+L3; sockmap cards show L4+L7
   const visibleLayers = isSockmap ? SOCKMAP_LAYERS : NIC_LAYERS;
+
+  // Filter TC chains relevant to this interface
+  const ifaceChains = useMemo(() =>
+    tcChains.filter(c => c.attachPoint === iface.name),
+    [tcChains, iface.name]
+  );
 
   const iconBg = isSockmap
     ? "oklch(0.65 0.18 290 / 0.15)"
@@ -157,6 +249,7 @@ function InterfaceCard({ iface }: { iface: NetworkInterface }) {
                 key={layerDef.key}
                 layerDef={layerDef}
                 programs={iface.layers[layerDef.key]}
+                chains={layerDef.key === "L3" ? ifaceChains : undefined}
               />
             ))}
           </div>
@@ -174,9 +267,10 @@ interface SectionProps {
   emptyMessage: string;
   emptyHint?: string;
   accentColor?: string;
+  tcChains?: ProgramChain[];
 }
 
-function InterfaceSection({ title, description, icon, interfaces, emptyMessage, emptyHint, accentColor }: SectionProps) {
+function InterfaceSection({ title, description, icon, interfaces, emptyMessage, emptyHint, accentColor, tcChains = [] }: SectionProps) {
   return (
     <div className="space-y-3">
       {/* Section header */}
@@ -203,7 +297,7 @@ function InterfaceSection({ title, description, icon, interfaces, emptyMessage, 
       <div className="space-y-3 pl-11">
         {interfaces.length > 0 ? (
           interfaces.map(iface => (
-            <InterfaceCard key={iface.name} iface={iface} />
+            <InterfaceCard key={iface.name} iface={iface} tcChains={tcChains} />
           ))
         ) : (
           <div className="glass rounded-xl p-6 text-center">
@@ -242,6 +336,11 @@ export default function NetworkView() {
   const nicInterfaces = interfaces.filter(i => i.kind === "nic");
   const sockmapInterfaces = interfaces.filter(i => i.kind === "sockmap");
   const totalNetProgs = snapshot.networkInterfaces.reduce((a, i) => a + i.allPrograms.length, 0);
+
+  const tcChains = useMemo(() =>
+    snapshot.programChains.filter(c => c.hookType === "tc"),
+    [snapshot.programChains]
+  );
 
   return (
     <div className="p-6 space-y-6 max-w-5xl mx-auto">
@@ -284,6 +383,7 @@ export default function NetworkView() {
         icon={<Wifi size={15} style={{ color: "oklch(0.70 0.18 160)" }} />}
         interfaces={nicInterfaces}
         accentColor="#10b981"
+        tcChains={tcChains}
         emptyMessage={searchQuery ? "No NIC interfaces match the current filter." : "No BPF programs attached to network interfaces."}
         emptyHint={!searchQuery ? "XDP, TC, and netfilter programs will appear here when attached to interfaces." : undefined}
       />
