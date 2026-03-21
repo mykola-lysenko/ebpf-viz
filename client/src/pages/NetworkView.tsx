@@ -6,19 +6,17 @@ import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
 import type { NetworkInterface, ProgramChain, BpfProgram } from "../../../shared/ebpf-types";
 
-/** Classify run_cnt drop between consecutive chain programs */
-function classifyDrop(
-  prev: BpfProgram | undefined,
-  curr: BpfProgram | undefined,
+/** Classify live rate drop between consecutive chain programs */
+function classifyRateDrop(
+  prevRate: number | undefined,
+  currRate: number | undefined,
 ): { rate: number; label: string; color: string } | null {
-  const prevCnt = prev?.runCnt;
-  const currCnt = curr?.runCnt;
-  if (prevCnt == null || currCnt == null || prevCnt === 0) return null;
-  const rate = 1 - currCnt / prevCnt;
-  if (rate < 0.01) return null;
-  if (rate < 0.1) return { rate, label: `~${Math.round(rate * 100)}% fewer calls`, color: "#f59e0b" };
-  if (rate < 0.5) return { rate, label: `~${Math.round(rate * 100)}% fewer calls`, color: "#f97316" };
-  return { rate, label: `~${Math.round(rate * 100)}% fewer calls`, color: "#ef4444" };
+  if (prevRate == null || currRate == null || prevRate <= 0) return null;
+  const drop = 1 - currRate / prevRate;
+  if (drop < 0.05) return null;
+  if (drop < 0.2) return { rate: drop, label: `~${Math.round(drop * 100)}% fewer/s`, color: "#f59e0b" };
+  if (drop < 0.5) return { rate: drop, label: `~${Math.round(drop * 100)}% fewer/s`, color: "#f97316" };
+  return { rate: drop, label: `~${Math.round(drop * 100)}% fewer/s`, color: "#ef4444" };
 }
 
 function formatRunCnt(n: number): string {
@@ -26,6 +24,15 @@ function formatRunCnt(n: number): string {
   if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
   if (n >= 1_000) return `${(n / 1_000).toFixed(1)}K`;
   return String(n);
+}
+
+function formatAge(loadedAt: number): string {
+  const now = Date.now() / 1000;
+  const secs = Math.max(0, now - loadedAt);
+  if (secs < 60) return `${Math.round(secs)}s ago`;
+  if (secs < 3600) return `${Math.round(secs / 60)}m ago`;
+  if (secs < 86400) return `${Math.round(secs / 3600)}h ago`;
+  return `${Math.round(secs / 86400)}d ago`;
 }
 
 const OSI_LAYERS = [
@@ -69,6 +76,7 @@ function OsiLayerRow({ layerDef, programs, chains }: {
   programs: NetworkInterface["layers"]["L2"];
   chains?: ProgramChain[];
 }) {
+  const { historyMap } = useEbpf();
   const hasProgs = programs.length > 0;
 
   // Build a position map from all relevant chains: progId → { position, chain }
@@ -142,9 +150,12 @@ function OsiLayerRow({ layerDef, programs, chains }: {
                 <div className="space-y-0.5 ml-1">
                   {progs.map((p, pIdx) => {
                     const pos = positionMap.get(p.id)?.position;
-                    const prevProg = chain.canShortCircuit && pIdx > 0
-                      ? progs[pIdx - 1] : undefined;
-                    const dropInfo = prevProg ? classifyDrop(prevProg, p) : null;
+                    // Drop indicator: compare live rates, not cumulative run_cnt
+                    const currRate = historyMap.get(p.id)?.latest?.callsPerSec;
+                    const prevRate = chain.canShortCircuit && pIdx > 0
+                      ? historyMap.get(progs[pIdx - 1].id)?.latest?.callsPerSec
+                      : undefined;
+                    const dropInfo = classifyRateDrop(prevRate, currRate);
                     return (
                       <React.Fragment key={p.id}>
                         {dropInfo && (
@@ -153,10 +164,10 @@ function OsiLayerRow({ layerDef, programs, chains }: {
                             style={{ color: dropInfo.color }}
                           >
                             <AlertTriangle size={8} />
-                            {dropInfo.label}
+                            {dropInfo.label} (live rate)
                           </div>
                         )}
-                        <div className="flex items-center gap-1.5">
+                        <div className="flex items-center gap-1.5 flex-wrap">
                           {pos != null && (
                             <span
                               className="w-4 h-4 rounded-full flex items-center justify-center text-[9px] font-bold shrink-0"
@@ -170,11 +181,10 @@ function OsiLayerRow({ layerDef, programs, chains }: {
                             </span>
                           )}
                           <ProgBadge program={p} />
-                          {p.runCnt != null && (
-                            <span className="text-[9px] font-mono text-muted-foreground/50 tabular-nums shrink-0">
-                              {formatRunCnt(p.runCnt)} calls
-                            </span>
-                          )}
+                          <span className="text-[9px] font-mono text-muted-foreground/50 tabular-nums shrink-0">
+                            {p.runCnt != null && `${formatRunCnt(p.runCnt)} total`}
+                            {p.loadedAt > 0 && ` · loaded ${formatAge(p.loadedAt)}`}
+                          </span>
                         </div>
                       </React.Fragment>
                     );
