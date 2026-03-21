@@ -6,19 +6,20 @@ import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
 import type { CgroupNode, ProgramChain, BpfProgram } from "../../../shared/ebpf-types";
 
-/** Classify run_cnt drop between consecutive chain programs */
-function classifyDrop(
-  prev: BpfProgram | undefined,
-  curr: BpfProgram | undefined,
+/** Classify live rate drop between consecutive chain programs.
+ *  Uses calls/sec (instantaneous rate) rather than cumulative run_cnt,
+ *  since run_cnt is a lifetime counter and programs may be loaded at
+ *  different times, making raw count comparisons misleading. */
+function classifyRateDrop(
+  prevRate: number | undefined,
+  currRate: number | undefined,
 ): { rate: number; label: string; color: string } | null {
-  const prevCnt = prev?.runCnt;
-  const currCnt = curr?.runCnt;
-  if (prevCnt == null || currCnt == null || prevCnt === 0) return null;
-  const rate = 1 - currCnt / prevCnt;
-  if (rate < 0.01) return null; // negligible
-  if (rate < 0.1) return { rate, label: `~${Math.round(rate * 100)}% fewer calls`, color: "#f59e0b" };
-  if (rate < 0.5) return { rate, label: `~${Math.round(rate * 100)}% fewer calls`, color: "#f97316" };
-  return { rate, label: `~${Math.round(rate * 100)}% fewer calls`, color: "#ef4444" };
+  if (prevRate == null || currRate == null || prevRate <= 0) return null;
+  const drop = 1 - currRate / prevRate;
+  if (drop < 0.05) return null; // negligible or noise
+  if (drop < 0.2) return { rate: drop, label: `~${Math.round(drop * 100)}% fewer/s`, color: "#f59e0b" };
+  if (drop < 0.5) return { rate: drop, label: `~${Math.round(drop * 100)}% fewer/s`, color: "#f97316" };
+  return { rate: drop, label: `~${Math.round(drop * 100)}% fewer/s`, color: "#ef4444" };
 }
 
 function formatRunCnt(n: number): string {
@@ -26,6 +27,15 @@ function formatRunCnt(n: number): string {
   if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
   if (n >= 1_000) return `${(n / 1_000).toFixed(1)}K`;
   return String(n);
+}
+
+function formatAge(loadedAt: number): string {
+  const now = Date.now() / 1000;
+  const secs = Math.max(0, now - loadedAt);
+  if (secs < 60) return `${Math.round(secs)}s ago`;
+  if (secs < 3600) return `${Math.round(secs / 60)}m ago`;
+  if (secs < 86400) return `${Math.round(secs / 3600)}h ago`;
+  return `${Math.round(secs / 86400)}d ago`;
 }
 
 // Palette of visually distinct colours for shared-tag dots
@@ -158,6 +168,7 @@ function CgroupNodeRow({
   tagColorMap: Map<string, string>;
   chainsByHook: Map<string, ProgramChain>;
 }) {
+  const { historyMap } = useEbpf();
   const hasMatchingProgs = node.programs.some(p => filteredIds.has(p.id));
   const hasMatchingChildren = (n: CgroupNode): boolean =>
     n.programs.some(p => filteredIds.has(p.id)) ||
@@ -266,10 +277,12 @@ function CgroupNodeRow({
                             : undefined;
                           const sharedColor = tagColorMap.get(p.tag);
                           const siblings = sharedTagMap.get(p.tag);
-                          // Drop indicator: compare this program's run_cnt to previous
-                          const prevProg = isChain && chain.canShortCircuit && pIdx > 0
-                            ? g.progs[pIdx - 1] : undefined;
-                          const dropInfo = prevProg ? classifyDrop(prevProg, p) : null;
+                          // Drop indicator: compare live rates (calls/sec), not raw run_cnt
+                          const currRate = historyMap.get(p.id)?.latest?.callsPerSec;
+                          const prevRate = isChain && chain.canShortCircuit && pIdx > 0
+                            ? historyMap.get(g.progs[pIdx - 1].id)?.latest?.callsPerSec
+                            : undefined;
+                          const dropInfo = classifyRateDrop(prevRate, currRate);
                           return (
                             <React.Fragment key={p.id}>
                               {dropInfo && (
@@ -278,10 +291,10 @@ function CgroupNodeRow({
                                   style={{ color: dropInfo.color }}
                                 >
                                   <AlertTriangle size={8} />
-                                  {dropInfo.label}
+                                  {dropInfo.label} (live rate)
                                 </div>
                               )}
-                              <div className="flex items-center gap-1.5">
+                              <div className="flex items-center gap-1.5 flex-wrap">
                                 {position != null && (
                                   <span
                                     className="w-4 h-4 rounded-full flex items-center justify-center text-[9px] font-bold shrink-0"
@@ -295,9 +308,10 @@ function CgroupNodeRow({
                                   </span>
                                 )}
                                 <ProgBadge program={p} />
-                                {isChain && p.runCnt != null && (
+                                {isChain && (
                                   <span className="text-[9px] font-mono text-muted-foreground/50 tabular-nums shrink-0">
-                                    {formatRunCnt(p.runCnt)} calls
+                                    {p.runCnt != null && `${formatRunCnt(p.runCnt)} total`}
+                                    {p.loadedAt > 0 && ` · loaded ${formatAge(p.loadedAt)}`}
                                   </span>
                                 )}
                                 {sharedColor && siblings && siblings.length > 1 && (
