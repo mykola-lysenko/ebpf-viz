@@ -4,7 +4,29 @@ import { ProgBadge } from "@/components/ProgBadge";
 import { FolderTree, Folder, FolderOpen, ChevronDown, ChevronRight, AlertTriangle } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
-import type { CgroupNode, ProgramChain } from "../../../shared/ebpf-types";
+import type { CgroupNode, ProgramChain, BpfProgram } from "../../../shared/ebpf-types";
+
+/** Classify run_cnt drop between consecutive chain programs */
+function classifyDrop(
+  prev: BpfProgram | undefined,
+  curr: BpfProgram | undefined,
+): { rate: number; label: string; color: string } | null {
+  const prevCnt = prev?.runCnt;
+  const currCnt = curr?.runCnt;
+  if (prevCnt == null || currCnt == null || prevCnt === 0) return null;
+  const rate = 1 - currCnt / prevCnt;
+  if (rate < 0.01) return null; // negligible
+  if (rate < 0.1) return { rate, label: `~${Math.round(rate * 100)}% fewer calls`, color: "#f59e0b" };
+  if (rate < 0.5) return { rate, label: `~${Math.round(rate * 100)}% fewer calls`, color: "#f97316" };
+  return { rate, label: `~${Math.round(rate * 100)}% fewer calls`, color: "#ef4444" };
+}
+
+function formatRunCnt(n: number): string {
+  if (n >= 1_000_000_000) return `${(n / 1_000_000_000).toFixed(1)}B`;
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
+  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}K`;
+  return String(n);
+}
 
 // Palette of visually distinct colours for shared-tag dots
 const SHARED_TAG_PALETTE = [
@@ -236,37 +258,57 @@ function CgroupNodeRow({
                           </span>
                         )}
                       </div>
-                      {/* Programs with optional position numbers */}
-                      <div className="space-y-1 ml-1">
-                        {g.progs.map(p => {
+                      {/* Programs with optional position numbers and stats */}
+                      <div className="space-y-0.5 ml-1">
+                        {g.progs.map((p, pIdx) => {
                           const position = isChain
                             ? chain.programs.find(cp => cp.id === p.id)?.position
                             : undefined;
                           const sharedColor = tagColorMap.get(p.tag);
                           const siblings = sharedTagMap.get(p.tag);
+                          // Drop indicator: compare this program's run_cnt to previous
+                          const prevProg = isChain && chain.canShortCircuit && pIdx > 0
+                            ? g.progs[pIdx - 1] : undefined;
+                          const dropInfo = prevProg ? classifyDrop(prevProg, p) : null;
                           return (
-                            <div key={p.id} className="flex items-center gap-1.5">
-                              {position != null && (
-                                <span
-                                  className="w-4 h-4 rounded-full flex items-center justify-center text-[9px] font-bold shrink-0"
-                                  style={{
-                                    background: `${p.color}20`,
-                                    border: `1.5px solid ${p.color}`,
-                                    color: p.color,
-                                  }}
+                            <React.Fragment key={p.id}>
+                              {dropInfo && (
+                                <div
+                                  className="flex items-center gap-1 ml-5 text-[9px] font-mono py-0.5"
+                                  style={{ color: dropInfo.color }}
                                 >
-                                  {position}
-                                </span>
+                                  <AlertTriangle size={8} />
+                                  {dropInfo.label}
+                                </div>
                               )}
-                              <ProgBadge program={p} />
-                              {sharedColor && siblings && siblings.length > 1 && (
-                                <SharedTagDot
-                                  tag={p.tag}
-                                  color={sharedColor}
-                                  siblings={siblings}
-                                />
-                              )}
-                            </div>
+                              <div className="flex items-center gap-1.5">
+                                {position != null && (
+                                  <span
+                                    className="w-4 h-4 rounded-full flex items-center justify-center text-[9px] font-bold shrink-0"
+                                    style={{
+                                      background: `${p.color}20`,
+                                      border: `1.5px solid ${p.color}`,
+                                      color: p.color,
+                                    }}
+                                  >
+                                    {position}
+                                  </span>
+                                )}
+                                <ProgBadge program={p} />
+                                {isChain && p.runCnt != null && (
+                                  <span className="text-[9px] font-mono text-muted-foreground/50 tabular-nums shrink-0">
+                                    {formatRunCnt(p.runCnt)} calls
+                                  </span>
+                                )}
+                                {sharedColor && siblings && siblings.length > 1 && (
+                                  <SharedTagDot
+                                    tag={p.tag}
+                                    color={sharedColor}
+                                    siblings={siblings}
+                                  />
+                                )}
+                              </div>
+                            </React.Fragment>
                           );
                         })}
                       </div>
