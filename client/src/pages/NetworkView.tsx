@@ -6,6 +6,28 @@ import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
 import type { NetworkInterface, ProgramChain, BpfProgram } from "../../../shared/ebpf-types";
 
+/** Classify run_cnt drop between consecutive chain programs */
+function classifyDrop(
+  prev: BpfProgram | undefined,
+  curr: BpfProgram | undefined,
+): { rate: number; label: string; color: string } | null {
+  const prevCnt = prev?.runCnt;
+  const currCnt = curr?.runCnt;
+  if (prevCnt == null || currCnt == null || prevCnt === 0) return null;
+  const rate = 1 - currCnt / prevCnt;
+  if (rate < 0.01) return null;
+  if (rate < 0.1) return { rate, label: `~${Math.round(rate * 100)}% fewer calls`, color: "#f59e0b" };
+  if (rate < 0.5) return { rate, label: `~${Math.round(rate * 100)}% fewer calls`, color: "#f97316" };
+  return { rate, label: `~${Math.round(rate * 100)}% fewer calls`, color: "#ef4444" };
+}
+
+function formatRunCnt(n: number): string {
+  if (n >= 1_000_000_000) return `${(n / 1_000_000_000).toFixed(1)}B`;
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
+  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}K`;
+  return String(n);
+}
+
 const OSI_LAYERS = [
   {
     key: "L2" as const,
@@ -117,25 +139,44 @@ function OsiLayerRow({ layerDef, programs, chains }: {
                     </span>
                   )}
                 </div>
-                <div className="flex flex-wrap gap-1.5 ml-1">
-                  {progs.map(p => {
+                <div className="space-y-0.5 ml-1">
+                  {progs.map((p, pIdx) => {
                     const pos = positionMap.get(p.id)?.position;
+                    const prevProg = chain.canShortCircuit && pIdx > 0
+                      ? progs[pIdx - 1] : undefined;
+                    const dropInfo = prevProg ? classifyDrop(prevProg, p) : null;
                     return (
-                      <div key={p.id} className="flex items-center gap-1">
-                        {pos != null && (
-                          <span
-                            className="w-4 h-4 rounded-full flex items-center justify-center text-[9px] font-bold shrink-0"
-                            style={{
-                              background: `${p.color}20`,
-                              border: `1.5px solid ${p.color}`,
-                              color: p.color,
-                            }}
+                      <React.Fragment key={p.id}>
+                        {dropInfo && (
+                          <div
+                            className="flex items-center gap-1 ml-5 text-[9px] font-mono py-0.5"
+                            style={{ color: dropInfo.color }}
                           >
-                            {pos}
-                          </span>
+                            <AlertTriangle size={8} />
+                            {dropInfo.label}
+                          </div>
                         )}
-                        <ProgBadge program={p} />
-                      </div>
+                        <div className="flex items-center gap-1.5">
+                          {pos != null && (
+                            <span
+                              className="w-4 h-4 rounded-full flex items-center justify-center text-[9px] font-bold shrink-0"
+                              style={{
+                                background: `${p.color}20`,
+                                border: `1.5px solid ${p.color}`,
+                                color: p.color,
+                              }}
+                            >
+                              {pos}
+                            </span>
+                          )}
+                          <ProgBadge program={p} />
+                          {p.runCnt != null && (
+                            <span className="text-[9px] font-mono text-muted-foreground/50 tabular-nums shrink-0">
+                              {formatRunCnt(p.runCnt)} calls
+                            </span>
+                          )}
+                        </div>
+                      </React.Fragment>
                     );
                   })}
                 </div>
