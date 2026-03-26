@@ -30,6 +30,8 @@ import {
 import { cn } from "@/lib/utils";
 import { trpc } from "@/lib/trpc";
 
+const STRUCTURAL_NODES = ["band-userspace", "band-kernel", "band-network", "label-zones", "label-cgroups", "label-maps"];
+
 // ─── Styles injected once ─────────────────────────────────────────────────────
 
 const FLOW_STYLES = `
@@ -469,127 +471,95 @@ function OsMapCanvas() {
     setZoom(vp.zoom);
   }, [getViewport]);
 
-  // Search highlighting: dim non-matching nodes
-  const highlightedNodeIds = useMemo(() => {
-    if (!searchQuery || !snapshot) return null;
-    const snap = snapshot;
-    const q = searchQuery.toLowerCase();
-    const matchingProgIds = new Set(
-      snap.programs
-        .filter(p =>
-          p.name.toLowerCase().includes(q) ||
-          p.rawType.toLowerCase().includes(q) ||
-          p.tag.toLowerCase().includes(q)
-        )
-        .map(p => p.id)
-    );
+  // Precompute program→node mapping once when snapshot/maps change.
+  // Both search and focus filtering then do cheap Set lookups instead of
+  // re-traversing the entire cgroup tree, zones, and interfaces.
+  const progNodeIndex = useMemo(() => {
+    if (!snapshot) return null;
+    // progId → set of node IDs that contain this program
+    const index = new Map<number, Set<string>>();
+    const addEntry = (progId: number, nodeId: string) => {
+      let s = index.get(progId);
+      if (!s) { s = new Set(); index.set(progId, s); }
+      s.add(nodeId);
+    };
 
-    const nodeIds = new Set<string>();
-    // Always keep band nodes
-    nodeIds.add("band-userspace");
-    nodeIds.add("band-kernel");
-    nodeIds.add("band-network");
-    nodeIds.add("label-zones");
-    nodeIds.add("label-cgroups");
-
-    // Zones that contain matching programs
-    snap.kernelZones.forEach(z => {
-      if (z.programs.some(p => matchingProgIds.has(p.id))) {
-        nodeIds.add(`zone-${z.zone}`);
-      }
+    snapshot.kernelZones.forEach(z => {
+      z.programs.forEach(p => addEntry(p.id, `zone-${z.zone}`));
     });
 
-    // Cgroup nodes that contain matching programs
-    function walkCgroup(nodes: typeof snap.cgroupTree) {
+    (function walkCgroup(nodes: typeof snapshot.cgroupTree) {
       nodes.forEach(n => {
-        if (n.programs.some(p => matchingProgIds.has(p.id))) {
-          nodeIds.add(`cgroup-${n.path}`);
-        }
+        n.programs.forEach(p => addEntry(p.id, `cgroup-${n.path}`));
         walkCgroup(n.children);
       });
-    }
-    walkCgroup(snap.cgroupTree);
+    })(snapshot.cgroupTree);
 
-    // Interfaces that contain matching programs
-    snap.networkInterfaces.forEach(iface => {
-      if (iface.allPrograms.some(p => matchingProgIds.has(p.id))) {
-        nodeIds.add(`iface-${iface.name}`);
+    snapshot.networkInterfaces.forEach(iface => {
+      iface.allPrograms.forEach(p => addEntry(p.id, `iface-${iface.name}`));
+    });
+
+    snapshot.programs.forEach(p => {
+      if (p.pids) {
+        p.pids.forEach(({ pid }) => addEntry(p.id, `proc-${pid}`));
       }
     });
 
-    // Process nodes that own matching programs
-    snap.programs
-      .filter(p => matchingProgIds.has(p.id) && p.pids)
-      .forEach(p => p.pids!.forEach(({ pid }) => nodeIds.add(`proc-${pid}`)));
+    maps.forEach(map => {
+      map.usedByProgIds.forEach(progId => addEntry(progId, `map-${map.id}`));
+    });
 
+    return index;
+  }, [snapshot, maps]);
+
+  // pid → program IDs (precomputed, stable across focus changes)
+  const pidToProgIds = useMemo(() => {
+    if (!snapshot) return new Map<number, number[]>();
+    const m = new Map<number, number[]>();
+    snapshot.programs.forEach(p => {
+      if (p.pids) {
+        for (const { pid } of p.pids) {
+          let arr = m.get(pid);
+          if (!arr) { arr = []; m.set(pid, arr); }
+          arr.push(p.id);
+        }
+      }
+    });
+    return m;
+  }, [snapshot]);
+
+  // Search highlighting: dim non-matching nodes
+  const highlightedNodeIds = useMemo(() => {
+    if (!searchQuery || !snapshot || !progNodeIndex) return null;
+    const q = searchQuery.toLowerCase();
+    const matchingProgIds = snapshot.programs
+      .filter(p =>
+        p.name.toLowerCase().includes(q) ||
+        p.rawType.toLowerCase().includes(q) ||
+        p.tag.toLowerCase().includes(q)
+      )
+      .map(p => p.id);
+
+    const nodeIds = new Set<string>(STRUCTURAL_NODES);
+    matchingProgIds.forEach(id => {
+      progNodeIndex.get(id)?.forEach(nid => nodeIds.add(nid));
+    });
     return nodeIds;
-  }, [searchQuery, snapshot]);
+  }, [searchQuery, snapshot, progNodeIndex]);
 
   // Focus mode: trace a process's programs to zones, interfaces, cgroups, and maps
   const focusedNodeIds = useMemo(() => {
-    if (focusedProcessId === null || !snapshot) return null;
-    const proc = Array.from(
-      // Rebuild the process map to find which programs belong to this pid
-      snapshot.programs.reduce((acc, p) => {
-        if (p.pids) {
-          for (const { pid } of p.pids) {
-            if (pid === focusedProcessId) {
-              acc.add(p.id);
-            }
-          }
-        }
-        return acc;
-      }, new Set<number>())
-    );
-    if (proc.length === 0) return null;
-    const progIds = new Set(proc);
+    if (focusedProcessId === null || !progNodeIndex) return null;
+    const progIds = pidToProgIds.get(focusedProcessId);
+    if (!progIds || progIds.length === 0) return null;
 
-    const nodeIds = new Set<string>();
-    // Always keep structural nodes
-    nodeIds.add("band-userspace");
-    nodeIds.add("band-kernel");
-    nodeIds.add("band-network");
-    nodeIds.add("label-zones");
-    nodeIds.add("label-cgroups");
-    nodeIds.add("label-maps");
-    // The focused process itself
+    const nodeIds = new Set<string>(STRUCTURAL_NODES);
     nodeIds.add(`proc-${focusedProcessId}`);
-
-    // Zones containing the process's programs
-    snapshot.kernelZones.forEach(z => {
-      if (z.programs.some(p => progIds.has(p.id))) {
-        nodeIds.add(`zone-${z.zone}`);
-      }
+    progIds.forEach(id => {
+      progNodeIndex.get(id)?.forEach(nid => nodeIds.add(nid));
     });
-
-    // Cgroup nodes containing the process's programs
-    const snap = snapshot;
-    function walkCgroup(nodes: typeof snap.cgroupTree) {
-      nodes.forEach(n => {
-        if (n.programs.some(p => progIds.has(p.id))) {
-          nodeIds.add(`cgroup-${n.path}`);
-        }
-        walkCgroup(n.children);
-      });
-    }
-    walkCgroup(snapshot.cgroupTree);
-
-    // Network interfaces with the process's programs
-    snapshot.networkInterfaces.forEach(iface => {
-      if (iface.allPrograms.some(p => progIds.has(p.id))) {
-        nodeIds.add(`iface-${iface.name}`);
-      }
-    });
-
-    // BPF maps used by the process's programs
-    maps.forEach(map => {
-      if (map.usedByProgIds.some(id => progIds.has(id))) {
-        nodeIds.add(`map-${map.id}`);
-      }
-    });
-
     return nodeIds;
-  }, [focusedProcessId, snapshot, maps]);
+  }, [focusedProcessId, progNodeIndex, pidToProgIds]);
 
   // Combine search and focus filters — if both active, intersect them
   const activeFilter = useMemo(() => {
