@@ -22,11 +22,12 @@ function classifyRateDrop(
   return { rate: drop, label: `~${Math.round(drop * 100)}% fewer/s`, color: "#ef4444" };
 }
 
-function formatRunCnt(n: number): string {
-  if (n >= 1_000_000_000) return `${(n / 1_000_000_000).toFixed(1)}B`;
+function formatRate(n: number): string {
   if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
   if (n >= 1_000) return `${(n / 1_000).toFixed(1)}K`;
-  return String(n);
+  if (n >= 1) return `${Math.round(n)}`;
+  if (n > 0) return `${n.toFixed(1)}`;
+  return "0";
 }
 
 function formatAge(loadedAt: number): string {
@@ -285,13 +286,13 @@ function CgroupNodeRow({
                           const dropInfo = classifyRateDrop(prevRate, currRate);
                           return (
                             <React.Fragment key={p.id}>
-                              {dropInfo && (
+                              {dropInfo && prevRate != null && currRate != null && (
                                 <div
                                   className="flex items-center gap-1 ml-5 text-[9px] font-mono py-0.5"
                                   style={{ color: dropInfo.color }}
                                 >
                                   <AlertTriangle size={8} />
-                                  {dropInfo.label} (live rate)
+                                  {dropInfo.label} ({formatRate(prevRate)}/s → {formatRate(currRate)}/s)
                                 </div>
                               )}
                               <div className="flex items-center gap-1.5 flex-wrap">
@@ -310,7 +311,7 @@ function CgroupNodeRow({
                                 <ProgBadge program={p} />
                                 {isChain && (
                                   <span className="text-[9px] font-mono text-muted-foreground/50 tabular-nums shrink-0">
-                                    {p.runCnt != null && `${formatRunCnt(p.runCnt)} total`}
+                                    {currRate != null ? `${formatRate(currRate)}/s` : "—"}
                                     {p.loadedAt > 0 && ` · loaded ${formatAge(p.loadedAt)}`}
                                   </span>
                                 )}
