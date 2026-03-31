@@ -416,10 +416,12 @@ function OsMapCanvas() {
   // maxCgroupDepth: undefined = show all; 0 = root only; N = show up to depth N
   const [maxCgroupDepth, setMaxCgroupDepth] = useState<number | undefined>(undefined);
   const layout = useOsMapLayout(snapshot, maps, zoom, maxCgroupDepth);
-  const { fitView, getViewport } = useReactFlow();
-  // Keep a stable ref to fitView so it never appears in useEffect deps
+  const { fitView, getViewport, setViewport } = useReactFlow();
+  // Keep stable refs so they never appear in useEffect deps
   const fitViewRef = useRef(fitView);
   useEffect(() => { fitViewRef.current = fitView; });
+  const setViewportRef = useRef(setViewport);
+  useEffect(() => { setViewportRef.current = setViewport; });
   const [nodes, setNodes, onNodesChange] = useNodesState(layout.nodes);
   const [edges, setEdges, onEdgesChange] = useEdgesState(layout.edges);
   const [showLabels, setShowLabels] = useState(true);
@@ -430,7 +432,29 @@ function OsMapCanvas() {
   // Sync layout → nodes/edges when snapshot or maps change.
   // fitView is accessed via ref so it never appears in deps (it is not stable
   // across renders in React Flow and would cause an infinite loop).
+  const getViewportRef = useRef(getViewport);
+  useEffect(() => { getViewportRef.current = getViewport; });
+
+  // Track layout structure so we can skip no-op node replacements.
+  // Replacing 1600+ nodes with identical-but-new objects causes React Flow
+  // to re-render every node component, producing a visible blink.
+  const prevLayoutFingerprint = useRef("");
   useEffect(() => {
+    // Build a lightweight fingerprint: node IDs in order.
+    // If the fingerprint is unchanged, the layout is structurally identical
+    // (same nodes, same positions) — skip the expensive setNodes call.
+    const fingerprint = layout.nodes.map(n => n.id).join("\0");
+    const structureChanged = fingerprint !== prevLayoutFingerprint.current;
+    prevLayoutFingerprint.current = fingerprint;
+
+    if (!structureChanged && didFit.current) {
+      return; // identical layout — nothing to update
+    }
+
+    // Capture viewport BEFORE replacing nodes so we can restore it after
+    // LOD-driven relayouts (which would otherwise let React Flow reset
+    // the viewport when all node objects are replaced).
+    const savedViewport = didFit.current ? getViewportRef.current() : null;
     setNodes(layout.nodes);
     setEdges(layout.edges);
     // Only auto-fit on initial load (not on LOD-driven relayouts, which would
@@ -454,6 +478,11 @@ function OsMapCanvas() {
         }, delay);
       };
       tryFit(300);
+    } else if (savedViewport && !isAnimating.current) {
+      // Restore viewport synchronously to prevent blink between setNodes
+      // and the next paint. Skip during fitView animations so they aren't
+      // overridden by the restore.
+      setViewportRef.current(savedViewport);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [layout]);
@@ -643,10 +672,10 @@ function OsMapCanvas() {
     }
   }, [snapshot, setSelectedProgram]);
 
-  // Focus mode no longer auto-zooms — the opacity dimming already makes the
-  // focused subgraph clear, and zooming out to fit all related nodes across the
-  // map was disorienting (typically dropped from ~70% to ~17%).  Users can
-  // double-click any node to zoom-fit it individually.
+  // Focus mode: no viewport change — just dim non-focused nodes via displayNodes
+  // opacity. The user's current pan/zoom is preserved. If a process's programs
+  // span many zones/cgroups, fitting them all would zoom to the full overview,
+  // which looks like an unwanted viewport reset.
 
   // Double-click to zoom-fit node
   const onNodeDoubleClick: NodeMouseHandler = useCallback((_evt, node) => {
