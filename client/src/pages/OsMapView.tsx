@@ -556,7 +556,11 @@ function OsMapCanvas() {
     const nodeIds = new Set<string>(STRUCTURAL_NODES);
     nodeIds.add(`proc-${focusedProcessId}`);
     progIds.forEach(id => {
-      progNodeIndex.get(id)?.forEach(nid => nodeIds.add(nid));
+      progNodeIndex.get(id)?.forEach(nid => {
+        // Skip other processes that share the same program — only the
+        // focused process node (added above) should be included.
+        if (!nid.startsWith("proc-")) nodeIds.add(nid);
+      });
     });
     return nodeIds;
   }, [focusedProcessId, progNodeIndex, pidToProgIds]);
@@ -587,13 +591,11 @@ function OsMapCanvas() {
     return nodes.map(n => ({
       ...n,
       data: { ...n.data, lod },
-      ...(activeFilter ? {
-        style: {
-          ...n.style,
-          opacity: activeFilter.has(n.id) ? 1 : 0.15,
-          transition: "opacity 0.3s ease",
-        },
-      } : {}),
+      style: {
+        ...n.style,
+        opacity: activeFilter ? (activeFilter.has(n.id) ? 1 : 0.15) : 1,
+        transition: "opacity 0.3s ease",
+      },
     }));
   }, [nodes, activeFilter, lod]);
 
@@ -641,28 +643,10 @@ function OsMapCanvas() {
     }
   }, [snapshot, setSelectedProgram]);
 
-  // Zoom to focused nodes when entering focus mode.
-  // Also use focusedProcessId (not focusedNodeIds) as the trigger so we only
-  // zoom on user action, not on every layout recomputation.
-  const prevFocusedPid = useRef<number | null>(null);
-  useEffect(() => {
-    // Only zoom when the focused process actually changed (user clicked)
-    if (focusedProcessId === prevFocusedPid.current) return;
-    prevFocusedPid.current = focusedProcessId;
-    if (focusedProcessId === null || !focusedNodeIds || focusedNodeIds.size === 0) return;
-    // Filter to content nodes only (skip bands/labels) for a tighter fit
-    const contentNodeIds = Array.from(focusedNodeIds).filter(
-      id => !id.startsWith("band-") && !id.startsWith("label-")
-    );
-    const targetNodes = nodes.filter(n => contentNodeIds.includes(n.id));
-    if (targetNodes.length > 0) {
-      isAnimating.current = true;
-      setTimeout(() => {
-        fitViewRef.current({ nodes: targetNodes, duration: 500, padding: 0.15 });
-      }, 50);
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [focusedProcessId, focusedNodeIds]);
+  // Focus mode no longer auto-zooms — the opacity dimming already makes the
+  // focused subgraph clear, and zooming out to fit all related nodes across the
+  // map was disorienting (typically dropped from ~70% to ~17%).  Users can
+  // double-click any node to zoom-fit it individually.
 
   // Double-click to zoom-fit node
   const onNodeDoubleClick: NodeMouseHandler = useCallback((_evt, node) => {
