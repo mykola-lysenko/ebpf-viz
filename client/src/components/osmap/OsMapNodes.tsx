@@ -163,8 +163,8 @@ export function ZoneNode({ data, selected }: { data: ZoneNodeData & { lod?: Lod 
       <Handle type="source" position={Position.Bottom} style={{ opacity: 0 }} />
 
       {/* Header */}
-      <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-        <span style={{ fontSize: lod === "minimal" ? 14 : 18 }}>{icon}</span>
+      <div style={{ display: "flex", alignItems: "center", gap: 5 }}>
+        <span style={{ fontSize: lod === "minimal" ? 12 : 14 }}>&#x1f5c4;</span>
         {lod !== "minimal" && (
           <span style={{
             fontSize: 11,
@@ -954,6 +954,56 @@ export type MapNodeData = {
   pinned: boolean;
 };
 
+export type MapSummaryNodeData = {
+  category: string;
+  color: string;
+  count: number;
+  mapIds: number[];
+};
+
+export function MapSummaryNode({ data, selected }: { data: MapSummaryNodeData & { lod?: Lod }; selected?: boolean }) {
+  const { category, color, count } = data;
+  return (
+    <div
+      style={{
+        width: "100%",
+        height: "100%",
+        background: `${color}15`,
+        border: `2px dashed ${selected ? color : `${color}60`}`,
+        borderRadius: 12,
+        display: "flex",
+        flexDirection: "column",
+        alignItems: "center",
+        justifyContent: "center",
+        gap: 4,
+        boxShadow: selected ? `0 0 16px ${color}40` : undefined,
+      }}
+    >
+      <Handle type="target" position={Position.Top} style={{ opacity: 0 }} />
+      <Handle type="source" position={Position.Bottom} style={{ opacity: 0 }} />
+      
+      <span style={{ fontSize: 20 }}>&#x1f4c2;</span>
+      <div style={{
+        fontSize: 11,
+        fontWeight: 800,
+        fontFamily: "monospace",
+        color,
+        textTransform: "uppercase",
+        letterSpacing: "0.05em",
+      }}>
+        {count} {category} maps
+      </div>
+      <div style={{
+        fontSize: 9,
+        color: "oklch(0.55 0.01 240)",
+        fontFamily: "monospace",
+      }}>
+        aggregated
+      </div>
+    </div>
+  );
+}
+
 export function MapNode({ data, selected }: { data: MapNodeData & { lod?: Lod }; selected?: boolean }) {
   const lod: Lod = data.lod ?? "compact";
   const { color, name, rawType, isShared, frozen, pinned, bytesKey, bytesValue, maxEntries } = data;
@@ -990,7 +1040,7 @@ export function MapNode({ data, selected }: { data: MapNodeData & { lod?: Lod };
 
       {/* Header */}
       <div style={{ display: "flex", alignItems: "center", gap: 5 }}>
-        <span style={{ fontSize: lod === "minimal" ? 12 : 14 }}>🗄</span>
+        <span style={{ fontSize: lod === "minimal" ? 12 : 14 }}>&#x1f5c4;</span>
         {lod !== "minimal" && (
           <span style={{
             fontSize: 10,
@@ -1089,6 +1139,7 @@ const MemoCgroupNode = React.memo(CgroupNode, nodeEq);
 const MemoInterfaceNode = React.memo(InterfaceNode, nodeEq);
 const MemoProcessNode = React.memo(ProcessNode, nodeEq);
 const MemoMapNode = React.memo(MapNode, nodeEq);
+const MemoMapSummaryNode = React.memo(MapSummaryNode, nodeEq);
 
 // ─── Node type map (export for ReactFlow) ─────────────────────────────────────
 
@@ -1103,4 +1154,5 @@ export const OS_MAP_NODE_TYPES = {
   interfaceNode: MemoInterfaceNode,
   processNode: MemoProcessNode,
   mapNode: MemoMapNode,
+  mapSummaryNode: MemoMapSummaryNode,
 } as const;
