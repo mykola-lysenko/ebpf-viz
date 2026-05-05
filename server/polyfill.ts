@@ -35,10 +35,11 @@ if (nodeMajor < 18) {
   // The require is wrapped in try/catch so the standalone esbuild bundle
   // (which inlines all deps) doesn't fail at bundle time if undici isn't
   // installed — the standalone tarball ships a separate copy via npm.
-  let undici: any | null = null;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let undici: Record<string, any> | null = null;
   try {
     // eslint-disable-next-line @typescript-eslint/no-require-imports
-    undici = require("undici") as any;
+    undici = require("undici");
   } catch {
     console.error("[polyfill] undici not found — install it for Node 16 support: npm install undici@5");
   }

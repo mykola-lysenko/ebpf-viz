@@ -1,7 +1,7 @@
-import { useMemo } from "react";
+import { useMemo, useState, useEffect, useRef } from "react";
 import type { Node, Edge } from "@xyflow/react";
 import type { EbpfSnapshot, BpfProgram, BpfMap, CgroupNode, NetworkInterface, KernelAttachmentZone } from "../../../shared/ebpf-types";
-import type { MapNodeData } from "../components/osmap/OsMapNodes";
+import type { MapNodeData, MapSummaryNodeData } from "../components/osmap/OsMapNodes";
 import { estimateInterfaceNodeHeight } from "../components/osmap/OsMapNodes";
 
 // ─── Layout constants ────────────────────────────────────────────────────────
@@ -226,7 +226,8 @@ export function buildOsMapLayout(
   snapshot: EbpfSnapshot,
   maps: BpfMap[] = [],
   lod: "minimal" | "compact" | "full" = "compact",
-  maxCgroupDepth?: number
+  maxCgroupDepth?: number,
+  focusedProgIds?: number[]
 ): OsMapLayout {
   const nodes: Node[] = [];
   const edges: Edge[] = [];
@@ -533,9 +534,91 @@ export function buildOsMapLayout(
       draggable: false,
     });
 
-    maps.forEach((map, idx) => {
-      const col = idx % MAP_COLS;
-      const row = Math.floor(idx / MAP_COLS);
+    const expandedMaps: BpfMap[] = [];
+    const aggregatedMaps: BpfMap[] = [];
+    const focusedSet = new Set(focusedProgIds || []);
+
+    maps.forEach(m => {
+      const isFocused = focusedSet.size > 0 && m.usedByProgIds.some(id => focusedSet.has(id));
+      if (isFocused) {
+        expandedMaps.push(m);
+      } else {
+        aggregatedMaps.push(m);
+      }
+    });
+
+    let currentGridIndex = 0;
+
+    // 1. Draw Aggregated Maps (Summary Nodes)
+    const categories = ["data", "event", "control", "socket", "other"];
+    categories.forEach((cat) => {
+      const catMaps = aggregatedMaps.filter(m => m.category === cat);
+      if (catMaps.length === 0) return;
+
+      const col = currentGridIndex % MAP_COLS;
+      const row = Math.floor(currentGridIndex / MAP_COLS);
+      const x = KERNEL_PADDING + col * (MAP_W + MAP_GAP_X);
+      const y = MAPS_Y + row * (MAP_H + MAP_GAP_Y);
+      const nodeId = `map-summary-${cat}`;
+      const color = MAP_CATEGORY_COLORS[cat] ?? "#6b7280";
+
+      nodes.push({
+        id: nodeId,
+        type: "mapSummaryNode",
+        position: { x, y },
+        data: {
+          category: cat,
+          color,
+          count: catMaps.length,
+          mapIds: catMaps.map(m => m.id),
+        } satisfies MapSummaryNodeData,
+        style: { width: MAP_W, height: MAP_H },
+      });
+
+      // Edges from programs to this summary node
+      const progIds = new Set<number>();
+      catMaps.forEach(m => m.usedByProgIds.forEach(id => progIds.add(id)));
+
+      progIds.forEach(progId => {
+        const prog = progById.get(progId);
+        if (!prog) return;
+        const zoneKey = progTypeToZone(prog.rawType);
+
+        if (NIC_ZONE_KEYS.has(zoneKey)) {
+          const attachedIface = snapshot.networkInterfaces.find(iface =>
+            iface.allPrograms.some(ap => ap.id === prog.id)
+          );
+          if (attachedIface) {
+            edges.push({
+              id: `e-prog-${progId}-maps-summary-${cat}`,
+              source: `iface-${attachedIface.name}`,
+              target: nodeId,
+              type: "smoothstep",
+              style: { stroke: `${color}40`, strokeWidth: 1, strokeDasharray: "3 4" },
+              animated: false,
+              markerEnd: { type: "arrowclosed" as any, color, width: 8, height: 8 },
+            });
+          }
+        } else {
+          edges.push({
+            id: `e-prog-${progId}-maps-summary-${cat}`,
+            source: `zone-${zoneKey}`,
+            target: nodeId,
+            type: "smoothstep",
+            style: { stroke: `${color}40`, strokeWidth: 1, strokeDasharray: "3 4" },
+            animated: false,
+            markerEnd: { type: "arrowclosed" as any, color, width: 8, height: 8 },
+          });
+        }
+      });
+      currentGridIndex++;
+      mapsMaxY = Math.max(mapsMaxY, y + MAP_H);
+    });
+
+    // 2. Draw Expanded Maps
+    expandedMaps.forEach((map) => {
+      const col = currentGridIndex % MAP_COLS;
+      const row = Math.floor(currentGridIndex / MAP_COLS);
       const x = KERNEL_PADDING + col * (MAP_W + MAP_GAP_X);
       const y = MAPS_Y + row * (MAP_H + MAP_GAP_Y);
       const nodeId = `map-${map.id}`;
@@ -561,8 +644,6 @@ export function buildOsMapLayout(
         } satisfies MapNodeData,
         style: { width: MAP_W, height: MAP_H },
       });
-
-      mapsMaxY = Math.max(mapsMaxY, y + MAP_H);
 
       // Edges from programs to this map
       map.usedByProgIds.forEach(progId => {
@@ -598,9 +679,10 @@ export function buildOsMapLayout(
           });
         }
       });
+      currentGridIndex++;
+      mapsMaxY = Math.max(mapsMaxY, y + MAP_H);
     });
   }
-
   const totalHeight = (maps.length > 0 ? mapsMaxY + 60 : NET_Y + netBandH + 60);
 
   return { nodes, edges, totalHeight, totalWidth: CANVAS_W };
@@ -622,7 +704,7 @@ function progTypeToZone(rawType: string): string {
 
 /** Derive the LOD tier from a raw zoom value — mirrors the thresholds in OsMapNodes.tsx */
 export function zoomToLod(zoom: number): "minimal" | "compact" | "full" {
-  if (zoom < 0.35) return "minimal";
+  if (zoom <= 0.45) return "minimal";
   if (zoom < 0.65) return "compact";
   return "full";
 }
@@ -631,14 +713,70 @@ export function useOsMapLayout(
   snapshot: EbpfSnapshot | null,
   maps: BpfMap[] = [],
   zoom = 0.35,
-  maxCgroupDepth?: number
+  maxCgroupDepth?: number,
+  focusedProgIds?: number[]
 ): OsMapLayout {
   const lod = zoomToLod(zoom);
-  return useMemo(() => {
+
+  const [layout, setLayout] = useState<OsMapLayout>(() => {
     if (!snapshot) return { nodes: [], edges: [], totalHeight: 1200, totalWidth: CANVAS_W };
-    return buildOsMapLayout(snapshot, maps, lod, maxCgroupDepth);
-    // lod is derived from zoom but we only want to recompute when the LOD tier
-    // changes (not on every sub-threshold zoom tick), so depend on lod not zoom.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [snapshot, maps, lod, maxCgroupDepth]);
+    return buildOsMapLayout(snapshot, maps, lod, maxCgroupDepth, focusedProgIds);
+  });
+  
+  // Track the exact params we used for the initial synchronous layout
+  // so we don't re-run it on the very first render cycle when the worker fires up.
+  const syncSnapRef = useRef(snapshot);
+  const syncMapsRef = useRef(maps);
+  const syncLodRef = useRef(lod);
+  const syncDepthRef = useRef(maxCgroupDepth);
+  const syncFocusedRef = useRef(focusedProgIds?.join(","));
+  
+  const workerRef = useRef<Worker | null>(null);
+  const reqIdRef = useRef(0);
+
+  // Initialize worker once
+  useEffect(() => {
+    workerRef.current = new Worker(new URL('../workers/osmap.worker.ts', import.meta.url), { type: 'module' });
+    workerRef.current.onmessage = (e) => {
+      if (e.data.reqId === reqIdRef.current) {
+        setLayout(e.data.layout);
+      }
+    };
+    workerRef.current.onerror = (e) => {
+      console.error("OS Map layout worker failed:", e);
+    };
+    return () => workerRef.current?.terminate();
+  }, []);
+
+  // Dispatch layout jobs to the worker, debounced
+  useEffect(() => {
+    if (!snapshot) {
+      setLayout({ nodes: [], edges: [], totalHeight: 1200, totalWidth: CANVAS_W });
+      return;
+    }
+
+    // Skip the worker entirely for the initial synchronous render.
+    if (
+      snapshot === syncSnapRef.current &&
+      maps === syncMapsRef.current &&
+      lod === syncLodRef.current &&
+      maxCgroupDepth === syncDepthRef.current &&
+      (focusedProgIds?.join(",") ?? "") === syncFocusedRef.current &&
+      reqIdRef.current === 0
+    ) {
+      return;
+    }
+
+    // Debounce and send to worker
+    const timerId = setTimeout(() => {
+      const reqId = ++reqIdRef.current;
+      workerRef.current?.postMessage({
+        snapshot, maps, lod, maxCgroupDepth, focusedProgIds, reqId
+      });
+    }, 300);
+
+    return () => clearTimeout(timerId);
+  }, [snapshot, maps, lod, maxCgroupDepth, focusedProgIds]);
+
+  return layout;
 }

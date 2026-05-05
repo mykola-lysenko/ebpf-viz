@@ -58,6 +58,16 @@ interface EbpfContextValue {
 
 const EbpfContext = createContext<EbpfContextValue | null>(null);
 
+import { deepEqual } from "@/lib/utils";
+
+function useStableRef<T>(value: T, isEqual: (a: T, b: T) => boolean): T {
+  const ref = useRef<T>(value);
+  if (!isEqual(ref.current, value)) {
+    ref.current = value;
+  }
+  return ref.current;
+}
+
 export function EbpfProvider({ children }: { children: React.ReactNode }) {
   const [selectedProgram, setSelectedProgram] = useState<BpfProgram | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
@@ -73,12 +83,20 @@ export function EbpfProvider({ children }: { children: React.ReactNode }) {
 
   // ── SSE live stream ────────────────────────────────────────────────────────
   const {
-    snapshot: liveSnapshot,
-    maps: liveMaps,
+    snapshot: rawLiveSnapshot,
+    maps: rawLiveMaps,
     allHistories,
     activity,
     status: streamStatus,
   } = useEbpfStream();
+
+  // Stabilize the SSE state: only trigger downstream re-renders if the topology actually changes
+  // Ignore 'timestamp' and 'stats' on the snapshot since those change every 5 seconds without affecting layout
+  const liveSnapshot = useStableRef(
+    rawLiveSnapshot,
+    (a, b) => deepEqual(a, b, new Set(["timestamp", "stats"]))
+  );
+  const liveMaps = useStableRef(rawLiveMaps, deepEqual);
 
   // ── Poller status (for statsEnabled flag) — lightweight 30s poll ──────────
   const { data: pollerStatus, refetch } = trpc.ebpf.status.useQuery(undefined, {
