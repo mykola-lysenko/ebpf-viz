@@ -30,6 +30,8 @@ import {
 import { cn } from "@/lib/utils";
 import { trpc } from "@/lib/trpc";
 
+const STRUCTURAL_NODES = ["band-userspace", "band-kernel", "band-network", "label-zones", "label-cgroups", "label-maps"];
+
 // ─── Styles injected once ─────────────────────────────────────────────────────
 
 const FLOW_STYLES = `
@@ -42,13 +44,26 @@ const FLOW_STYLES = `
 .os-map-flow .react-flow__minimap { background: oklch(0.10 0.012 240 / 0.95); border: 1px solid oklch(0.22 0.015 240); border-radius: 10px; overflow: hidden; }
 .os-map-flow .react-flow__minimap-mask { fill: oklch(0.06 0.012 240 / 0.7); }
 .os-map-flow .react-flow__background { opacity: 0.4; }
+
+/* Fast DOM-based styling for active search/focus filters */
+.os-map-flow.filtering-active .react-flow__node,
+.os-map-flow.filtering-active .react-flow__edge {
+  opacity: 0.15;
+}
+.os-map-flow.filtering-active .react-flow__edge {
+  opacity: 0.05;
+}
+.os-map-flow.filtering-active .react-flow__node[data-is-filtered="true"],
+.os-map-flow.filtering-active .react-flow__edge[data-is-filtered="true"] {
+  opacity: 1;
+}
 `;
 
 // ─── LOD legend ───────────────────────────────────────────────────────────────
 
 function LodIndicator({ zoom }: { zoom: number }) {
-  const level = zoom < 0.35 ? "Bird's Eye" : zoom < 0.65 ? "Overview" : "Detail";
-  const color = zoom < 0.35 ? "#f59e0b" : zoom < 0.65 ? "#10b981" : "#00d4ff";
+  const level = zoom <= 0.45 ? "Bird's Eye" : zoom < 0.65 ? "Overview" : "Detail";
+  const color = zoom <= 0.45 ? "#f59e0b" : zoom < 0.65 ? "#10b981" : "#00d4ff";
   return (
     <div style={{
       display: "flex",
@@ -331,7 +346,8 @@ function MapLegend() {
     { color: "#ffffff30", label: "Dashed = ownership edge" },
     { color: "#00d4ff50", label: "Animated = active attachment" },
     { color: "#a78bfa",   label: "BPF maps (data/event/control)" },
-    { color: "#a78bfa40", label: "Dashed = program → map edge" },
+    { color: "#a78bfa40", label: "Dashed border = aggregated maps" },
+    { color: "#a78bfa40", label: "Dashed line = program \u2192 map edge" },
   ];
 
   return (
@@ -413,22 +429,77 @@ function OsMapCanvas() {
   const [zoom, setZoom] = useState(0.35);
   // maxCgroupDepth: undefined = show all; 0 = root only; N = show up to depth N
   const [maxCgroupDepth, setMaxCgroupDepth] = useState<number | undefined>(undefined);
-  const layout = useOsMapLayout(snapshot, maps, zoom, maxCgroupDepth);
-  const { fitView, getViewport } = useReactFlow();
-  // Keep a stable ref to fitView so it never appears in useEffect deps
+  const [focusedProcessId, setFocusedProcessId] = useState<number | null>(null);
+
+  // pid → program IDs (precomputed, stable across focus changes)
+  const pidToProgIds = useMemo(() => {
+    if (!snapshot) return new Map<number, number[]>();
+    const m = new Map<number, number[]>();
+    snapshot.programs.forEach(p => {
+      if (p.pids) {
+        for (const { pid } of p.pids) {
+          let arr = m.get(pid);
+          if (!arr) { arr = []; m.set(pid, arr); }
+          arr.push(p.id);
+        }
+      }
+    });
+    return m;
+  }, [snapshot]);
+
+  const focusedProgIds = useMemo(() => {
+    return focusedProcessId ? pidToProgIds.get(focusedProcessId) : undefined;
+  }, [focusedProcessId, pidToProgIds]);
+
+  const layout = useOsMapLayout(snapshot, maps, zoom, maxCgroupDepth, focusedProgIds);
+  const { fitView, getViewport, setViewport } = useReactFlow();
+  // Keep stable refs so they never appear in useEffect deps
   const fitViewRef = useRef(fitView);
   useEffect(() => { fitViewRef.current = fitView; });
-  const [nodes, setNodes, onNodesChange] = useNodesState(layout.nodes);
+  const setViewportRef = useRef(setViewport);
+  useEffect(() => { setViewportRef.current = setViewport; });
+  const [nodes, setNodes, onNodesChangeRaw] = useNodesState(layout.nodes);
   const [edges, setEdges, onEdgesChange] = useEdgesState(layout.edges);
+  // Filter out React Flow's internal selection changes — we use our own focus
+  // mode, and selection changes cause all node objects to churn (triggering a
+  // visible blink when React Flow re-renders 1600+ nodes).
+  const onNodesChange = useCallback(
+    (changes: Parameters<typeof onNodesChangeRaw>[0]) => {
+      const filtered = changes.filter(c => c.type !== "select");
+      if (filtered.length > 0) onNodesChangeRaw(filtered);
+    },
+    [onNodesChangeRaw]
+  );
   const [showLabels, setShowLabels] = useState(true);
-  const [focusedProcessId, setFocusedProcessId] = useState<number | null>(null);
   const didFit = useRef(false);
   const fitAttempts = useRef(0);
 
   // Sync layout → nodes/edges when snapshot or maps change.
   // fitView is accessed via ref so it never appears in deps (it is not stable
   // across renders in React Flow and would cause an infinite loop).
+  const getViewportRef = useRef(getViewport);
+  useEffect(() => { getViewportRef.current = getViewport; });
+
+  // Track layout structure so we can skip no-op node replacements.
+  // Replacing 1600+ nodes with identical-but-new objects causes React Flow
+  // to re-render every node component, producing a visible blink.
+  const prevLayoutFingerprint = useRef("");
   useEffect(() => {
+    // Build a lightweight fingerprint: node IDs in order.
+    // If the fingerprint is unchanged, the layout is structurally identical
+    // (same nodes, same positions) — skip the expensive setNodes call.
+    const fingerprint = layout.nodes.map(n => n.id).join("\0");
+    const structureChanged = fingerprint !== prevLayoutFingerprint.current;
+    
+    if (!structureChanged && didFit.current) {
+      return; // identical layout — nothing to update
+    }
+    prevLayoutFingerprint.current = fingerprint;
+
+    // Capture viewport BEFORE replacing nodes so we can restore it after
+    // LOD-driven relayouts (which would otherwise let React Flow reset
+    // the viewport when all node objects are replaced).
+    const savedViewport = didFit.current ? getViewportRef.current() : null;
     setNodes(layout.nodes);
     setEdges(layout.edges);
     // Only auto-fit on initial load (not on LOD-driven relayouts, which would
@@ -439,7 +510,8 @@ function OsMapCanvas() {
           isAnimating.current = true;
           const contentNodes = layout.nodes.filter(
             n => n.type === "zoneNode" || n.type === "cgroupNode" ||
-                 n.type === "interfaceNode" || n.type === "processNode"
+                 n.type === "interfaceNode" || n.type === "processNode" ||
+                 n.type === "mapNode" || n.type === "mapSummaryNode"
           );
           fitViewRef.current({
             nodes: contentNodes.length > 0 ? contentNodes : undefined,
@@ -452,6 +524,11 @@ function OsMapCanvas() {
         }, delay);
       };
       tryFit(300);
+    } else if (savedViewport && !isAnimating.current) {
+      // Restore viewport synchronously to prevent blink between setNodes
+      // and the next paint. Skip during fitView animations so they aren't
+      // overridden by the restore.
+      setViewportRef.current(savedViewport);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [layout]);
@@ -469,127 +546,87 @@ function OsMapCanvas() {
     setZoom(vp.zoom);
   }, [getViewport]);
 
-  // Search highlighting: dim non-matching nodes
-  const highlightedNodeIds = useMemo(() => {
-    if (!searchQuery || !snapshot) return null;
-    const snap = snapshot;
-    const q = searchQuery.toLowerCase();
-    const matchingProgIds = new Set(
-      snap.programs
-        .filter(p =>
-          p.name.toLowerCase().includes(q) ||
-          p.rawType.toLowerCase().includes(q) ||
-          p.tag.toLowerCase().includes(q)
-        )
-        .map(p => p.id)
-    );
+  // Precompute program→node mapping once when snapshot/maps change.
+  // Both search and focus filtering then do cheap Set lookups instead of
+  // re-traversing the entire cgroup tree, zones, and interfaces.
+  const progNodeIndex = useMemo(() => {
+    if (!snapshot) return null;
+    // progId → set of node IDs that contain this program
+    const index = new Map<number, Set<string>>();
+    const addEntry = (progId: number, nodeId: string) => {
+      let s = index.get(progId);
+      if (!s) { s = new Set(); index.set(progId, s); }
+      s.add(nodeId);
+    };
 
-    const nodeIds = new Set<string>();
-    // Always keep band nodes
-    nodeIds.add("band-userspace");
-    nodeIds.add("band-kernel");
-    nodeIds.add("band-network");
-    nodeIds.add("label-zones");
-    nodeIds.add("label-cgroups");
-
-    // Zones that contain matching programs
-    snap.kernelZones.forEach(z => {
-      if (z.programs.some(p => matchingProgIds.has(p.id))) {
-        nodeIds.add(`zone-${z.zone}`);
-      }
+    snapshot.kernelZones.forEach(z => {
+      z.programs.forEach(p => addEntry(p.id, `zone-${z.zone}`));
     });
 
-    // Cgroup nodes that contain matching programs
-    function walkCgroup(nodes: typeof snap.cgroupTree) {
+    (function walkCgroup(nodes: typeof snapshot.cgroupTree) {
       nodes.forEach(n => {
-        if (n.programs.some(p => matchingProgIds.has(p.id))) {
-          nodeIds.add(`cgroup-${n.path}`);
-        }
+        n.programs.forEach(p => addEntry(p.id, `cgroup-${n.path}`));
         walkCgroup(n.children);
       });
-    }
-    walkCgroup(snap.cgroupTree);
+    })(snapshot.cgroupTree);
 
-    // Interfaces that contain matching programs
-    snap.networkInterfaces.forEach(iface => {
-      if (iface.allPrograms.some(p => matchingProgIds.has(p.id))) {
-        nodeIds.add(`iface-${iface.name}`);
+    snapshot.networkInterfaces.forEach(iface => {
+      iface.allPrograms.forEach(p => addEntry(p.id, `iface-${iface.name}`));
+    });
+
+    snapshot.programs.forEach(p => {
+      if (p.pids) {
+        p.pids.forEach(({ pid }) => addEntry(p.id, `proc-${pid}`));
       }
     });
 
-    // Process nodes that own matching programs
-    snap.programs
-      .filter(p => matchingProgIds.has(p.id) && p.pids)
-      .forEach(p => p.pids!.forEach(({ pid }) => nodeIds.add(`proc-${pid}`)));
+    maps.forEach(map => {
+      map.usedByProgIds.forEach(progId => {
+        addEntry(progId, `map-${map.id}`);
+        // Also index by summary node ID so filtering works in aggregated view
+        addEntry(progId, `map-summary-${map.category}`);
+      });
+    });
 
+    return index;
+  }, [snapshot, maps]);
+
+  // Search highlighting: dim non-matching nodes
+  const highlightedNodeIds = useMemo(() => {
+    if (!searchQuery || !snapshot || !progNodeIndex) return null;
+    const q = searchQuery.toLowerCase();
+    const matchingProgIds = snapshot.programs
+      .filter(p =>
+        p.name.toLowerCase().includes(q) ||
+        p.rawType.toLowerCase().includes(q) ||
+        p.tag.toLowerCase().includes(q)
+      )
+      .map(p => p.id);
+
+    const nodeIds = new Set<string>(STRUCTURAL_NODES);
+    matchingProgIds.forEach(id => {
+      progNodeIndex.get(id)?.forEach(nid => nodeIds.add(nid));
+    });
     return nodeIds;
-  }, [searchQuery, snapshot]);
+  }, [searchQuery, snapshot, progNodeIndex]);
 
   // Focus mode: trace a process's programs to zones, interfaces, cgroups, and maps
   const focusedNodeIds = useMemo(() => {
-    if (focusedProcessId === null || !snapshot) return null;
-    const proc = Array.from(
-      // Rebuild the process map to find which programs belong to this pid
-      snapshot.programs.reduce((acc, p) => {
-        if (p.pids) {
-          for (const { pid } of p.pids) {
-            if (pid === focusedProcessId) {
-              acc.add(p.id);
-            }
-          }
-        }
-        return acc;
-      }, new Set<number>())
-    );
-    if (proc.length === 0) return null;
-    const progIds = new Set(proc);
+    if (focusedProcessId === null || !progNodeIndex) return null;
+    const progIds = pidToProgIds.get(focusedProcessId);
+    if (!progIds || progIds.length === 0) return null;
 
-    const nodeIds = new Set<string>();
-    // Always keep structural nodes
-    nodeIds.add("band-userspace");
-    nodeIds.add("band-kernel");
-    nodeIds.add("band-network");
-    nodeIds.add("label-zones");
-    nodeIds.add("label-cgroups");
-    nodeIds.add("label-maps");
-    // The focused process itself
+    const nodeIds = new Set<string>(STRUCTURAL_NODES);
     nodeIds.add(`proc-${focusedProcessId}`);
-
-    // Zones containing the process's programs
-    snapshot.kernelZones.forEach(z => {
-      if (z.programs.some(p => progIds.has(p.id))) {
-        nodeIds.add(`zone-${z.zone}`);
-      }
-    });
-
-    // Cgroup nodes containing the process's programs
-    const snap = snapshot;
-    function walkCgroup(nodes: typeof snap.cgroupTree) {
-      nodes.forEach(n => {
-        if (n.programs.some(p => progIds.has(p.id))) {
-          nodeIds.add(`cgroup-${n.path}`);
-        }
-        walkCgroup(n.children);
+    progIds.forEach(id => {
+      progNodeIndex.get(id)?.forEach(nid => {
+        // Skip other processes that share the same program — only the
+        // focused process node (added above) should be included.
+        if (!nid.startsWith("proc-")) nodeIds.add(nid);
       });
-    }
-    walkCgroup(snapshot.cgroupTree);
-
-    // Network interfaces with the process's programs
-    snapshot.networkInterfaces.forEach(iface => {
-      if (iface.allPrograms.some(p => progIds.has(p.id))) {
-        nodeIds.add(`iface-${iface.name}`);
-      }
     });
-
-    // BPF maps used by the process's programs
-    maps.forEach(map => {
-      if (map.usedByProgIds.some(id => progIds.has(id))) {
-        nodeIds.add(`map-${map.id}`);
-      }
-    });
-
     return nodeIds;
-  }, [focusedProcessId, snapshot, maps]);
+  }, [focusedProcessId, progNodeIndex, pidToProgIds]);
 
   // Combine search and focus filters — if both active, intersect them
   const activeFilter = useMemo(() => {
@@ -611,33 +648,59 @@ function OsMapCanvas() {
   // Derive LOD tier from current zoom (changes at only 2 thresholds, not on every tick)
   const lod = zoomToLod(zoom);
 
-  // Apply highlight/focus opacity to nodes AND inject lod into data so node components
-  // don't need to call useViewport() individually (eliminates per-node re-renders on pan/zoom)
+  // Inject lod into node data so node components don't need to call useViewport()
+  // individually (eliminates per-node re-renders on pan/zoom).
+  // Opacity is handled via CSS (see focusStyles below) so that focus/search
+  // toggling doesn't recreate node objects — which caused React Flow to drop
+  // the paint until the next user interaction.
   const displayNodes = useMemo(() => {
     return nodes.map(n => ({
       ...n,
       data: { ...n.data, lod },
-      ...(activeFilter ? {
-        style: {
-          ...n.style,
-          opacity: activeFilter.has(n.id) ? 1 : 0.15,
-          transition: "opacity 0.3s ease",
-        },
-      } : {}),
     }));
-  }, [nodes, activeFilter, lod]);
+  }, [nodes, lod]);
 
-  // Apply highlight/focus opacity to edges
-  const displayEdges = useMemo(() => {
-    if (!activeFilter) return edges;
-    return edges.map(e => ({
-      ...e,
-      style: {
-        ...e.style,
-        opacity: (activeFilter.has(e.source) && activeFilter.has(e.target)) ? 1 : 0.05,
-      },
-    }));
-  }, [edges, activeFilter]);
+  // DOM-driven opacity for focus/search filtering. Using direct element mutation
+  // entirely bypasses React Flow's rendering pipeline (preventing "blinks" from
+  // style recalculations or node remounts).
+  useEffect(() => {
+    const container = document.querySelector(".os-map-flow");
+    if (!container) return;
+
+    if (!activeFilter) {
+      container.classList.remove("filtering-active");
+      container.querySelectorAll('[data-is-filtered="true"]').forEach((el) => {
+        el.removeAttribute("data-is-filtered");
+      });
+      return;
+    }
+
+    container.classList.add("filtering-active");
+    
+    // Clear previous filters
+    container.querySelectorAll('[data-is-filtered="true"]').forEach((el) => {
+      el.removeAttribute("data-is-filtered");
+    });
+
+    // We also need to highlight edges that connect two highlighted nodes
+    const edgeIds = new Set<string>();
+    edges.forEach((e) => {
+      if (activeFilter.has(e.source) && activeFilter.has(e.target)) {
+        edgeIds.add(e.id);
+      }
+    });
+
+    // Set attribute on matching items
+    activeFilter.forEach((id) => {
+      const nodeEl = container.querySelector(`.react-flow__node[data-id="${CSS.escape(id)}"]`);
+      if (nodeEl) nodeEl.setAttribute("data-is-filtered", "true");
+    });
+    
+    edgeIds.forEach((id) => {
+      const edgeEl = container.querySelector(`.react-flow__edge[data-id="${CSS.escape(id)}"]`);
+      if (edgeEl) edgeEl.setAttribute("data-is-filtered", "true");
+    });
+  }, [activeFilter, edges]);
 
   // Node click handler — extract program from zone/cgroup/interface and open detail panel,
   // or toggle focus mode when clicking a process node.
@@ -671,28 +734,10 @@ function OsMapCanvas() {
     }
   }, [snapshot, setSelectedProgram]);
 
-  // Zoom to focused nodes when entering focus mode.
-  // Also use focusedProcessId (not focusedNodeIds) as the trigger so we only
-  // zoom on user action, not on every layout recomputation.
-  const prevFocusedPid = useRef<number | null>(null);
-  useEffect(() => {
-    // Only zoom when the focused process actually changed (user clicked)
-    if (focusedProcessId === prevFocusedPid.current) return;
-    prevFocusedPid.current = focusedProcessId;
-    if (focusedProcessId === null || !focusedNodeIds || focusedNodeIds.size === 0) return;
-    // Filter to content nodes only (skip bands/labels) for a tighter fit
-    const contentNodeIds = Array.from(focusedNodeIds).filter(
-      id => !id.startsWith("band-") && !id.startsWith("label-")
-    );
-    const targetNodes = nodes.filter(n => contentNodeIds.includes(n.id));
-    if (targetNodes.length > 0) {
-      isAnimating.current = true;
-      setTimeout(() => {
-        fitViewRef.current({ nodes: targetNodes, duration: 500, padding: 0.15 });
-      }, 50);
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [focusedProcessId, focusedNodeIds]);
+  // Focus mode: no viewport change — just dim non-focused nodes via displayNodes
+  // opacity. The user's current pan/zoom is preserved. If a process's programs
+  // span many zones/cgroups, fitting them all would zoom to the full overview,
+  // which looks like an unwanted viewport reset.
 
   // Double-click to zoom-fit node
   const onNodeDoubleClick: NodeMouseHandler = useCallback((_evt, node) => {
@@ -771,7 +816,7 @@ function OsMapCanvas() {
       <ReactFlow
         className="os-map-flow"
         nodes={displayNodes}
-        edges={displayEdges}
+        edges={edges}
         onNodesChange={onNodesChange}
         onEdgesChange={onEdgesChange}
         onNodeClick={onNodeClick}
