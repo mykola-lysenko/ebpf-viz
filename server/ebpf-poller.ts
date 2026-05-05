@@ -1,4 +1,5 @@
 import { exec, execFile, execSync } from "child_process";
+import { existsSync } from "fs";
 import { promisify } from "util";
 import { hostname } from "os";
 import type { BpfMap, EbpfSnapshot, PollingConfig, RawBpfMap, RawBpfProg, RawCgroupEntry, RawNetSnapshot } from "../shared/ebpf-types";
@@ -39,7 +40,6 @@ export function resolveBpftoolPath(): string {
     "/usr/local/bin/bpftool",
     "/sbin/bpftool",
   ];
-  const { existsSync } = require("fs") as typeof import("fs");
   for (const p of candidates) {
     if (existsSync(p)) return p;
   }
