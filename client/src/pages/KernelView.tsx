@@ -324,17 +324,16 @@ export default function KernelView() {
     });
   };
 
-  if (!snapshot) {
-    return <div className="flex items-center justify-center h-full"><p className="text-muted-foreground">Loading…</p></div>;
-  }
-
-  // Filter zones based on search
-  const zones = searchQuery
-    ? snapshot.kernelZones.map(z => ({
-        ...z,
-        programs: z.programs.filter(p => filteredPrograms.some(fp => fp.id === p.id)),
-      })).filter(z => z.programs.length > 0)
-    : snapshot.kernelZones;
+  // Filter zones based on search — computed before hooks so they run unconditionally
+  const zones = useMemo(() => {
+    if (!snapshot) return [];
+    return searchQuery
+      ? snapshot.kernelZones.map(z => ({
+          ...z,
+          programs: z.programs.filter(p => filteredPrograms.some(fp => fp.id === p.id)),
+        })).filter(z => z.programs.length > 0)
+      : snapshot.kernelZones;
+  }, [snapshot, searchQuery, filteredPrograms]);
 
   // Compute per-zone heat data
   const zoneHeatData = useMemo(() => {
@@ -349,6 +348,10 @@ export default function KernelView() {
     () => Math.max(0, ...zoneHeatData.map(z => z.cps)),
     [zoneHeatData]
   );
+
+  if (!snapshot) {
+    return <div className="flex items-center justify-center h-full"><p className="text-muted-foreground">Loading…</p></div>;
+  }
 
   return (
     <div className="p-6 space-y-6 max-w-7xl mx-auto">
