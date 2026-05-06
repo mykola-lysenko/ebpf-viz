@@ -413,7 +413,7 @@ describe("buildOsMapLayout", () => {
         category: "data",
       },
     ];
-    const layout = buildOsMapLayout(snap, maps as any, "compact");
+    const layout = buildOsMapLayout(snap, maps as any, "compact", undefined, [1]);
     const mapEdge = layout.edges.find(
       e => e.source === "iface-eth0" && e.target === "map-10"
     );
@@ -476,7 +476,7 @@ describe("buildOsMapLayout", () => {
       bytesMemlock: 4096, frozen: false, pinnedPaths: [], btfId: null,
       usedByProgIds: [], color: "#a78bfa", category: "data",
     }];
-    const layout = buildOsMapLayout(snap, maps as any, "compact");
+    const layout = buildOsMapLayout(snap, maps as any, "compact", undefined, [1]);
 
     const netBand = layout.nodes.find(n => n.id === "band-network")!;
     const mapLabel = layout.nodes.find(n => n.id === "label-maps")!;
