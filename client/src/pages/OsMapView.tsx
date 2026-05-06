@@ -46,12 +46,11 @@ const FLOW_STYLES = `
 .os-map-flow .react-flow__background { opacity: 0.4; }
 
 /* Fast DOM-based styling for active search/focus filters */
-.os-map-flow.filtering-active .react-flow__node,
-.os-map-flow.filtering-active .react-flow__edge {
-  opacity: 0.15;
+.os-map-flow.filtering-active .react-flow__node {
+  opacity: 0.10;
 }
 .os-map-flow.filtering-active .react-flow__edge {
-  opacity: 0.05;
+  opacity: 0;
 }
 .os-map-flow.filtering-active .react-flow__node[data-is-filtered="true"],
 .os-map-flow.filtering-active .react-flow__edge[data-is-filtered="true"],
