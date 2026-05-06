@@ -221,7 +221,7 @@ pnpm --version   # should print 10.x.x or higher
 ### Step 5 — Clone and build the app
 
 ```bash
-git clone https://github.com/YOUR_USERNAME/ebpf-viz.git
+git clone https://github.com/mykola-lysenko/ebpf-viz.git
 cd ebpf-viz
 pnpm install
 pnpm build          # produces dist/

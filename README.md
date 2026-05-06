@@ -94,7 +94,7 @@ The standalone tarball bundles the compiled frontend and Express server into a s
 
 ```bash
 # Download from the GitHub Releases page
-curl -LO https://github.com/YOUR_USERNAME/ebpf-viz/releases/latest/download/ebpf-viz-standalone.tar.gz
+curl -LO https://github.com/mykola-lysenko/ebpf-viz/releases/latest/download/ebpf-viz-standalone.tar.gz
 ```
 
 **2. Extract and start:**
@@ -139,7 +139,7 @@ docker run --rm \
 ### Option C — Development Mode
 
 ```bash
-git clone https://github.com/YOUR_USERNAME/ebpf-viz.git
+git clone https://github.com/mykola-lysenko/ebpf-viz.git
 cd ebpf-viz
 pnpm install
 
