@@ -413,7 +413,7 @@ describe("buildOsMapLayout", () => {
         category: "data",
       },
     ];
-    const layout = buildOsMapLayout(snap, maps as any);
+    const layout = buildOsMapLayout(snap, maps as any, "compact");
     const mapEdge = layout.edges.find(
       e => e.source === "iface-eth0" && e.target === "map-10"
     );
@@ -476,7 +476,7 @@ describe("buildOsMapLayout", () => {
       bytesMemlock: 4096, frozen: false, pinnedPaths: [], btfId: null,
       usedByProgIds: [], color: "#a78bfa", category: "data",
     }];
-    const layout = buildOsMapLayout(snap, maps as any);
+    const layout = buildOsMapLayout(snap, maps as any, "compact");
 
     const netBand = layout.nodes.find(n => n.id === "band-network")!;
     const mapLabel = layout.nodes.find(n => n.id === "label-maps")!;
@@ -488,13 +488,14 @@ describe("buildOsMapLayout", () => {
 
   // ── Zoom-adaptive LOD ─────────────────────────────────────────────────────────
 
-  it("zoomToLod returns minimal for zoom < 0.35", () => {
+  it("zoomToLod returns minimal for zoom <= 0.45", () => {
     expect(zoomToLod(0.1)).toBe("minimal");
-    expect(zoomToLod(0.34)).toBe("minimal");
+    expect(zoomToLod(0.35)).toBe("minimal");
+    expect(zoomToLod(0.45)).toBe("minimal");
   });
 
-  it("zoomToLod returns compact for 0.35 ≤ zoom < 0.65", () => {
-    expect(zoomToLod(0.35)).toBe("compact");
+  it("zoomToLod returns compact for 0.45 < zoom < 0.65", () => {
+    expect(zoomToLod(0.46)).toBe("compact");
     expect(zoomToLod(0.5)).toBe("compact");
     expect(zoomToLod(0.64)).toBe("compact");
   });
