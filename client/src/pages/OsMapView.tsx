@@ -54,7 +54,9 @@ const FLOW_STYLES = `
   opacity: 0.05;
 }
 .os-map-flow.filtering-active .react-flow__node[data-is-filtered="true"],
-.os-map-flow.filtering-active .react-flow__edge[data-is-filtered="true"] {
+.os-map-flow.filtering-active .react-flow__edge[data-is-filtered="true"],
+.os-map-flow.filtering-active .react-flow__node.is-filtered,
+.os-map-flow.filtering-active .react-flow__edge.is-filtered {
   opacity: 1;
 }
 `;
@@ -654,53 +656,15 @@ function OsMapCanvas() {
   // toggling doesn't recreate node objects — which caused React Flow to drop
   // the paint until the next user interaction.
   const displayNodes = useMemo(() => {
-    return nodes.map(n => ({
-      ...n,
-      data: { ...n.data, lod },
-    }));
-  }, [nodes, lod]);
-
-  // DOM-driven opacity for focus/search filtering. Using direct element mutation
-  // entirely bypasses React Flow's rendering pipeline (preventing "blinks" from
-  // style recalculations or node remounts).
-  useEffect(() => {
-    const container = document.querySelector(".os-map-flow");
-    if (!container) return;
-
-    if (!activeFilter) {
-      container.classList.remove("filtering-active");
-      container.querySelectorAll('[data-is-filtered="true"]').forEach((el) => {
-        el.removeAttribute("data-is-filtered");
-      });
-      return;
-    }
-
-    container.classList.add("filtering-active");
-    
-    // Clear previous filters
-    container.querySelectorAll('[data-is-filtered="true"]').forEach((el) => {
-      el.removeAttribute("data-is-filtered");
+    return nodes.map(n => {
+      const isFiltered = activeFilter ? activeFilter.has(n.id) : false;
+      return {
+        ...n,
+        className: isFiltered ? "is-filtered" : undefined,
+        data: { ...n.data, lod },
+      };
     });
-
-    // We also need to highlight edges that connect two highlighted nodes
-    const edgeIds = new Set<string>();
-    edges.forEach((e) => {
-      if (activeFilter.has(e.source) && activeFilter.has(e.target)) {
-        edgeIds.add(e.id);
-      }
-    });
-
-    // Set attribute on matching items
-    activeFilter.forEach((id) => {
-      const nodeEl = container.querySelector(`.react-flow__node[data-id="${CSS.escape(id)}"]`);
-      if (nodeEl) nodeEl.setAttribute("data-is-filtered", "true");
-    });
-    
-    edgeIds.forEach((id) => {
-      const edgeEl = container.querySelector(`.react-flow__edge[data-id="${CSS.escape(id)}"]`);
-      if (edgeEl) edgeEl.setAttribute("data-is-filtered", "true");
-    });
-  }, [activeFilter, edges]);
+  }, [nodes, lod, activeFilter]);
 
   // Contextual edge animation: animate edges coming from actively running programs
   const activeProgIds = useMemo(() => {
@@ -714,33 +678,30 @@ function OsMapCanvas() {
     return s;
   }, [historyMap]);
 
-  useEffect(() => {
-    const container = document.querySelector(".os-map-flow");
-    if (!container) return;
-
-    // Clear previous animations
-    container.querySelectorAll('.react-flow__edge.animated').forEach(el => {
-      el.classList.remove('animated');
-    });
-
-    if (activeProgIds.size === 0) return;
-
-    const animatedEdgeIds = new Set<string>();
-    edges.forEach(e => {
-      const match = e.id.match(/-prog-(\d+)/);
-      if (match) {
-        const progId = parseInt(match[1], 10);
-        if (activeProgIds.has(progId)) {
-          animatedEdgeIds.add(e.id);
+  const displayEdges = useMemo(() => {
+    return edges.map(e => {
+      const isFiltered = activeFilter ? (activeFilter.has(e.source) && activeFilter.has(e.target)) : false;
+      
+      let isAnimated = false;
+      if (activeProgIds.size > 0) {
+        const match = e.id.match(/-prog-(\d+)/);
+        if (match && activeProgIds.has(parseInt(match[1], 10))) {
+          isAnimated = true;
         }
       }
-    });
 
-    animatedEdgeIds.forEach(id => {
-      const el = container.querySelector(`.react-flow__edge[data-id="${CSS.escape(id)}"]`);
-      if (el) el.classList.add("animated");
+      const classes = [];
+      if (isFiltered) classes.push("is-filtered");
+      if (isAnimated) classes.push("animated");
+
+      return {
+        ...e,
+        className: classes.length > 0 ? classes.join(" ") : undefined,
+      };
     });
-  }, [activeProgIds, edges]);
+  }, [edges, activeFilter, activeProgIds]);
+
+
 
   // Node click handler — extract program from zone/cgroup/interface and open detail panel,
   // or toggle focus mode when clicking a process node.
@@ -854,9 +815,9 @@ function OsMapCanvas() {
       <style>{FLOW_STYLES}</style>
 
       <ReactFlow
-        className="os-map-flow"
+        className={cn("os-map-flow", activeFilter ? "filtering-active" : "")}
         nodes={displayNodes}
-        edges={edges}
+        edges={displayEdges}
         onNodesChange={onNodesChange}
         onEdgesChange={onEdgesChange}
         onNodeClick={onNodeClick}
