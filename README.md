@@ -94,7 +94,7 @@ The standalone tarball bundles the compiled frontend and Express server into a s
 
 ```bash
 # Download from the GitHub Releases page
-curl -LO https://github.com/mykola-lysenko/ebpf-viz/releases/latest/download/ebpf-viz-standalone.tar.gz
+curl -LO https://github.com/mykola-lysenko/ebpf-viz/releases/download/latest/ebpf-viz-standalone.tar.gz
 ```
 
 **2. Extract and start:**
