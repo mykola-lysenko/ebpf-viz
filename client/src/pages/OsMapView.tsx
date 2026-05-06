@@ -409,7 +409,7 @@ function MapLegend() {
 // ─── Inner canvas (needs ReactFlowProvider context) ───────────────────────────
 
 function OsMapCanvas() {
-  const { snapshot, searchQuery, setSelectedProgram, maps: contextMaps, appMode } = useEbpf();
+  const { snapshot, searchQuery, setSelectedProgram, maps: contextMaps, appMode, historyMap } = useEbpf();
   // In snapshot mode, maps come from EbpfContext (parsed from the snapshot file).
   // In live/demo mode, maps arrive via the SSE stream (also in EbpfContext).
   // We also keep a live tRPC query as a fallback for live mode in case the SSE
@@ -701,6 +701,46 @@ function OsMapCanvas() {
       if (edgeEl) edgeEl.setAttribute("data-is-filtered", "true");
     });
   }, [activeFilter, edges]);
+
+  // Contextual edge animation: animate edges coming from actively running programs
+  const activeProgIds = useMemo(() => {
+    const s = new Set<number>();
+    if (!historyMap) return s;
+    historyMap.forEach((history, id) => {
+      if ((history.latest?.callsPerSec ?? 0) > 0) {
+        s.add(id);
+      }
+    });
+    return s;
+  }, [historyMap]);
+
+  useEffect(() => {
+    const container = document.querySelector(".os-map-flow");
+    if (!container) return;
+
+    // Clear previous animations
+    container.querySelectorAll('.react-flow__edge.animated').forEach(el => {
+      el.classList.remove('animated');
+    });
+
+    if (activeProgIds.size === 0) return;
+
+    const animatedEdgeIds = new Set<string>();
+    edges.forEach(e => {
+      const match = e.id.match(/-prog-(\d+)/);
+      if (match) {
+        const progId = parseInt(match[1], 10);
+        if (activeProgIds.has(progId)) {
+          animatedEdgeIds.add(e.id);
+        }
+      }
+    });
+
+    animatedEdgeIds.forEach(id => {
+      const el = container.querySelector(`.react-flow__edge[data-id="${CSS.escape(id)}"]`);
+      if (el) el.classList.add("animated");
+    });
+  }, [activeProgIds, edges]);
 
   // Node click handler — extract program from zone/cgroup/interface and open detail panel,
   // or toggle focus mode when clicking a process node.
