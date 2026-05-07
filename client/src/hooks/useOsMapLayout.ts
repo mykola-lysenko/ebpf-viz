@@ -583,33 +583,24 @@ export function buildOsMapLayout(
         const prog = progById.get(progId);
         if (!prog) return;
         const zoneKey = progTypeToZone(prog.rawType);
-
+        
+        let sourceNodeId = `zone-${zoneKey}`;
         if (NIC_ZONE_KEYS.has(zoneKey)) {
           const attachedIface = snapshot.networkInterfaces.find(iface =>
             iface.allPrograms.some(ap => ap.id === prog.id)
           );
-          if (attachedIface) {
-            edges.push({
-              id: `e-prog-${progId}-maps-summary-${cat}`,
-              source: `iface-${attachedIface.name}`,
-              target: nodeId,
-              type: "smoothstep",
-              style: { stroke: `${color}40`, strokeWidth: 1, strokeDasharray: "3 4" },
-              animated: false,
-              markerEnd: { type: "arrowclosed" as any, color, width: 8, height: 8 },
-            });
-          }
-        } else {
-          edges.push({
-            id: `e-prog-${progId}-maps-summary-${cat}`,
-            source: `zone-${zoneKey}`,
-            target: nodeId,
-            type: "smoothstep",
-            style: { stroke: `${color}40`, strokeWidth: 1, strokeDasharray: "3 4" },
-            animated: false,
-            markerEnd: { type: "arrowclosed" as any, color, width: 8, height: 8 },
-          });
+          if (attachedIface) sourceNodeId = `iface-${attachedIface.name}`;
         }
+        
+        edges.push({
+          id: `e-prog-${progId}-maps-summary-${cat}`,
+          source: sourceNodeId,
+          target: nodeId,
+          type: "smoothstep",
+          style: { stroke: `${color}40`, strokeWidth: 1, strokeDasharray: "3 4" },
+          animated: false,
+          markerEnd: { type: "arrowclosed" as any, color, width: 8, height: 8 },
+        });
       });
       currentGridIndex++;
       mapsMaxY = Math.max(mapsMaxY, y + MAP_H);
@@ -646,38 +637,51 @@ export function buildOsMapLayout(
       });
 
       // Edges from programs to this map
+      // We buffer them to bundle parallel edges
+      const mapEdgeBuffer: { progId: number, sourceNodeId: string }[] = [];
+      
       map.usedByProgIds.forEach(progId => {
         const prog = progById.get(progId);
         if (!prog) return;
         const zoneKey = progTypeToZone(prog.rawType);
 
-        // For NIC-type programs, draw the edge from the NIC node instead
+        let sourceNodeId = `zone-${zoneKey}`;
         if (NIC_ZONE_KEYS.has(zoneKey)) {
           const attachedIface = snapshot.networkInterfaces.find(iface =>
             iface.allPrograms.some(ap => ap.id === prog.id)
           );
-          if (attachedIface) {
-            edges.push({
-              id: `e-prog-${progId}-map-${map.id}`,
-              source: `iface-${attachedIface.name}`,
-              target: nodeId,
-              type: "smoothstep",
-              style: { stroke: `${color}40`, strokeWidth: 1, strokeDasharray: "3 4" },
-              animated: false,
-              markerEnd: { type: "arrowclosed" as any, color, width: 8, height: 8 },
-            });
-          }
-        } else {
-          edges.push({
-            id: `e-prog-${progId}-map-${map.id}`,
-            source: `zone-${zoneKey}`,
-            target: nodeId,
-            type: "smoothstep",
-            style: { stroke: `${color}40`, strokeWidth: 1, strokeDasharray: "3 4" },
-            animated: false,
-            markerEnd: { type: "arrowclosed" as any, color, width: 8, height: 8 },
-          });
+          if (attachedIface) sourceNodeId = `iface-${attachedIface.name}`;
         }
+        mapEdgeBuffer.push({ progId, sourceNodeId });
+      });
+      
+      // Group by source node
+      const edgesBySource = new Map<string, number[]>();
+      mapEdgeBuffer.forEach(({ progId, sourceNodeId }) => {
+        let list = edgesBySource.get(sourceNodeId);
+        if (!list) { list = []; edgesBySource.set(sourceNodeId, list); }
+        list.push(progId);
+      });
+      
+      // Render bundled edges
+      edgesBySource.forEach((progIds, sourceNodeId) => {
+        // Edge ID uses the first progId for consistency, but represents all of them
+        const representativeProgId = progIds[0];
+        
+        edges.push({
+          id: `e-prog-${representativeProgId}-map-${map.id}`,
+          source: sourceNodeId,
+          target: nodeId,
+          type: "smoothstep",
+          style: { stroke: `${color}40`, strokeWidth: progIds.length > 1 ? 2 : 1, strokeDasharray: "3 4" },
+          animated: false,
+          label: progIds.length > 1 ? `×${progIds.length}` : undefined,
+          labelStyle: { fill: `${color}cc`, fontSize: 10, fontWeight: "bold" },
+          labelBgStyle: { fill: "transparent" },
+          markerEnd: { type: "arrowclosed" as any, color, width: 8, height: 8 },
+          // Store all bundled progIds so the focus/animation logic can find them
+          data: { bundledProgIds: progIds }
+        });
       });
       currentGridIndex++;
       mapsMaxY = Math.max(mapsMaxY, y + MAP_H);
