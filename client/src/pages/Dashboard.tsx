@@ -86,7 +86,7 @@ function QuickNavCard({ href, icon: Icon, label, count, color }: {
 function ActivityLeaderboard() {
   const { activity, historyMap, snapshot, statsEnabled } = useEbpf();
 
-  const topPrograms = activity?.topByCallsPerSec ?? [];
+  const topProgramsRaw = activity?.topByCallsPerSec ?? [];
   const totalCps = activity?.totalCallsPerSec ?? 0;
   const totalCpu = activity?.totalCpuFraction ?? 0;
 
@@ -96,6 +96,40 @@ function ActivityLeaderboard() {
     if (snapshot) for (const p of snapshot.programs) m.set(p.id, p);
     return m;
   }, [snapshot]);
+
+  // Aggregate duplicate programs by tag+name
+  const topPrograms = useMemo(() => {
+    if (topProgramsRaw.length === 0) return [];
+    
+    // Group by tag (which uniquely identifies the compiled bytecode)
+    const grouped = new Map<string, { id: number; callsPerSec: number; avgLatencyNs: number; cloneCount: number }>();
+    
+    topProgramsRaw.forEach(entry => {
+      const prog = progMap.get(entry.id);
+      if (!prog) return; // shouldn't happen unless snapshot is out of sync with history
+      
+      const existing = grouped.get(prog.tag);
+      if (existing) {
+        // Merge stats
+        // calls/sec sum up. Latency averages out (weighted by calls/sec)
+        const totalCalls = existing.callsPerSec + entry.callsPerSec;
+        const weightedLat = totalCalls > 0 
+          ? ((existing.avgLatencyNs * existing.callsPerSec) + (entry.avgLatencyNs * entry.callsPerSec)) / totalCalls
+          : (existing.avgLatencyNs + entry.avgLatencyNs) / 2;
+          
+        existing.callsPerSec += entry.callsPerSec;
+        existing.avgLatencyNs = weightedLat;
+        existing.cloneCount += 1;
+      } else {
+        grouped.set(prog.tag, { ...entry, cloneCount: 1 });
+      }
+    });
+
+    // Re-sort the aggregated list by total calls per sec and take top 5
+    return Array.from(grouped.values())
+      .sort((a, b) => b.callsPerSec - a.callsPerSec)
+      .slice(0, 5);
+  }, [topProgramsRaw, progMap]);
 
   if (!statsEnabled) {
     return (
@@ -169,8 +203,13 @@ function ActivityLeaderboard() {
               </span>
 
               {/* Program badge */}
-              <div className="w-36 shrink-0">
+              <div className="w-36 shrink-0 flex flex-col gap-1">
                 <ProgBadge program={prog} history={history} compact />
+                {entry.cloneCount > 1 && (
+                  <div className="text-[9px] font-sans px-1 py-0.5 rounded border border-amber-500/40 bg-amber-500/10 text-amber-400 w-fit">
+                    ×{entry.cloneCount} active clones
+                  </div>
+                )}
               </div>
 
               {/* Bar + sparkline */}
