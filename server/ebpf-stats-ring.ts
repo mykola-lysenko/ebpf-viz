@@ -160,6 +160,7 @@ export function buildActivitySummary(
         rawType: prog.rawType,
         callsPerSec,
         avgLatencyNs,
+        cpuFraction,
       });
     }
     totalCallsPerSec += callsPerSec;

@@ -277,7 +277,7 @@ export interface ProgHistory {
 /** Summary of all programs' activity for the current snapshot */
 export interface ActivitySummary {
   /** Programs sorted by current calls/sec descending */
-  topByCallsPerSec: Array<{ id: number; name: string; rawType: string; callsPerSec: number; avgLatencyNs: number }>;
+  topByCallsPerSec: Array<{ id: number; name: string; rawType: string; callsPerSec: number; avgLatencyNs: number; cpuFraction: number }>;
   /** Total calls/sec across all programs */
   totalCallsPerSec: number;
   /** Total CPU fraction across all programs */
