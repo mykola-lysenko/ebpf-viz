@@ -274,6 +274,13 @@ export default function Dashboard() {
   }
 
   const { stats, programs, networkInterfaces, cgroupTree, kernelZones } = snapshot;
+    // Compute tag frequency map for clone detection
+  const tagCount = useMemo(() => {
+    const m = new Map<string, number>();
+    if (snapshot) for (const p of snapshot.programs) m.set(p.tag, (m.get(p.tag) ?? 0) + 1);
+    return m;
+  }, [snapshot]);
+
   const recentProgs = [...programs].sort((a, b) => b.loadedAt - a.loadedAt).slice(0, 8);
   const orphanedProgs = programs.filter(p => p.orphaned);
   const netProgs = networkInterfaces.reduce((acc, i) => acc + i.allPrograms.length, 0);
@@ -299,8 +306,34 @@ export default function Dashboard() {
             )}
           </p>
         </div>
-        <div className="text-xs text-muted-foreground font-mono">
-          {new Date(snapshot.timestamp).toLocaleString()}
+        <div className="flex items-center gap-4">
+          <button
+            onClick={() => {
+              const dump = {
+                _debugDump: true,
+                timestamp: Date.now(),
+                activity,
+                tagCount: Array.from(tagCount.entries()),
+                snapshotPrograms: snapshot?.programs.map(p => ({ id: p.id, name: p.name, tag: p.tag })),
+              };
+              const blob = new Blob([JSON.stringify(dump, null, 2)], { type: "application/json" });
+              const url = URL.createObjectURL(blob);
+              const a = document.createElement("a");
+              a.href = url;
+              a.download = `dashboard-debug-${snapshot.hostname}.json`;
+              document.body.appendChild(a);
+              a.click();
+              document.body.removeChild(a);
+              URL.revokeObjectURL(url);
+            }}
+            className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg bg-white/5 border border-white/10 text-xs font-medium text-foreground hover:bg-white/10 transition-colors"
+          >
+            <Download size={14} />
+            Dump State
+          </button>
+          <div className="text-xs text-muted-foreground font-mono">
+            {new Date(snapshot.timestamp).toLocaleString()}
+          </div>
         </div>
       </div>
 
@@ -380,17 +413,27 @@ export default function Dashboard() {
             Recently Loaded
           </h2>
           <div className="space-y-2">
-            {recentProgs.map(p => (
-              <div key={p.id} className="flex items-center gap-2">
-                <ProgBadge program={p} />
-                <span
-                  className="text-xs text-muted-foreground ml-auto shrink-0"
-                  title={formatFullTimestamp(p.loadedAt)}
-                >
-                  {formatRelativeTime(p.loadedAt, now)}
-                </span>
-              </div>
-            ))}
+            {recentProgs.map(p => {
+              const clones = tagCount.get(p.tag) ?? 1;
+              return (
+                <div key={p.id} className="flex flex-col gap-1">
+                  <div className="flex items-center gap-2">
+                    <ProgBadge program={p} />
+                    <span
+                      className="text-xs text-muted-foreground ml-auto shrink-0"
+                      title={formatFullTimestamp(p.loadedAt)}
+                    >
+                      {formatRelativeTime(p.loadedAt, now)}
+                    </span>
+                  </div>
+                  {clones > 1 && (
+                    <div className="text-[9px] text-amber-400/60 font-mono ml-1 px-1.5 py-0.5 rounded bg-amber-500/5 border border-amber-500/10 w-fit">
+                      bytecode shared by {clones} programs
+                    </div>
+                  )}
+                </div>
+              );
+            })}
           </div>
         </div>
       </div>
