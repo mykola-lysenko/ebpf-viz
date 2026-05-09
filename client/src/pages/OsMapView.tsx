@@ -18,6 +18,8 @@ import "@xyflow/react/dist/style.css";
 import { useEbpf } from "@/contexts/EbpfContext";
 import { useOsMapLayout, zoomToLod } from "@/hooks/useOsMapLayout";
 import { OS_MAP_NODE_TYPES } from "@/components/osmap/OsMapNodes";
+import { MapEntriesModal } from "@/components/MapEntriesModal";
+import { MAP_TYPE_META } from "../../../shared/ebpf-types";
 import type { ZoneNodeData, CgroupNodeData, InterfaceNodeData, ProcessNodeData } from "@/hooks/useOsMapLayout";
 import type { BpfProgram } from "../../../shared/ebpf-types";
 import { Button } from "@/components/ui/button";
@@ -410,7 +412,8 @@ function MapLegend() {
 // ─── Inner canvas (needs ReactFlowProvider context) ───────────────────────────
 
 function OsMapCanvas() {
-  const { snapshot, searchQuery, setSelectedProgram, maps: contextMaps, appMode, historyMap } = useEbpf();
+  const { snapshot, searchQuery, setSelectedProgram, maps: contextMaps, appMode, historyMap, snapshotMapDumps } = useEbpf();
+  const [dumpMapId, setDumpMapId] = useState<number | null>(null);
   // In snapshot mode, maps come from EbpfContext (parsed from the snapshot file).
   // In live/demo mode, maps arrive via the SSE stream (also in EbpfContext).
   // We also keep a live tRPC query as a fallback for live mode in case the SSE
@@ -716,6 +719,12 @@ function OsMapCanvas() {
       return;
     }
 
+    if (type === "mapNode") {
+      const data = node.data as any;
+      setDumpMapId(data.mapId);
+      return;
+    }
+    
     if (type === "zoneNode") {
       const data = node.data as unknown as ZoneNodeData;
       if (data.programs.length === 1) {
@@ -809,6 +818,9 @@ function OsMapCanvas() {
     URL.revokeObjectURL(url);
   }, [snapshot]);
 
+  const dumpMap = dumpMapId ? maps.find(m => m.id === dumpMapId) : null;
+  const mapMeta = dumpMap ? (MAP_TYPE_META[dumpMap.type] ?? MAP_TYPE_META["unknown"]!) : null;
+
   return (
     <div style={{ width: "100%", height: "100%", position: "relative" }}>
       <style>{FLOW_STYLES}</style>
@@ -900,6 +912,20 @@ function OsMapCanvas() {
           </Panel>
         )}
       </ReactFlow>
+
+      {/* Map Entries Modal */}
+      {dumpMap && mapMeta && (
+        <MapEntriesModal
+          mapId={dumpMap.id}
+          mapName={dumpMap.name}
+          mapType={dumpMap.rawType}
+          mapColor={mapMeta.color}
+          keyBytes={dumpMap.bytesKey}
+          valueBytes={dumpMap.bytesValue}
+          onClose={() => setDumpMapId(null)}
+          snapshotDump={appMode === "snapshot" ? snapshotMapDumps[dumpMap.id] : undefined}
+        />
+      )}
     </div>
   );
 }
