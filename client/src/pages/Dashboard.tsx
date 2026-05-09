@@ -317,7 +317,7 @@ function ActivityLeaderboard() {
             : "#f87171";
 
           return (
-            <div key={entry.id} className="flex items-center gap-3 group">
+            <div key={prog.tag} className="flex items-center gap-3 group">
               {/* Rank */}
               <span className="text-[10px] font-mono text-muted-foreground/40 w-4 shrink-0 text-right">
                 {rank + 1}
