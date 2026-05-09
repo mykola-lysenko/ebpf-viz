@@ -222,7 +222,7 @@ function ActivityLeaderboard() {
     if (topProgramsRaw.length === 0) return [];
     
     // Group by tag (which uniquely identifies the compiled bytecode)
-    const grouped = new Map<string, typeof topProgramsRaw[0] & { cloneCount: number }>();
+    const grouped = new Map<string, typeof topProgramsRaw[0] & { cloneCount: number, allIds: number[] }>();
     
     topProgramsRaw.forEach(entry => {
       const prog = progMap.get(entry.id);
@@ -241,8 +241,9 @@ function ActivityLeaderboard() {
         existing.avgLatencyNs = weightedLat;
         existing.cpuFraction += entry.cpuFraction;
         existing.cloneCount += 1;
+        existing.allIds.push(entry.id);
       } else {
-        grouped.set(prog.tag, { ...entry, cloneCount: 1 });
+        grouped.set(prog.tag, { ...entry, cloneCount: 1, allIds: [entry.id] });
       }
     });
 
@@ -302,7 +303,9 @@ function ActivityLeaderboard() {
         {topPrograms.map((entry, rank) => {
           const prog = progMap.get(entry.id);
           if (!prog) return null;
-          const history = historyMap.get(entry.id);
+          // We only grab the history of the first clone for the sparkline,
+          // as aggregating sparkline arrays on the client is too heavy for 5s ticks.
+          const history = historyMap.get(entry.allIds[0]);
           const sparkData = history?.samples && history.samples.length >= 2
             ? samplesToCallsPerSec(history.samples)
             : [];
