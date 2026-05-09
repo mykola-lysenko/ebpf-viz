@@ -16,6 +16,7 @@ function classifyRateDrop(
 ): { rate: number; label: string; color: string } | null {
   if (prevRate == null || currRate == null || prevRate <= 0) return null;
   const drop = 1 - currRate / prevRate;
+  if (drop < -0.05) return { rate: -drop, label: `~${Math.round(-drop * 100)}% MORE/s`, color: "#22d3ee" }; // Warning: logic anomaly
   if (drop < 0.05) return null; // negligible or noise
   if (drop < 0.2) return { rate: drop, label: `~${Math.round(drop * 100)}% fewer/s`, color: "#f59e0b" };
   if (drop < 0.5) return { rate: drop, label: `~${Math.round(drop * 100)}% fewer/s`, color: "#f97316" };
