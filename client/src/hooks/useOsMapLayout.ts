@@ -232,6 +232,8 @@ export function buildOsMapLayout(
   const nodes: Node[] = [];
   const edges: Edge[] = [];
 
+  const focusedSet = focusedProgIds ? new Set(focusedProgIds) : null;
+
   // Pre-build a lookup map for O(1) program access by ID
   const progById = new Map(snapshot.programs.map(p => [p.id, p]));
 
@@ -264,8 +266,8 @@ export function buildOsMapLayout(
         description: zone.description,
         color: ZONE_COLORS[zk] ?? "#6b7280",
         icon: ZONE_ICONS[zk] ?? "⚙",
-        programCount: zone.programs.length,
-        programs: zone.programs,
+        programCount: focusedSet ? zone.programs.filter(p => focusedSet.has(p.id)).length : zone.programs.length,
+        programs: focusedSet ? zone.programs.filter(p => focusedSet.has(p.id)) : zone.programs,
         isPacketPath: false,
       } satisfies ZoneNodeData,
       style: { width: ZONE_W, height: ZONE_H },
@@ -392,6 +394,17 @@ export function buildOsMapLayout(
     const x = KERNEL_PADDING + idx * (IFACE_W + IFACE_GAP);
     const y = NET_Y + IFACE_NODE_PADDING_TOP;
 
+    const layers = focusedSet ? {
+      L2: iface.layers.L2.filter(p => focusedSet.has(p.id)),
+      L3: iface.layers.L3.filter(p => focusedSet.has(p.id)),
+      L4: iface.layers.L4.filter(p => focusedSet.has(p.id)),
+      L7: iface.layers.L7.filter(p => focusedSet.has(p.id)),
+    } : iface.layers;
+    
+    const allPrograms = focusedSet 
+      ? iface.allPrograms.filter(p => focusedSet.has(p.id))
+      : iface.allPrograms;
+
     nodes.push({
       id: `iface-${iface.name}`,
       type: "interfaceNode",
@@ -400,8 +413,8 @@ export function buildOsMapLayout(
         name: iface.name,
         ifindex: iface.ifindex,
         kind: iface.kind,
-        layers: iface.layers,
-        allPrograms: iface.allPrograms,
+        layers,
+        allPrograms,
       } satisfies InterfaceNodeData,
       style: { width: IFACE_W },
     });
