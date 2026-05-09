@@ -222,7 +222,7 @@ function ActivityLeaderboard() {
     if (topProgramsRaw.length === 0) return [];
     
     // Group by tag (which uniquely identifies the compiled bytecode)
-    const grouped = new Map<string, { id: number; callsPerSec: number; avgLatencyNs: number; cloneCount: number }>();
+    const grouped = new Map<string, typeof topProgramsRaw[0] & { cloneCount: number }>();
     
     topProgramsRaw.forEach(entry => {
       const prog = progMap.get(entry.id);
@@ -239,6 +239,7 @@ function ActivityLeaderboard() {
           
         existing.callsPerSec += entry.callsPerSec;
         existing.avgLatencyNs = weightedLat;
+        existing.cpuFraction += entry.cpuFraction;
         existing.cloneCount += 1;
       } else {
         grouped.set(prog.tag, { ...entry, cloneCount: 1 });
