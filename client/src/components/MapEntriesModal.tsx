@@ -794,7 +794,7 @@ export function MapEntriesModal({
   onClose,
   snapshotDump,
 }: MapEntriesModalProps) {
-  const [mode, setMode] = useState<DisplayMode>("hex");
+  const [mode, setMode] = useState<DisplayMode>("btf");
   const [keyInterpret, setKeyInterpret] = useState<InterpretMode>(() => {
     const saved = loadInterpretPrefs(mapType);
     const preferred = saved ? saved.key : defaultKeyInterpret(mapType);
