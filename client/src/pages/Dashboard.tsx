@@ -2,7 +2,7 @@ import React, { useMemo } from "react";
 import { useEbpf } from "@/contexts/EbpfContext";
 import { ProgBadge } from "@/components/ProgBadge";
 import { Badge } from "@/components/ui/badge";
-import { Cpu, Network, FolderTree, Activity, Zap, AlertTriangle, Server, GitBranch, Timer, BarChart2 } from "lucide-react";
+import { Cpu, Network, FolderTree, Activity, Zap, AlertTriangle, Server, GitBranch, Timer, BarChart2, Download } from "lucide-react";
 import { Link } from "wouter";
 import { cn } from "@/lib/utils";
 import { TYPE_COLORS } from "../../../server/ebpf-parser";
