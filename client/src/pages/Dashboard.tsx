@@ -230,19 +230,26 @@ function ActivityLeaderboard() {
       
       const existing = grouped.get(prog.tag);
       if (existing) {
-        // Merge stats
+        // We must clone the existing object before mutating to prevent React #310 errors
+        // during subsequent render cycles that might try to mutate the exact same object.
+        const merged = { ...existing };
+        
         // calls/sec sum up. Latency averages out (weighted by calls/sec)
-        const totalCalls = existing.callsPerSec + entry.callsPerSec;
+        const totalCalls = merged.callsPerSec + entry.callsPerSec;
         const weightedLat = totalCalls > 0 
-          ? ((existing.avgLatencyNs * existing.callsPerSec) + (entry.avgLatencyNs * entry.callsPerSec)) / totalCalls
-          : (existing.avgLatencyNs + entry.avgLatencyNs) / 2;
+          ? ((merged.avgLatencyNs * merged.callsPerSec) + (entry.avgLatencyNs * entry.callsPerSec)) / totalCalls
+          : (merged.avgLatencyNs + entry.avgLatencyNs) / 2;
           
-        existing.callsPerSec += entry.callsPerSec;
-        existing.avgLatencyNs = weightedLat;
-        existing.cpuFraction += entry.cpuFraction;
-        existing.cloneCount += 1;
-        existing.allIds.push(entry.id);
+        merged.callsPerSec += entry.callsPerSec;
+        merged.avgLatencyNs = weightedLat;
+        merged.cpuFraction += entry.cpuFraction;
+        merged.cloneCount += 1;
+        // Don't mutate the underlying allIds array either
+        merged.allIds = [...merged.allIds, entry.id];
+        
+        grouped.set(prog.tag, merged);
       } else {
+        // Ensure a fresh object is created to prevent mutating the original topProgramsRaw element
         grouped.set(prog.tag, { ...entry, cloneCount: 1, allIds: [entry.id] });
       }
     });
