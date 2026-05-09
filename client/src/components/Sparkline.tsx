@@ -151,7 +151,15 @@ export function samplesToAvgLatency(
   return lats;
 }
 
-/** Format nanoseconds to a human-readable string */
+/** Format bytes to human readable string (KB, MB, GB) */
+export function fmtBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  return `${(bytes / (1024 * 1024 * 1024)).toFixed(2)} GB`;
+}
+
+/** Format nanoseconds to human readable string */
 export function fmtNs(ns: number): string {
   if (ns < 1_000) return `${ns.toFixed(0)} ns`;
   if (ns < 1_000_000) return `${(ns / 1_000).toFixed(1)} µs`;

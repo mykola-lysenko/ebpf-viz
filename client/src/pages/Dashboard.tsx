@@ -2,11 +2,11 @@ import React, { useMemo } from "react";
 import { useEbpf } from "@/contexts/EbpfContext";
 import { ProgBadge } from "@/components/ProgBadge";
 import { Badge } from "@/components/ui/badge";
-import { Cpu, Network, FolderTree, Activity, Zap, AlertTriangle, Server, GitBranch, Timer, BarChart2, Download } from "lucide-react";
+import { Cpu, Network, FolderTree, Activity, Zap, AlertTriangle, Server, GitBranch, Timer, BarChart2, Download, Database } from "lucide-react";
 import { Link } from "wouter";
 import { cn } from "@/lib/utils";
 import { TYPE_COLORS } from "../../../server/ebpf-parser";
-import Sparkline, { samplesToCallsPerSec, fmtCps, fmtNs, fmtCpu } from "@/components/Sparkline";
+import Sparkline, { samplesToCallsPerSec, fmtCps, fmtNs, fmtCpu, fmtBytes } from "@/components/Sparkline";
 import { formatRelativeTime, formatFullTimestamp, useNow } from "@/lib/time";
 
 function StatCard({ label, value, sub, icon: Icon, color }: {
@@ -26,6 +26,126 @@ function StatCard({ label, value, sub, icon: Icon, color }: {
     </div>
   );
 }
+// ── Memory Leaderboard ──────────────────────────────────────────────────────────────────────────
+
+function MemoryLeaderboard() {
+  const { snapshot, maps } = useEbpf();
+
+  const topMemoryConsumers = useMemo(() => {
+    if (!snapshot) return [];
+    
+    const tagMap = new Map<string, { 
+      tag: string; 
+      name: string; 
+      color: string;
+      progMem: number; 
+      mapMem: number; 
+      totalMem: number;
+      cloneCount: number;
+      mapIds: Set<number>;
+    }>();
+
+    const mapsById = new Map(maps.map(m => [m.id, m]));
+
+    snapshot.programs.forEach(p => {
+      let entry = tagMap.get(p.tag);
+      if (!entry) {
+        entry = { 
+          tag: p.tag, 
+          name: p.name, 
+          color: p.color,
+          progMem: 0, 
+          mapMem: 0, 
+          totalMem: 0, 
+          cloneCount: 0, 
+          mapIds: new Set() 
+        };
+        tagMap.set(p.tag, entry);
+      }
+      entry.progMem += p.memlock;
+      entry.cloneCount += 1;
+      p.mapIds.forEach(id => entry!.mapIds.add(id));
+    });
+
+    tagMap.forEach(entry => {
+      entry.mapIds.forEach(mid => {
+        const m = mapsById.get(mid);
+        if (m) entry.mapMem += m.bytesMemlock ?? 0;
+      });
+      entry.totalMem = entry.progMem + entry.mapMem;
+    });
+
+    return Array.from(tagMap.values())
+      .sort((a, b) => b.totalMem - a.totalMem)
+      .slice(0, 5);
+  }, [snapshot, maps]);
+
+  if (!snapshot || topMemoryConsumers.length === 0) {
+    return null;
+  }
+
+  const maxMem = topMemoryConsumers[0]?.totalMem ?? 1;
+
+  return (
+    <div className="glass rounded-xl p-5">
+      <div className="flex items-center justify-between mb-4">
+        <h2 className="text-sm font-semibold text-foreground flex items-center gap-2">
+          <Database size={14} className="text-violet-400" />
+          Top Memory Consumers
+        </h2>
+        <span className="text-[10px] text-muted-foreground uppercase tracking-wider font-semibold">Memlock</span>
+      </div>
+
+      <div className="space-y-3">
+        {topMemoryConsumers.map((entry, rank) => {
+          const barFraction = maxMem > 0 ? Math.min(1, entry.totalMem / maxMem) : 0;
+          return (
+            <div key={entry.tag} className="flex items-center gap-3 group">
+              <span className="text-[10px] font-mono text-muted-foreground/40 w-4 shrink-0 text-right">
+                {rank + 1}
+              </span>
+
+              <div className="w-36 shrink-0 flex flex-col gap-0.5">
+                <div className="flex items-center gap-1.5 overflow-hidden">
+                   <span
+                    className="inline-block w-1.5 h-1.5 rounded-full shrink-0"
+                    style={{ background: entry.color }}
+                  />
+                  <span className="text-xs font-medium text-foreground truncate" title={entry.name}>
+                    {entry.name}
+                  </span>
+                </div>
+                {entry.cloneCount > 1 && (
+                  <div className="text-[8px] text-amber-400/60 font-mono ml-3">
+                    {entry.cloneCount} instances
+                  </div>
+                )}
+              </div>
+
+              <div className="flex-1 h-[3px] rounded-full bg-white/5 overflow-hidden">
+                <div
+                  className="h-full rounded-full transition-all duration-700"
+                  style={{
+                    width: `${barFraction * 100}%`,
+                    background: "oklch(0.7 0.1 270)",
+                    minWidth: barFraction > 0 ? 2 : 0,
+                  }}
+                />
+              </div>
+
+              <div className="shrink-0 min-w-[64px] text-right">
+                <span className="text-[11px] font-mono tabular-nums text-violet-300">
+                  {fmtBytes(entry.totalMem)}
+                </span>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 
 function TypeBar({ byType }: { byType: Record<string, number> }) {
   const total = Object.values(byType).reduce((a, b) => a + b, 0);
@@ -438,8 +558,11 @@ export default function Dashboard() {
         </div>
       </div>
 
-      {/* Activity Leaderboard */}
-      <ActivityLeaderboard />
+      {/* Leaderboards */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        <ActivityLeaderboard />
+        <MemoryLeaderboard />
+      </div>
 
       {/* Kernel zones overview */}
       <div className="glass rounded-xl p-5">
