@@ -464,15 +464,25 @@ function OsMapCanvas() {
   useEffect(() => { setViewportRef.current = setViewport; });
   const [nodes, setNodes, onNodesChangeRaw] = useNodesState(layout.nodes);
   const [edges, setEdges, onEdgesChange] = useEdgesState(layout.edges);
-  // Filter out React Flow's internal selection changes — we use our own focus
-  // mode, and selection changes cause all node objects to churn (triggering a
-  // visible blink when React Flow re-renders 1600+ nodes).
+  
+  // Persist user-moved node positions
   const onNodesChange = useCallback(
     (changes: Parameters<typeof onNodesChangeRaw>[0]) => {
       const filtered = changes.filter(c => c.type !== "select");
+      
+      // If a node was explicitly moved by the user, save its new position to localStorage
+      filtered.forEach(change => {
+        if (change.type === "position" && change.dragging && change.position) {
+          try {
+            const key = `osmap-pos-${snapshot?.hostname}-${change.id}`;
+            localStorage.setItem(key, JSON.stringify(change.position));
+          } catch { /* ignore */ }
+        }
+      });
+      
       if (filtered.length > 0) onNodesChangeRaw(filtered);
     },
-    [onNodesChangeRaw]
+    [onNodesChangeRaw, snapshot]
   );
   const [showLabels, setShowLabels] = useState(true);
   const didFit = useRef(false);
@@ -504,7 +514,22 @@ function OsMapCanvas() {
     // LOD-driven relayouts (which would otherwise let React Flow reset
     // the viewport when all node objects are replaced).
     const savedViewport = didFit.current ? getViewportRef.current() : null;
-    setNodes(layout.nodes);
+    
+    // Apply saved coordinates from localStorage before setting nodes into the React Flow instance
+    const restoredNodes = layout.nodes.map(n => {
+      try {
+        const saved = localStorage.getItem(`osmap-pos-${snapshot?.hostname}-${n.id}`);
+        if (saved) {
+          const parsed = JSON.parse(saved);
+          if (parsed && typeof parsed.x === "number" && typeof parsed.y === "number") {
+            return { ...n, position: { x: parsed.x, y: parsed.y } };
+          }
+        }
+      } catch { /* ignore parsing errors */ }
+      return n;
+    });
+
+    setNodes(restoredNodes);
     setEdges(layout.edges);
     // Only auto-fit on initial load (not on LOD-driven relayouts, which would
     // fight with focus mode or manual panning).
