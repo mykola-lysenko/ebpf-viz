@@ -13,6 +13,7 @@ import type {
   RawCgroupEntry,
   RawNetSnapshot,
 } from "../shared/ebpf-types";
+import { BPF_PROGRAM_TYPE_COLORS } from "../shared/ebpf-constants";
 
 // ─── Type normalization ────────────────────────────────────────────────────
 
@@ -50,42 +51,12 @@ const TYPE_MAP: Record<string, BpfProgType> = {
   socket_filter: "socket_filter",
 };
 
-// ─── Color palette by type ─────────────────────────────────────────────────
-
-export const TYPE_COLORS: Record<string, string> = {
-  xdp:            "#00d4ff",
-  sched_cls:      "#7c3aed",
-  sched_act:      "#6d28d9",
-  kprobe:         "#f59e0b",
-  kretprobe:      "#d97706",
-  tracepoint:     "#10b981",
-  raw_tracepoint: "#059669",
-  perf_event:     "#f97316",
-  cgroup_skb:     "#3b82f6",
-  cgroup_sock:    "#2563eb",
-  cgroup_device:  "#1d4ed8",
-  cgroup_sysctl:  "#1e40af",
-  cgroup_sockopt: "#1e3a8a",
-  sock_ops:       "#8b5cf6",
-  sk_skb:         "#a78bfa",
-  sk_msg:         "#c4b5fd",
-  sk_lookup:      "#ddd6fe",
-  flow_dissector: "#ec4899",
-  netfilter:      "#f43f5e",
-  lsm:            "#ef4444",
-  fentry:         "#84cc16",
-  fexit:          "#65a30d",
-  freplace:       "#4d7c0f",
-  struct_ops:     "#14b8a6",
-  unknown:        "#6b7280",
-};
-
 function normalizeType(raw: string): BpfProgType {
   return TYPE_MAP[raw] ?? "unknown";
 }
 
 function getColor(type: BpfProgType): string {
-  return TYPE_COLORS[type] ?? TYPE_COLORS.unknown;
+  return BPF_PROGRAM_TYPE_COLORS[type] ?? BPF_PROGRAM_TYPE_COLORS.unknown;
 }
 
 function getOsiLayer(type: BpfProgType): OsiLayer {

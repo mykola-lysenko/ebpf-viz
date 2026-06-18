@@ -261,7 +261,7 @@ export interface ProgRates {
   recursionRate: number;
 }
 
-/** Full history ring for one program — up to RING_SIZE samples */
+/** Full history ring for one program. The sample cap is PROG_HISTORY_RING_SIZE. */
 export interface ProgHistory {
   id: number;
   /** Raw samples in chronological order */

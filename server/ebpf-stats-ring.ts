@@ -4,7 +4,7 @@
  * Maintains a fixed-size ring buffer of ProgSample snapshots for every
  * BPF program seen by the poller.  After each poll the caller pushes a new
  * snapshot; the ring automatically evicts the oldest entry once it reaches
- * RING_SIZE entries.
+ * PROG_HISTORY_RING_SIZE entries.
  *
  * Derived rates (calls/sec, avg latency, CPU fraction) are computed lazily
  * from the last two samples whenever getHistory() is called.
@@ -17,15 +17,14 @@ import type {
   ActivitySummary,
   BpfProgram,
 } from "../shared/ebpf-types";
-
-export const RING_SIZE = 60; // keep 60 samples ≈ 5 min at 5 s interval
+import { PROG_HISTORY_RING_SIZE } from "../shared/ebpf-constants";
 
 // ─── Internal ring storage ────────────────────────────────────────────────────
 
 interface RingEntry {
   samples: ProgSample[];
   head: number; // index of the next write slot (circular)
-  count: number; // number of valid entries (≤ RING_SIZE)
+  count: number; // number of valid entries (≤ PROG_HISTORY_RING_SIZE)
 }
 
 const rings = new Map<number, RingEntry>();
@@ -33,7 +32,7 @@ const rings = new Map<number, RingEntry>();
 function getOrCreate(id: number): RingEntry {
   let ring = rings.get(id);
   if (!ring) {
-    ring = { samples: new Array(RING_SIZE), head: 0, count: 0 };
+    ring = { samples: new Array(PROG_HISTORY_RING_SIZE), head: 0, count: 0 };
     rings.set(id, ring);
   }
   return ring;
@@ -43,14 +42,14 @@ function getOrCreate(id: number): RingEntry {
 export function pushSample(id: number, sample: ProgSample): void {
   const ring = getOrCreate(id);
   ring.samples[ring.head] = sample;
-  ring.head = (ring.head + 1) % RING_SIZE;
-  if (ring.count < RING_SIZE) ring.count++;
+  ring.head = (ring.head + 1) % PROG_HISTORY_RING_SIZE;
+  if (ring.count < PROG_HISTORY_RING_SIZE) ring.count++;
 }
 
 /** Read all valid samples in chronological order.  O(n). */
 function readSamples(ring: RingEntry): ProgSample[] {
   if (ring.count === 0) return [];
-  if (ring.count < RING_SIZE) {
+  if (ring.count < PROG_HISTORY_RING_SIZE) {
     // Buffer not yet full — samples are stored linearly from index 0
     return ring.samples.slice(0, ring.count);
   }

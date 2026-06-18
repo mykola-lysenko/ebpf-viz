@@ -30,6 +30,7 @@ import type {
   SnapshotMetricsUpdate,
   ActivitySummary,
 } from "../../../shared/ebpf-types";
+import { PROG_HISTORY_RING_SIZE } from "../../../shared/ebpf-constants";
 
 export type StreamStatus = "connecting" | "live" | "reconnecting" | "offline";
 
@@ -47,7 +48,6 @@ const SSE_URL = "/api/sse";
 const INITIAL_BACKOFF_MS = 1_000;
 const MAX_BACKOFF_MS = 30_000;
 const BACKOFF_FACTOR = 2;
-const HISTORY_SAMPLE_LIMIT = 60;
 
 function parseEvent<T>(data: string): T | null {
   try {
@@ -149,8 +149,8 @@ function applyHistoryDeltas(histories: ProgHistory[], deltas: ProgHistoryDelta[]
     const samples = lastSample?.ts === delta.sample.ts
       ? [...existingSamples.slice(0, -1), delta.sample]
       : [...existingSamples, delta.sample];
-    const trimmedSamples = samples.length > HISTORY_SAMPLE_LIMIT
-      ? samples.slice(samples.length - HISTORY_SAMPLE_LIMIT)
+    const trimmedSamples = samples.length > PROG_HISTORY_RING_SIZE
+      ? samples.slice(samples.length - PROG_HISTORY_RING_SIZE)
       : samples;
 
     byId.set(delta.id, {

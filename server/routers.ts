@@ -275,7 +275,7 @@ export const appRouter = router({
     // ── Runtime statistics ─────────────────────────────────────────────────
     /**
      * Full ring-buffer history for all programs.
-     * Returns up to RING_SIZE samples per program with derived rates.
+     * Returns up to PROG_HISTORY_RING_SIZE samples per program with derived rates.
      */
     allHistory: publicProcedure.query(() => {
       return getAllHistories();

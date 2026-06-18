@@ -5,7 +5,7 @@ import { Badge } from "@/components/ui/badge";
 import { Cpu, Network, FolderTree, Activity, Zap, AlertTriangle, Server, GitBranch, Timer, BarChart2, Download, Database } from "lucide-react";
 import { Link } from "wouter";
 import { cn } from "@/lib/utils";
-import { TYPE_COLORS } from "../../../server/ebpf-parser";
+import { BPF_PROGRAM_TYPE_COLORS } from "../../../shared/ebpf-constants";
 import Sparkline, { samplesToCallsPerSec, fmtCps, fmtNs, fmtCpu, fmtBytes } from "@/components/Sparkline";
 import { formatRelativeTime, formatFullTimestamp, useNow } from "@/lib/time";
 
@@ -158,7 +158,7 @@ function TypeBar({ byType }: { byType: Record<string, number> }) {
   return (
     <div className="space-y-2">
       {sorted.map(([type, count]) => {
-        const color = TYPE_COLORS[type] ?? "#6b7280";
+        const color = BPF_PROGRAM_TYPE_COLORS[type] ?? BPF_PROGRAM_TYPE_COLORS.unknown;
         const pct = (count / total) * 100;
         return (
           <div key={type} className="flex items-center gap-3">

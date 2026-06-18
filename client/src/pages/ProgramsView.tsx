@@ -5,34 +5,12 @@ import { Button } from "@/components/ui/button";
 import { Activity, SortAsc, SortDesc, Filter, X, Zap, AlertTriangle } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { BpfProgram, ProgHistory } from "../../../shared/ebpf-types";
+import { BPF_PROGRAM_TYPE_COLORS } from "../../../shared/ebpf-constants";
 import Sparkline, { samplesToCallsPerSec, fmtCps, fmtNs, fmtCpu } from "@/components/Sparkline";
 import { formatRelativeTime, formatFullTimestamp, useNow } from "@/lib/time";
 
 type SortKey = "id" | "name" | "type" | "loadedAt" | "runCnt" | "bytesXlated" | "callsPerSec" | "avgLatency" | "cpuFraction";
 type SortDir = "asc" | "desc";
-
-const TYPE_COLORS_MAP: Record<string, string> = {
-  xdp:            "#00d4ff",
-  sched_cls:      "#7c3aed",
-  sched_act:      "#6d28d9",
-  kprobe:         "#f59e0b",
-  kretprobe:      "#d97706",
-  fentry:         "#b45309",
-  fexit:          "#92400e",
-  tracepoint:     "#10b981",
-  raw_tracepoint: "#059669",
-  perf_event:     "#f97316",
-  cgroup_skb:     "#3b82f6",
-  cgroup_device:  "#2563eb",
-  cgroup_sock:    "#1d4ed8",
-  sock_ops:       "#8b5cf6",
-  sk_skb:         "#a78bfa",
-  sk_msg:         "#c4b5fd",
-  sk_lookup:      "#7c3aed",
-  flow_dissector: "#ec4899",
-  netfilter:      "#f43f5e",
-  lsm:            "#ef4444",
-};
 
 function formatBytes(b: number) {
   if (b < 1024) return `${b}B`;
@@ -64,7 +42,7 @@ function ProgramRow({
   now: number;
 }) {
   const { setSelectedProgram } = useEbpf();
-  const color = TYPE_COLORS_MAP[prog.rawType] ?? "#6b7280";
+  const color = BPF_PROGRAM_TYPE_COLORS[prog.rawType] ?? BPF_PROGRAM_TYPE_COLORS.unknown;
 
   const callsPerSec = history?.latest?.callsPerSec ?? 0;
   const avgLatencyNs = history?.latest?.avgLatencyNs ?? 0;
@@ -321,7 +299,7 @@ export default function ProgramsView() {
         <Filter size={13} className="text-muted-foreground" />
         <span className="text-xs text-muted-foreground">Filter by type:</span>
         {allTypes.map(type => {
-          const color = TYPE_COLORS_MAP[type] ?? "#6b7280";
+          const color = BPF_PROGRAM_TYPE_COLORS[type] ?? BPF_PROGRAM_TYPE_COLORS.unknown;
           const active = typeFilter.includes(type);
           return (
             <button

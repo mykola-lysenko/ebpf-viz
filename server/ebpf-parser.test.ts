@@ -7,8 +7,8 @@ import {
   buildCgroupTree,
   buildKernelZones,
   buildSnapshot,
-  TYPE_COLORS,
 } from "./ebpf-parser";
+import { BPF_PROGRAM_TYPE_COLORS } from "../shared/ebpf-constants";
 import type { RawBpfProg, RawNetSnapshot, RawCgroupEntry } from "../shared/ebpf-types";
 
 // ─── Fixtures ─────────────────────────────────────────────────────────────────
@@ -661,16 +661,16 @@ describe("buildKernelZones", () => {
   });
 });
 
-// ─── TYPE_COLORS ──────────────────────────────────────────────────────────────
+// ─── BPF_PROGRAM_TYPE_COLORS ──────────────────────────────────────────────────
 
-describe("TYPE_COLORS", () => {
+describe("BPF_PROGRAM_TYPE_COLORS", () => {
   it("has a color for xdp", () => {
-    expect(TYPE_COLORS["xdp"]).toBeDefined();
-    expect(TYPE_COLORS["xdp"]).toMatch(/^#[0-9a-f]{6}$/i);
+    expect(BPF_PROGRAM_TYPE_COLORS["xdp"]).toBeDefined();
+    expect(BPF_PROGRAM_TYPE_COLORS["xdp"]).toMatch(/^#[0-9a-f]{6}$/i);
   });
 
   it("has a fallback unknown color", () => {
-    expect(TYPE_COLORS["unknown"]).toBeDefined();
+    expect(BPF_PROGRAM_TYPE_COLORS["unknown"]).toBeDefined();
   });
 });
 
