@@ -7,8 +7,8 @@
  * "ReferenceError: Headers is not defined" on Node 16.
  *
  * This module must be imported BEFORE any other server code.
- * It installs the missing globals from `undici` (v5, Node 16 compatible)
- * only when they are not already present, so it is a no-op on Node 18+.
+ * It installs the missing globals from `undici` only when they are not
+ * already present, so it is a no-op on Node 18+.
  *
  * Node 16 pipeTo abort fix
  * ─────────────────────────
@@ -31,31 +31,12 @@
 const nodeMajor = parseInt(process.versions.node.split(".")[0], 10);
 
 if (nodeMajor < 18) {
-  // undici provides fetch/Headers/etc. for Node 16.
-  // The require is wrapped in try/catch so the standalone esbuild bundle
-  // (which inlines all deps) doesn't fail at bundle time if undici isn't
-  // installed — the standalone tarball ships a separate copy via npm.
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  let undici: Record<string, any> | null = null;
-  try {
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
-    undici = require("undici");
-  } catch {
-    console.error("[polyfill] undici not found — install it for Node 16 support: npm install undici@5");
-  }
-
   const g = globalThis as Record<string, unknown>;
-
-  if (undici) {
-    if (!g.fetch)     g.fetch     = undici.fetch;
-    if (!g.Headers)   g.Headers   = undici.Headers;
-    if (!g.Request)   g.Request   = undici.Request;
-    if (!g.Response)  g.Response  = undici.Response;
-    if (!g.FormData)  g.FormData  = undici.FormData;
-  }
+  let pipeToPatched = false;
 
   // Patch ReadableStream.prototype.pipeTo to strip the abort signal.
-  // stream/web is available since Node 16.5.0 (the user is on 16.20.2).
+  // stream/web is available since Node 16.5.0 and must be installed before
+  // requiring undici 6.x, which expects Web Streams globals to exist.
   try {
     // eslint-disable-next-line @typescript-eslint/no-require-imports
     const { ReadableStream } = require("stream/web") as typeof import("stream/web");
@@ -85,13 +66,38 @@ if (nodeMajor < 18) {
       }
       return origPipeTo.call(this, dest, options);
     };
-
-    const what = undici ? "Web API globals + " : "";
-    console.log(`[polyfill] Installed ${what}pipeTo abort-signal fix (Node ${process.versions.node})`);
+    pipeToPatched = true;
   } catch {
     // stream/web unavailable (Node < 16.5) — skip the pipeTo patch
-    if (undici) {
-      console.log(`[polyfill] Installed Web API globals from undici (Node ${process.versions.node})`);
-    }
+  }
+
+  // undici provides fetch/Headers/etc. for Node 16.
+  // The require is wrapped in try/catch so the standalone esbuild bundle
+  // (which inlines all deps) doesn't fail at bundle time if undici isn't
+  // installed — the standalone tarball ships a separate copy via npm.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let undici: Record<string, any> | null = null;
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    undici = require("undici");
+  } catch {
+    console.error("[polyfill] undici not found — install it for Node 16 support: npm install undici@6.27.0");
+  }
+
+  if (undici) {
+    if (!g.fetch)     g.fetch     = undici.fetch;
+    if (!g.Headers)   g.Headers   = undici.Headers;
+    if (!g.Request)   g.Request   = undici.Request;
+    if (!g.Response)  g.Response  = undici.Response;
+    if (!g.FormData)  g.FormData  = undici.FormData;
+  }
+
+  const installed = [
+    undici ? "Web API globals" : "",
+    pipeToPatched ? "pipeTo abort-signal fix" : "",
+  ].filter(Boolean);
+
+  if (installed.length > 0) {
+    console.log(`[polyfill] Installed ${installed.join(" + ")} (Node ${process.versions.node})`);
   }
 }

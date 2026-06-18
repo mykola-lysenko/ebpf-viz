@@ -268,7 +268,7 @@ cat > "$OUT_DIR/package.json" << 'PKGJSON'
   "version": "1.0.0",
   "type": "module",
   "optionalDependencies": {
-    "undici": "5"
+    "undici": "6.27.0"
   }
 }
 PKGJSON
