@@ -1,0 +1,81 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  node22-checks:
+    name: Node 22 checks
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10.4.1
+          run_install: false
+
+      - name: Set up Node.js 22
+        uses: actions/setup-node@v5
+        with:
+          node-version: '22'
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Run Node 22 checks
+        run: pnpm run ci:node22
+
+  standalone-node16:
+    name: Standalone runtime on Node 16
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10.4.1
+          run_install: false
+
+      - name: Set up Node.js 22 for build
+        uses: actions/setup-node@v5
+        with:
+          node-version: '22'
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build standalone package
+        run: bash build-standalone.sh
+
+      - name: Set up Node.js 16 for runtime
+        uses: actions/setup-node@v5
+        with:
+          node-version: 16.20.2
+
+      - name: Audit standalone runtime dependencies
+        working-directory: standalone
+        run: npm audit --omit=dev
+
+      - name: Smoke-test standalone runtime
+        env:
+          EXPECTED_NODE_MAJOR: '16'
+        run: bash scripts/standalone-smoke.sh

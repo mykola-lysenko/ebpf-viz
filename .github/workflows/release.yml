@@ -20,6 +20,7 @@ jobs:
       - name: Set up pnpm
         uses: pnpm/action-setup@v4
         with:
+          version: 10.4.1
           run_install: false
 
       - name: Set up Node.js
@@ -48,6 +49,20 @@ jobs:
 
       - name: Build standalone tarball
         run: bash build-standalone.sh
+
+      - name: Set up Node.js 16 for runtime smoke
+        uses: actions/setup-node@v5
+        with:
+          node-version: 16.20.2
+
+      - name: Audit standalone runtime dependencies
+        working-directory: standalone
+        run: npm audit --omit=dev
+
+      - name: Smoke-test standalone runtime
+        env:
+          EXPECTED_NODE_MAJOR: '16'
+        run: bash scripts/standalone-smoke.sh
 
       - name: Compute short SHA and timestamp
         id: meta
