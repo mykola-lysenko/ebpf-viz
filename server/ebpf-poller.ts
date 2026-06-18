@@ -338,10 +338,13 @@ export function updateConfig(updates: Partial<PollingConfig>): void {
   poll();
 }
 
-export function subscribe(cb: (snap: EbpfSnapshot) => void): () => void {
+export function subscribe(
+  cb: (snap: EbpfSnapshot) => void,
+  options: { immediate?: boolean } = {}
+): () => void {
   listeners.add(cb);
   // Immediately deliver latest if available
-  if (latestSnapshot) cb(latestSnapshot);
+  if (options.immediate !== false && latestSnapshot) cb(latestSnapshot);
   return () => listeners.delete(cb);
 }
 

@@ -286,6 +286,26 @@ export interface ActivitySummary {
   statsEnabled: boolean;
 }
 
+/** Lightweight per-poll metric update sent over SSE when topology is unchanged. */
+export interface SnapshotMetricsUpdate {
+  timestamp: number;
+  stats: EbpfSnapshot["stats"];
+  programs: Array<{
+    id: number;
+    runCnt?: number;
+    runTimeNs?: number;
+  }>;
+}
+
+/** Incremental history update sent over SSE after the initial full history. */
+export interface ProgHistoryDelta {
+  id: number;
+  sample: ProgSample;
+  latest: ProgRates | null;
+  peakCallsPerSec: number;
+  peakAvgLatencyNs: number;
+}
+
 // ─── Code Inspector types ─────────────────────────────────────────────────────
 
 /** A single xlated (BPF bytecode) instruction */

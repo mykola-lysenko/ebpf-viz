@@ -32,6 +32,7 @@ vi.mock("./ebpf-poller", () => ({
 
 import { sseHandler } from "./sse";
 import type { Request, Response } from "express";
+import type { EbpfSnapshot, ProgHistory } from "../shared/ebpf-types";
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -65,6 +66,61 @@ function makeMockReq() {
     listeners,
   } as unknown as Request & { emit: (event: string) => void };
   return req;
+}
+
+function eventNames(chunks: string[]): string[] {
+  return chunks.flatMap((chunk) =>
+    Array.from(chunk.matchAll(/^event: (.+)$/gm), (match) => match[1])
+  );
+}
+
+function makeSnapshot(programs: Array<{ id: number; runCnt?: number; runTimeNs?: number }>, timestamp: number): EbpfSnapshot {
+  return {
+    timestamp,
+    hostname: "test-host",
+    kernelVersion: "test-kernel",
+    bpftoolVersion: "test-bpftool",
+    demoMode: false,
+    programs: programs.map((program) => ({
+      id: program.id,
+      type: "xdp",
+      rawType: "xdp",
+      name: `prog-${program.id}`,
+      tag: `tag-${program.id}`,
+      gplCompatible: true,
+      loadedAt: 0,
+      orphaned: false,
+      bytesXlated: 0,
+      jited: true,
+      memlock: 0,
+      mapIds: [],
+      runCnt: program.runCnt,
+      runTimeNs: program.runTimeNs,
+      attachments: [],
+      osiLayer: "L2",
+      color: "#000",
+    })),
+    networkInterfaces: [],
+    cgroupTree: [],
+    kernelZones: [],
+    programChains: [],
+    stats: {
+      total: programs.length,
+      byType: { xdp: programs.length },
+      jited: programs.length,
+      orphaned: 0,
+    },
+  };
+}
+
+function makeHistory(id: number, ts: number, runCnt: number): ProgHistory {
+  return {
+    id,
+    samples: [{ ts, runCnt, runTimeNs: runCnt * 100, recursionMisses: 0 }],
+    latest: { callsPerSec: 1, avgLatencyNs: 100, cpuFraction: 0.01, recursionRate: 0 },
+    peakCallsPerSec: 1,
+    peakAvgLatencyNs: 100,
+  };
 }
 
 // ─── Tests ────────────────────────────────────────────────────────────────────
@@ -110,18 +166,19 @@ describe("sseHandler", () => {
   });
 
   it("sends snapshot bundle immediately when snapshot is available", () => {
-    const fakeSnap = { programs: [], timestamp: Date.now(), stats: { total: 0 } };
+    const fakeSnap = makeSnapshot([], Date.now());
     mockGetLatestSnapshot.mockReturnValue(fakeSnap);
     const req = makeMockReq();
     const res = makeMockRes();
 
     sseHandler(req, res);
 
-    const written = res.written.join("");
-    expect(written).toContain("event: snapshot");
-    expect(written).toContain("event: maps");
-    expect(written).toContain("event: history");
-    expect(written).toContain("event: activity");
+    const events = eventNames(res.written);
+    expect(events).toContain("snapshot");
+    expect(events).toContain("maps");
+    expect(events).toContain("history");
+    expect(events).toContain("activity");
+    expect(events.filter(event => event === "snapshot")).toHaveLength(1);
   });
 
   it("calls subscribe() to register for future snapshots", () => {
@@ -153,6 +210,66 @@ describe("sseHandler", () => {
     const newWrites = res.written.slice(writtenBefore).join("");
     expect(newWrites).toContain("event: snapshot");
     expect(newWrites).toContain("event: maps");
+  });
+
+  it("sends metric and history deltas when topology is unchanged", () => {
+    let capturedCb: ((snap: EbpfSnapshot) => void) | null = null;
+    mockSubscribeFn.mockImplementation((cb: (snap: EbpfSnapshot) => void) => {
+      capturedCb = cb;
+      return () => {};
+    });
+
+    mockGetLatestSnapshot.mockReturnValue(makeSnapshot([{ id: 1, runCnt: 10, runTimeNs: 1_000 }], 1_000));
+    mockGetAllHistories
+      .mockReturnValueOnce([makeHistory(1, 1_000, 10)])
+      .mockReturnValueOnce([makeHistory(1, 6_000, 20)]);
+
+    const req = makeMockReq();
+    const res = makeMockRes();
+
+    sseHandler(req, res);
+    const writtenBefore = res.written.length;
+
+    capturedCb!(makeSnapshot([{ id: 1, runCnt: 20, runTimeNs: 2_000 }], 6_000));
+
+    const events = eventNames(res.written.slice(writtenBefore));
+    expect(events).toContain("snapshot-metrics");
+    expect(events).toContain("history-delta");
+    expect(events).toContain("activity");
+    expect(events).not.toContain("snapshot");
+    expect(events).not.toContain("history");
+    expect(events).not.toContain("maps");
+  });
+
+  it("sends a full snapshot again when topology changes", () => {
+    let capturedCb: ((snap: EbpfSnapshot) => void) | null = null;
+    mockSubscribeFn.mockImplementation((cb: (snap: EbpfSnapshot) => void) => {
+      capturedCb = cb;
+      return () => {};
+    });
+
+    mockGetLatestSnapshot.mockReturnValue(makeSnapshot([{ id: 1, runCnt: 10, runTimeNs: 1_000 }], 1_000));
+    mockGetAllHistories
+      .mockReturnValueOnce([makeHistory(1, 1_000, 10)])
+      .mockReturnValueOnce([makeHistory(1, 6_000, 20), makeHistory(2, 6_000, 1)]);
+
+    const req = makeMockReq();
+    const res = makeMockRes();
+
+    sseHandler(req, res);
+    const writtenBefore = res.written.length;
+
+    capturedCb!(makeSnapshot([
+      { id: 1, runCnt: 20, runTimeNs: 2_000 },
+      { id: 2, runCnt: 1, runTimeNs: 100 },
+    ], 6_000));
+
+    const events = eventNames(res.written.slice(writtenBefore));
+    expect(events).toContain("snapshot");
+    expect(events).toContain("history");
+    expect(events).toContain("activity");
+    expect(events).not.toContain("snapshot-metrics");
+    expect(events).not.toContain("history-delta");
   });
 
   it("sends a keepalive ping after 15 seconds", () => {
