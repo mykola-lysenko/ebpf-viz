@@ -341,6 +341,57 @@ describe("buildOsMapLayout", () => {
     expect(cgroupEdge).toBeDefined();
   });
 
+  it("counts collapsed cgroup descendants once at the depth limit", () => {
+    const snap = makeSnapshot({
+      cgroupTree: [
+        {
+          path: "/sys/fs/cgroup",
+          name: "/",
+          depth: 0,
+          programs: [],
+          children: [
+            {
+              path: "/sys/fs/cgroup/system.slice",
+              name: "system.slice",
+              depth: 1,
+              programs: [],
+              children: [
+                {
+                  path: "/sys/fs/cgroup/system.slice/a.service",
+                  name: "a.service",
+                  depth: 2,
+                  programs: [],
+                  children: [
+                    {
+                      path: "/sys/fs/cgroup/system.slice/a.service/workers",
+                      name: "workers",
+                      depth: 3,
+                      programs: [],
+                      children: [],
+                    },
+                  ],
+                },
+                {
+                  path: "/sys/fs/cgroup/system.slice/b.service",
+                  name: "b.service",
+                  depth: 2,
+                  programs: [],
+                  children: [],
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    });
+
+    const layout = buildOsMapLayout(snap, [], "compact", 1);
+    const collapsedNode = layout.nodes.find(n => n.id === "cgroup-/sys/fs/cgroup/system.slice");
+
+    expect(collapsedNode).toBeDefined();
+    expect((collapsedNode!.data as any).collapsedChildren).toBe(3);
+  });
+
   // ── General correctness ───────────────────────────────────────────────────────
 
   it("all content nodes have valid x,y positions", () => {

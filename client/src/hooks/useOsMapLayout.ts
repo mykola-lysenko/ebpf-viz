@@ -312,7 +312,7 @@ export function buildOsMapLayout(
 
     // Count hidden descendants when this node is at the depth limit
     const isAtLimit = maxCgroupDepth !== undefined && cgNode.depth === maxCgroupDepth && cgNode.children.length > 0;
-    const collapsedChildren = isAtLimit ? countDescendants(cgNode) + cgNode.children.length : undefined;
+    const collapsedChildren = isAtLimit ? countDescendants(cgNode) : undefined;
 
     nodes.push({
       id: `cgroup-${cgNode.path}`,
