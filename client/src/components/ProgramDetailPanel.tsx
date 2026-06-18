@@ -1,6 +1,6 @@
-import React, { useMemo, useState } from "react";
+import React, { lazy, Suspense, useMemo, useState } from "react";
 import { formatRelativeTime, formatFullTimestamp, useNow } from "@/lib/time";
-import { X, Copy, Check, Clock, Cpu, Hash, Tag, Database, Activity, Shield, AlertTriangle, Zap, Timer, BarChart2, Code2 } from "lucide-react";
+import { X, Copy, Check, Clock, Cpu, Hash, Tag, Database, Activity, Shield, AlertTriangle, Zap, Timer, BarChart2, Code2, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
@@ -9,7 +9,10 @@ import type { BpfProgram, ProgHistory } from "../../../shared/ebpf-types";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
 import { samplesToCallsPerSec, samplesToAvgLatency, fmtCps, fmtNs, fmtCpu } from "./Sparkline";
-import { CodeInspector } from "./CodeInspector";
+
+const CodeInspector = lazy(() =>
+  import("./CodeInspector").then(module => ({ default: module.CodeInspector }))
+);
 
 interface Props {
   program: BpfProgram;
@@ -80,6 +83,24 @@ function StatCard({ icon: Icon, label, value, sub, color }: {
 function formatBytes(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
   return `${(bytes / 1024).toFixed(1)} KB`;
+}
+
+function CodeInspectorLoading({ onClose }: { onClose: () => void }) {
+  return (
+    <div className="fixed inset-0 z-50 bg-[oklch(0.08_0.012_240/0.98)] backdrop-blur-xl flex items-center justify-center">
+      <button
+        onClick={onClose}
+        className="absolute top-4 right-4 p-2 rounded-lg text-muted-foreground hover:text-foreground hover:bg-white/10 transition-colors"
+        aria-label="Close code inspector"
+      >
+        <X size={18} />
+      </button>
+      <div className="flex items-center gap-3 rounded-xl border border-border bg-card/70 px-5 py-4 text-sm text-muted-foreground shadow-xl">
+        <Loader2 size={16} className="animate-spin text-primary" />
+        Loading code inspector...
+      </div>
+    </div>
+  );
 }
 
 // Replaced by formatRelativeTime from @/lib/time — kept as alias for any remaining callers
@@ -472,7 +493,9 @@ export function ProgramDetailPanel({ program, history, onClose }: Props) {
 
     {/* Code Inspector full-screen modal */}
     {showCode && (
-      <CodeInspector program={program} onClose={() => setShowCode(false)} />
+      <Suspense fallback={<CodeInspectorLoading onClose={() => setShowCode(false)} />}>
+        <CodeInspector program={program} onClose={() => setShowCode(false)} />
+      </Suspense>
     )}
     </>
   );
