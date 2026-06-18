@@ -88,7 +88,7 @@ After loading a snapshot file, the toolbar switches to **SNAPSHOT** mode. The fi
 
 ### Option A — Standalone Tarball (recommended for devservers)
 
-The standalone tarball bundles the compiled frontend and Express server into a single archive. The target machine needs only **Node.js ≥ 18** — no npm, no Docker, no internet access.
+The standalone tarball bundles the compiled frontend and Express server into a single archive. The target machine needs only **Node.js ≥ 16** — no npm, no Docker, no internet access.
 
 **1. Download the latest release:**
 
@@ -157,7 +157,7 @@ DEMO_MODE=true pnpm dev
 | Dependency | Version | Notes |
 |---|---|---|
 | Linux kernel | ≥ 5.1 | For `run_time_ns`/`run_cnt` stats; ≥ 4.15 for basic operation |
-| Node.js | ≥ 18 | ≥ 22 recommended for development |
+| Node.js | ≥ 16 standalone runtime; ≥ 22 development/build | Corp devservers can run the standalone bundle on Node 16 |
 | pnpm | ≥ 10 | `npm install -g pnpm` |
 | bpftool | ≥ 7.x | See [INSTALL.md](INSTALL.md) for build instructions |
 | sudo | any | The server calls `sudo bpftool`; configure sudoers accordingly |
@@ -269,8 +269,9 @@ DEMO_MODE=true pnpm dev
 # Run tests
 pnpm test
 
-# Type check
-pnpm typecheck
+# Type check and lint
+pnpm check
+pnpm lint
 
 # Build standalone tarball
 bash build-standalone.sh
@@ -309,7 +310,7 @@ pnpm test --watch   # watch mode
 
 ## CI/CD
 
-A GitHub Actions workflow (`.github/workflows/release.yml`) triggers on every push to `main`. It installs dependencies, runs the full test suite, builds the standalone tarball, and publishes it as a rolling `latest` pre-release on GitHub Releases. A failing test suite prevents the release from being published.
+GitHub Actions runs `ci.yml` on pull requests and pushes to `main`. It validates Node 22 audit/typecheck/lint/test/build and builds the standalone package, then smoke-tests it on Node 16. The `release.yml` workflow publishes a rolling `latest` standalone tarball from `main` only after the same standalone runtime audit and smoke test pass.
 
 ---
 

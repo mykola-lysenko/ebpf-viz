@@ -1,6 +1,6 @@
 # Standalone Deployment Guide
 
-This guide explains how to build a self-contained deployment package for the eBPF Visualizer and run it on a devserver that has only **Node.js ≥ 18** installed — no `npm`, `pnpm`, or Docker required.
+This guide explains how to build a self-contained deployment package for the eBPF Visualizer and run it on a devserver that has only **Node.js ≥ 16** installed — no `npm`, `pnpm`, or Docker required.
 
 ---
 
@@ -8,8 +8,8 @@ This guide explains how to build a self-contained deployment package for the eBP
 
 | Machine | Requirements |
 |---------|-------------|
-| **Build machine** (your laptop) | Node.js ≥ 18, pnpm (or npm), internet access |
-| **Target devserver** | Node.js ≥ 18, `bpftool` (for live mode), root/sudo access |
+| **Build machine** (your laptop) | Node.js ≥ 22, pnpm/corepack, internet access |
+| **Target devserver** | Node.js ≥ 16, `bpftool` (for live mode), root/sudo access |
 
 ---
 
@@ -167,7 +167,7 @@ Change the port: `PORT=8080 sudo ./start.sh`
 
 **Server exits immediately with a module error**
 
-Ensure Node.js ≥ 18 is installed: `node --version`. The bundle uses ESM syntax and `import.meta`, which require Node.js 18 or later.
+Ensure Node.js ≥ 16 is installed: `node --version`. The standalone package includes the Node 16 Web API polyfill dependencies needed by the tRPC server.
 
 ---
 
