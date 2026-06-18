@@ -7,6 +7,7 @@ import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
+import { getAdminToken, setAdminToken as saveAdminToken } from "@/lib/admin-token";
 
 const INTERVAL_OPTIONS = [
   { label: "1 second",  value: 1000 },
@@ -20,6 +21,7 @@ const INTERVAL_OPTIONS = [
 export default function SettingsView() {
   const { snapshot, streamStatus, refreshInterval, setRefreshInterval, demoMode } = useEbpf();
   const [saving, setSaving] = useState(false);
+  const [adminTokenInput, setAdminTokenInput] = useState(() => getAdminToken() ?? "");
 
   const updateConfig = trpc.ebpf.updateConfig.useMutation({
     onSuccess: () => {
@@ -47,6 +49,11 @@ export default function SettingsView() {
     updateConfig.mutate({ demoMode: !demoMode });
   };
 
+  const handleSaveAdminToken = () => {
+    saveAdminToken(adminTokenInput);
+    toast.success(adminTokenInput.trim() ? "Admin token saved in this browser" : "Admin token cleared");
+  };
+
   const streamStatusLabel = {
     live:         "Live",
     connecting:   "Connecting…",
@@ -69,6 +76,49 @@ export default function SettingsView() {
           Settings
         </h1>
         <p className="text-sm text-muted-foreground mt-0.5">Configure polling interval, data source, and display options</p>
+      </div>
+
+      {/* Admin access */}
+      <div className="glass rounded-xl p-5 space-y-4">
+        <h2 className="text-sm font-semibold text-foreground flex items-center gap-2">
+          <Terminal size={14} className="text-primary" />
+          Admin Access
+        </h2>
+        <p className="text-xs text-muted-foreground">
+          Config changes and bpftool-heavy actions are restricted to loopback requests or requests with an admin token.
+          If the server sets <code className="font-mono bg-white/5 px-1 rounded">ADMIN_TOKEN</code>, enter it here to enable those actions from this browser.
+        </p>
+        <div className="flex gap-2">
+          <input
+            type="password"
+            value={adminTokenInput}
+            onChange={e => setAdminTokenInput(e.target.value)}
+            placeholder="Admin token"
+            className="flex-1 h-9 rounded-lg border border-border bg-muted/40 px-3 text-sm font-mono text-foreground outline-none focus:border-primary/50"
+          />
+          <Button
+            variant="outline"
+            size="sm"
+            className="h-9"
+            onClick={handleSaveAdminToken}
+          >
+            Save
+          </Button>
+          {adminTokenInput && (
+            <Button
+              variant="ghost"
+              size="sm"
+              className="h-9 text-muted-foreground"
+              onClick={() => {
+                setAdminTokenInput("");
+                saveAdminToken("");
+                toast.success("Admin token cleared");
+              }}
+            >
+              Clear
+            </Button>
+          )}
+        </div>
       </div>
 
       {/* System info */}

@@ -63,6 +63,7 @@ The `.env` file supports the following variables:
 | `DEMO_MODE` | _(unset)_ | Set to `1` to use mock data instead of calling `bpftool` |
 | `POLL_INTERVAL_MS` | `5000` | How often (ms) to poll `bpftool` for updates |
 | `BPF_STATS_ENABLED` | _(auto)_ | Set to `0` to skip enabling BPF runtime stats |
+| `ADMIN_TOKEN` | _(unset)_ | Optional token for remote access to config changes and bpftool-heavy endpoints; enter it in Settings → Admin Access |
 
 ---
 

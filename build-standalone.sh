@@ -151,6 +151,13 @@ NODE_ENV=production
 # Set to "true" to start in demo mode (synthetic data, no bpftool required).
 # Useful for testing the UI without a Linux kernel with BPF support.
 # DEMO_MODE=false
+
+# Operator access token.
+# Config changes and bpftool-heavy endpoints are restricted to loopback clients
+# by default. Set ADMIN_TOKEN to also allow remote browser/API access when the
+# request sends x-ebpf-viz-admin-token or Authorization: Bearer <token>.
+# In the UI, enter this value in Settings → Admin Access.
+# ADMIN_TOKEN=
 ENVEXAMPLE
 
 # Write the start script

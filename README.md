@@ -253,6 +253,7 @@ All settings are provided as environment variables (or in a `.env` file). No dat
 | `DEMO_MODE` | `false` | Use synthetic mock data instead of live `bpftool` |
 | `POLL_INTERVAL_MS` | `5000` | Polling interval in milliseconds (1000–60000) |
 | `BPF_STATS_ENABLED` | auto | Set to `0` to skip enabling BPF runtime stats at startup |
+| `ADMIN_TOKEN` | unset | Optional token for remote access to config changes and bpftool-heavy endpoints; loopback requests are always allowed |
 
 ---
 

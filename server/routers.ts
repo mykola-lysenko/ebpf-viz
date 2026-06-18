@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { publicProcedure, router } from "./_core/trpc";
+import { expensiveProcedure, operatorProcedure, publicProcedure, router } from "./_core/trpc";
 import {
   getLatestSnapshot,
   getLatestMaps,
@@ -45,7 +45,7 @@ export const appRouter = router({
       }),
 
     /** Update polling configuration */
-    updateConfig: publicProcedure
+    updateConfig: operatorProcedure
       .input(
         z.object({
           intervalMs: z.number().min(1000).max(60000).optional(),
@@ -60,7 +60,7 @@ export const appRouter = router({
       }),
 
     /** Force an immediate poll */
-    refresh: publicProcedure.mutation(async () => {
+    refresh: operatorProcedure.mutation(async () => {
       await triggerPoll();
       return getLatestSnapshot();
     }),
@@ -99,7 +99,7 @@ export const appRouter = router({
      * Calls `bpftool -jp map dump id N` and returns parsed key-value pairs.
      * Returns up to 1000 entries; truncated flag is set if more exist.
      */
-    mapDump: publicProcedure
+    mapDump: expensiveProcedure
       .input(z.object({ id: z.number() }))
       .query(async ({ input }) => {
         const snap = getLatestSnapshot();
@@ -120,7 +120,7 @@ export const appRouter = router({
      * Unsupported map types (ringbuf, perf_event_array, etc.) are marked with
      * unsupported: true and count: null.
      */
-    mapEntryCounts: publicProcedure.query(async () => {
+    mapEntryCounts: expensiveProcedure.query(async () => {
       const maps = getLatestMaps();
       const bpftoolPath = getBpftoolPath();
       const sudo = isSudoEnabled();
@@ -157,7 +157,7 @@ export const appRouter = router({
      * xlated bytecode, CFG DOT, jited assembly (when available),
      * and BTF line-number info (when available).
      */
-    progDump: publicProcedure
+    progDump: expensiveProcedure
       .input(z.object({ id: z.number() }))
       .query(async ({ input }) => {
         const snap = getLatestSnapshot();
