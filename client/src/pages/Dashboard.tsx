@@ -385,6 +385,14 @@ export default function Dashboard() {
   const { snapshot, isLoading, demoMode, activity, statsEnabled } = useEbpf();
   const now = useNow(30_000); // refresh relative times every 30s
 
+  // Must run before early returns: snapshot starts as null during initial load,
+  // then becomes populated once the stream connects.
+  const tagCount = useMemo(() => {
+    const m = new Map<string, number>();
+    if (snapshot) for (const p of snapshot.programs) m.set(p.tag, (m.get(p.tag) ?? 0) + 1);
+    return m;
+  }, [snapshot]);
+
   if (isLoading && !snapshot) {
     return (
       <div className="flex items-center justify-center h-full">
@@ -405,13 +413,6 @@ export default function Dashboard() {
   }
 
   const { stats, programs, networkInterfaces, cgroupTree, kernelZones } = snapshot;
-    // Compute tag frequency map for clone detection
-  const tagCount = useMemo(() => {
-    const m = new Map<string, number>();
-    if (snapshot) for (const p of snapshot.programs) m.set(p.tag, (m.get(p.tag) ?? 0) + 1);
-    return m;
-  }, [snapshot]);
-
   const recentProgs = [...programs].sort((a, b) => b.loadedAt - a.loadedAt).slice(0, 8);
   const orphanedProgs = programs.filter(p => p.orphaned);
   const netProgs = networkInterfaces.reduce((acc, i) => acc + i.allPrograms.length, 0);

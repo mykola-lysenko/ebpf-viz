@@ -366,6 +366,11 @@ function InterfaceSection({ title, description, icon, interfaces, emptyMessage, 
 export default function NetworkView() {
   const { snapshot, filteredPrograms, searchQuery } = useEbpf();
 
+  const tcChains = useMemo(() =>
+    snapshot ? snapshot.programChains.filter(c => c.hookType === "tc") : [],
+    [snapshot]
+  );
+
   if (!snapshot) {
     return <div className="flex items-center justify-center h-full"><p className="text-muted-foreground">Loading…</p></div>;
   }
@@ -387,11 +392,6 @@ export default function NetworkView() {
   const nicInterfaces = interfaces.filter(i => i.kind === "nic");
   const sockmapInterfaces = interfaces.filter(i => i.kind === "sockmap");
   const totalNetProgs = snapshot.networkInterfaces.reduce((a, i) => a + i.allPrograms.length, 0);
-
-  const tcChains = useMemo(() =>
-    snapshot.programChains.filter(c => c.hookType === "tc"),
-    [snapshot.programChains]
-  );
 
   return (
     <div className="p-6 space-y-6 max-w-5xl mx-auto">
