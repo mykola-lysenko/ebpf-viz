@@ -90,7 +90,7 @@ describe("protected tRPC procedures", () => {
     });
 
     await expect(caller.ebpf.refresh()).rejects.toMatchObject({ code: "FORBIDDEN" });
-    await expect(caller.ebpf.mapEntryCounts()).rejects.toMatchObject({ code: "FORBIDDEN" });
+    await expect(caller.ebpf.mapEntryCounts({ ids: [] })).rejects.toMatchObject({ code: "FORBIDDEN" });
   });
 
   it("allows protected procedures from loopback", async () => {
@@ -99,6 +99,6 @@ describe("protected tRPC procedures", () => {
       res: {} as never,
     });
 
-    await expect(caller.ebpf.mapEntryCounts()).resolves.toEqual([]);
+    await expect(caller.ebpf.mapEntryCounts({ ids: [] })).resolves.toEqual([]);
   });
 });

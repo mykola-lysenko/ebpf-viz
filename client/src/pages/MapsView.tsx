@@ -1,4 +1,4 @@
-import { useState, useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { trpc } from "@/lib/trpc";
 import { useEbpf } from "@/contexts/EbpfContext";
 import { MAP_TYPE_META } from "../../../shared/ebpf-types";
@@ -46,6 +46,10 @@ const UNSUPPORTED_DUMP_TYPES = new Set([
   "prog_array", "devmap", "devmap_hash", "cpumap", "xskmap",
   "sockmap", "sockhash", "reuseport_sockarray",
 ]);
+
+const MAP_COUNT_PREFETCH_LIMIT = 24;
+const MAP_COUNT_CACHE_TTL_MS = 5 * 60_000;
+type EntryCountCacheValue = { count: number | null; updatedAt: number };
 
 function formatBytes(bytes: number): string {
   if (bytes === 0) return "0 B";
@@ -422,25 +426,11 @@ export default function MapsView() {
   // Maps are delivered live via the SSE stream (EbpfContext.maps).
   // In snapshot mode, maps come from the loaded snapshot file.
 
-  // Fetch live entry counts for all maps in one batch call (refreshed every 30s).
-  // Disabled in snapshot mode — map IDs from the snapshot don’t exist on the local kernel.
-  const { data: entryCounts } = trpc.ebpf.mapEntryCounts.useQuery(undefined, {
-    staleTime: 30_000,
-    refetchInterval: 30_000,
-    enabled: appMode !== "snapshot",
-  });
-  const entryCountMap = useMemo(() => {
-    const m = new Map<number, number | null>();
-    if (entryCounts) {
-      for (const { mapId, count } of entryCounts) m.set(mapId, count);
-    }
-    return m;
-  }, [entryCounts]);
-
   const [search, setSearch] = useState("");
   const [category, setCategory] = useState<string>("all");
   const [selectedMap, setSelectedMap] = useState<BpfMap | null>(null);
   const [dumpMap, setDumpMap] = useState<BpfMap | null>(null);
+  const [entryCountCache, setEntryCountCache] = useState<Map<number, EntryCountCacheValue>>(() => new Map());
 
   // Build a quick lookup of program info by id
   const progById = useMemo(() => {
@@ -471,6 +461,65 @@ export default function MapsView() {
       return true;
     });
   }, [maps, search, category]);
+
+  const countRequestIds = useMemo(() => {
+    if (appMode === "snapshot") return [];
+
+    const ids = new Set<number>();
+    const now = Date.now();
+    const isFresh = (mapId: number) => {
+      const cached = entryCountCache.get(mapId);
+      return cached !== undefined && now - cached.updatedAt < MAP_COUNT_CACHE_TTL_MS;
+    };
+
+    for (const map of filtered) {
+      if (ids.size >= MAP_COUNT_PREFETCH_LIMIT) break;
+      if (UNSUPPORTED_DUMP_TYPES.has(map.rawType)) continue;
+      if (!isFresh(map.id)) ids.add(map.id);
+    }
+
+    if (
+      selectedMap &&
+      !UNSUPPORTED_DUMP_TYPES.has(selectedMap.rawType) &&
+      !isFresh(selectedMap.id)
+    ) {
+      ids.add(selectedMap.id);
+    }
+
+    return Array.from(ids);
+  }, [appMode, entryCountCache, filtered, selectedMap]);
+
+  const { data: entryCounts } = trpc.ebpf.mapEntryCounts.useQuery(
+    { ids: countRequestIds },
+    {
+      enabled: countRequestIds.length > 0,
+      staleTime: 5 * 60_000,
+      refetchOnWindowFocus: false,
+    }
+  );
+
+  useEffect(() => {
+    if (!entryCounts?.length) return;
+    setEntryCountCache(prev => {
+      const next = new Map(prev);
+      const updatedAt = Date.now();
+      for (const { mapId, count } of entryCounts) next.set(mapId, { count, updatedAt });
+      return next;
+    });
+  }, [entryCounts]);
+
+  useEffect(() => {
+    const liveMapIds = new Set(maps.map(map => map.id));
+    setEntryCountCache(prev => {
+      let changed = false;
+      const next = new Map<number, EntryCountCacheValue>();
+      for (const [mapId, value] of Array.from(prev.entries())) {
+        if (liveMapIds.has(mapId)) next.set(mapId, value);
+        else changed = true;
+      }
+      return changed ? next : prev;
+    });
+  }, [maps]);
 
   // Stats
   const totalMemlock = useMemo(() => maps.reduce((s, m) => s + m.bytesMemlock, 0), [maps]);
@@ -579,7 +628,7 @@ export default function MapsView() {
                     e.stopPropagation();
                     setDumpMap(map);
                   }}
-                  entryCount={entryCountMap.size > 0 ? entryCountMap.get(map.id) : undefined}
+                  entryCount={entryCountCache.get(map.id)?.count}
                   isSnapshotMode={appMode === "snapshot"}
                   hasDumpData={appMode === "snapshot" && !!snapshotMapDumps[map.id]}
                 />

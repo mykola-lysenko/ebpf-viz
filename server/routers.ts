@@ -116,40 +116,43 @@ export const appRouter = router({
       }),
     // ── Map entry counts ──────────────────────────────────────────────────────────────────
     /**
-     * Returns the live entry count for every dumpable map in one batch call.
-     * Unsupported map types (ringbuf, perf_event_array, etc.) are marked with
-     * unsupported: true and count: null.
+     * Returns live entry counts for a bounded set of map IDs.
+     * Each count still requires a bpftool dump, so callers must request only
+     * maps the user is looking at instead of polling the whole system.
      */
-    mapEntryCounts: expensiveProcedure.query(async () => {
-      const maps = getLatestMaps();
-      const bpftoolPath = getBpftoolPath();
-      const sudo = isSudoEnabled();
-      const demo = isDemoMode();
+    mapEntryCounts: expensiveProcedure
+      .input(z.object({ ids: z.array(z.number().int().nonnegative()).max(32) }))
+      .query(async ({ input }) => {
+        const requestedIds = new Set(input.ids);
+        const maps = getLatestMaps().filter(map => requestedIds.has(map.id));
+        const bpftoolPath = getBpftoolPath();
+        const sudo = isSudoEnabled();
+        const demo = isDemoMode();
 
-      // Process maps in batches to avoid spawning hundreds of concurrent
-      // bpftool processes on systems with many maps (each has 20MB maxBuffer).
-      const BATCH_SIZE = 8;
-      const results: { mapId: number; count: number | null; unsupported: boolean }[] = [];
+        // Process maps in batches to avoid spawning too many concurrent
+        // bpftool processes (each has 20MB maxBuffer).
+        const BATCH_SIZE = 8;
+        const results: { mapId: number; count: number | null; unsupported: boolean }[] = [];
 
-      for (let i = 0; i < maps.length; i += BATCH_SIZE) {
-        const batch = maps.slice(i, i + BATCH_SIZE);
-        const batchResults = await Promise.all(
-          batch.map(async (map) => {
-            const result = demo
-              ? buildMockMapDump(map.id, map.rawType, map.name)
-              : await dumpMapEntries(map.id, map.rawType, map.name, bpftoolPath, sudo);
-            return {
-              mapId: map.id,
-              count: result.unsupported || result.error ? null : result.totalEntries,
-              unsupported: result.unsupported ?? false,
-            };
-          }),
-        );
-        results.push(...batchResults);
-      }
+        for (let i = 0; i < maps.length; i += BATCH_SIZE) {
+          const batch = maps.slice(i, i + BATCH_SIZE);
+          const batchResults = await Promise.all(
+            batch.map(async (map) => {
+              const result = demo
+                ? buildMockMapDump(map.id, map.rawType, map.name)
+                : await dumpMapEntries(map.id, map.rawType, map.name, bpftoolPath, sudo);
+              return {
+                mapId: map.id,
+                count: result.unsupported || result.error ? null : result.totalEntries,
+                unsupported: result.unsupported ?? false,
+              };
+            }),
+          );
+          results.push(...batchResults);
+        }
 
-      return results;
-    }),
+        return results;
+      }),
 
     // ── Code Inspector ──────────────────────────────────────────────────────────────────
     /**
