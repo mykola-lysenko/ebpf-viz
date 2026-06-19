@@ -32,20 +32,55 @@ async function run(args: string[]): Promise<{ stdout: string; stderr: string; fa
 
 // ─── Parsers ──────────────────────────────────────────────────────────────────
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
+function optionalString(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+function optionalFiniteNumber(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+function hasXlatedSourceInfo(insn: XlatedInsn): boolean {
+  return !!insn.linum || !!insn.source || !!insn.sourceFile || insn.sourceLine !== undefined;
+}
+
 /**
  * Parse `bpftool -jp prog dump xlated id N` JSON output.
- * Each element is { "disasm": "..." } and optionally { "opcodes": "..." }.
+ * Each element is { "disasm": "..." } and optionally source metadata:
+ * { "src": "...", "file": "...", "line_num": 42, "line_col": 5 }.
  */
-function parseXlatedJson(raw: string): XlatedInsn[] {
+export function parseXlatedJson(raw: string): XlatedInsn[] {
   try {
-    const arr: Array<{ disasm?: string; opcodes?: string }> = JSON.parse(raw);
+    const parsed = JSON.parse(raw) as unknown;
+    const arr = Array.isArray(parsed) ? parsed : [];
     return arr
-      .filter(e => e.disasm)
-      .map((e, idx) => ({
-        index: idx,
-        disasm: e.disasm!,
-        opcodes: e.opcodes,
-      }));
+      .filter(isRecord)
+      .filter(e => optionalString(e.disasm))
+      .map((e, idx) => {
+        const insn: XlatedInsn = {
+          index: idx,
+          disasm: optionalString(e.disasm)!,
+        };
+        const opcodes = optionalString(e.opcodes);
+        const source = optionalString(e.src);
+        const sourceFile = optionalString(e.file);
+        const sourceLine = optionalFiniteNumber(e.line_num);
+        const sourceColumn = optionalFiniteNumber(e.line_col);
+
+        if (opcodes) insn.opcodes = opcodes;
+        if (source) {
+          insn.linum = source;
+          insn.source = source;
+        }
+        if (sourceFile) insn.sourceFile = sourceFile;
+        if (sourceLine !== undefined) insn.sourceLine = sourceLine;
+        if (sourceColumn !== undefined) insn.sourceColumn = sourceColumn;
+        return insn;
+      });
   } catch {
     return [];
   }
@@ -81,6 +116,7 @@ function parseXlatedLinum(raw: string): XlatedInsn[] {
         index: idx++,
         disasm: m[2],
         linum: pendingLinum,
+        source: pendingLinum,
       });
       pendingLinum = undefined;
     }
@@ -95,10 +131,6 @@ interface JitedJsonInsn {
   opcodes?: unknown;
   operation?: unknown;
   operands?: unknown;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null;
 }
 
 function collectJitedJsonInsns(parsed: unknown): JitedJsonInsn[] {
@@ -242,8 +274,8 @@ export async function fetchProgDump(progId: number, hasBtf: boolean, isJited: bo
     // Try linum first — gives us file:line source annotations (richest output)
     const linumResult = await run(["-jp", "prog", "dump", "xlated", "id", String(progId), "linum"]);
     if (!linumResult.failed && linumResult.stdout.trim()) {
-      xlated = parseXlatedLinum(linumResult.stdout);
-      hasLineInfo = xlated.some(i => i.linum !== undefined);
+      xlated = parseXlatedJson(linumResult.stdout);
+      hasLineInfo = xlated.some(hasXlatedSourceInfo);
     }
   }
 
@@ -255,6 +287,7 @@ export async function fetchProgDump(progId: number, hasBtf: boolean, isJited: bo
       xlatedError = xlatedResult.stderr.trim();
     } else {
       xlated = parseXlatedJson(xlatedResult.stdout);
+      hasLineInfo = xlated.some(hasXlatedSourceInfo);
     }
   }
 

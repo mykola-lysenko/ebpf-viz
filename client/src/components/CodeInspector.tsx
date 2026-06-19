@@ -417,6 +417,22 @@ function JitTab({ insns, unavailableReason }: { insns: JitedInsn[] | null; unava
 
 // ─── C Source tab ─────────────────────────────────────────────────────────────
 
+interface SourceLine {
+  key: string;
+  source: string;
+  location?: string;
+}
+
+function formatSourceLocation(insn: XlatedInsn): string | undefined {
+  if (!insn.sourceFile && insn.sourceLine === undefined) return undefined;
+
+  const file = insn.sourceFile ?? "<unknown>";
+  if (insn.sourceLine === undefined) return file;
+  return insn.sourceColumn === undefined
+    ? `${file}:${insn.sourceLine}`
+    : `${file}:${insn.sourceLine}:${insn.sourceColumn}`;
+}
+
 function SourceTab({ insns, hasLineInfo }: { insns: XlatedInsn[]; hasLineInfo: boolean }) {
   if (!hasLineInfo) {
     return (
@@ -443,12 +459,17 @@ function SourceTab({ insns, hasLineInfo }: { insns: XlatedInsn[]; hasLineInfo: b
   }
 
   // Extract unique source lines in order of appearance
-  const sourceLines: string[] = [];
+  const sourceLines: SourceLine[] = [];
   const seen = new Set<string>();
   for (const insn of insns) {
-    if (insn.linum && !seen.has(insn.linum)) {
-      seen.add(insn.linum);
-      sourceLines.push(insn.linum);
+    const source = insn.source ?? insn.linum;
+    if (!source) continue;
+
+    const location = formatSourceLocation(insn);
+    const key = `${location ?? ""}\0${source}`;
+    if (!seen.has(key)) {
+      seen.add(key);
+      sourceLines.push({ key, source, location });
     }
   }
 
@@ -464,11 +485,16 @@ function SourceTab({ insns, hasLineInfo }: { insns: XlatedInsn[]; hasLineInfo: b
       <div className="flex-1 overflow-auto font-mono text-sm leading-relaxed p-4">
         {sourceLines.map((line, idx) => (
           <div
-            key={idx}
+            key={line.key}
             className="py-0.5 flex gap-3 hover:bg-white/[0.03] transition-colors rounded px-2"
           >
             <span className="text-slate-600 select-none w-8 text-right shrink-0">{idx + 1}</span>
-            <span className="text-emerald-400/90">{line}</span>
+            <div className="min-w-0">
+              {line.location && (
+                <div className="text-[11px] leading-4 text-slate-500 truncate">{line.location}</div>
+              )}
+              <div className="text-emerald-400/90 whitespace-pre-wrap">{line.source}</div>
+            </div>
           </div>
         ))}
       </div>

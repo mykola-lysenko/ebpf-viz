@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { parseJitedJson, parseJitedText } from "./ebpf-dump";
+import { parseJitedJson, parseJitedText, parseXlatedJson } from "./ebpf-dump";
 
 // ─── Unit tests for the dump module helpers ────────────────────────────────
 // We test the pure parsing logic without calling bpftool (which requires root).
@@ -111,6 +111,40 @@ describe("extractJumpTarget", () => {
 
   it("returns null for non-jump", () => {
     expect(extractJumpTarget("(61) r2 = *(u32 *)(r1 +0)")).toBeNull();
+  });
+});
+
+describe("parseXlatedJson", () => {
+  it("parses bpftool linum JSON source metadata", () => {
+    const result = parseXlatedJson(JSON.stringify([
+      {
+        proto: "int bpfj_fs_file_open(unsigned long long * ctx)",
+        src: "int BPF_PROG(bpfj_fs_file_open, struct file* file) {",
+        file: "./././fs_enforce.bpf.c",
+        line_num: 966,
+        line_col: 5,
+        disasm: "(79) r7 = *(u64 *)(r1 +0)",
+      },
+      {
+        disasm: "(7b) *(u64 *)(r10 -24) = r0",
+      },
+    ]));
+
+    expect(result).toEqual([
+      {
+        index: 0,
+        disasm: "(79) r7 = *(u64 *)(r1 +0)",
+        linum: "int BPF_PROG(bpfj_fs_file_open, struct file* file) {",
+        source: "int BPF_PROG(bpfj_fs_file_open, struct file* file) {",
+        sourceFile: "./././fs_enforce.bpf.c",
+        sourceLine: 966,
+        sourceColumn: 5,
+      },
+      {
+        index: 1,
+        disasm: "(7b) *(u64 *)(r10 -24) = r0",
+      },
+    ]);
   });
 });
 

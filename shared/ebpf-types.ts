@@ -313,8 +313,16 @@ export interface XlatedInsn {
   index: number;
   disasm: string;
   opcodes?: string;
-  /** Source file:line annotation from BTF linum info, e.g. "kernel/bpf/core.c:42" */
+  /** Human-readable source annotation from BTF line info. */
   linum?: string;
+  /** Source statement associated with this instruction, when bpftool returns it. */
+  source?: string;
+  /** Source file associated with this instruction, when available. */
+  sourceFile?: string;
+  /** 1-based source line number, when available. */
+  sourceLine?: number;
+  /** 1-based source column number, when available. */
+  sourceColumn?: number;
 }
 
 /** A single JIT-compiled native instruction */
