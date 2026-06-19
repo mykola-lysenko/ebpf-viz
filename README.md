@@ -275,6 +275,10 @@ pnpm lint
 
 # Build standalone tarball
 bash build-standalone.sh
+
+# Build, deploy to a dev VM, restart the app, and open an SSH tunnel.
+# Use bash directly because pnpm 10 requires Node >= 18 to start.
+bash scripts/devvm-standalone.sh user@devvm.example.com
 ```
 
 ### Project Structure
