@@ -3,8 +3,10 @@ import type {
   PacketChainPrediction,
   PacketProgramPrediction,
   PacketVerdict,
+  PacketVerdictExplanation,
   ProgramChain,
   XlatedReturnAnalysis,
+  XlatedReturnExit,
 } from "./ebpf-types";
 
 type AnalysisLookup = (
@@ -110,6 +112,138 @@ function sideEffectTitle(
     visible.push(`+${effects.length - visible.length} more`);
   }
   return visible.join("; ");
+}
+
+function verdictAction(verdict: PacketVerdict): string {
+  if (verdict === "drop") return "Can drop";
+  if (verdict === "redirect") return "Can redirect";
+  if (verdict === "pass") return "Can pass";
+  if (verdict === "other") return "Can take another hook-specific action";
+  return "Returns an unmodeled value";
+}
+
+function sourceText(
+  evidence: Pick<
+    XlatedReturnExit,
+    "source" | "sourceFile" | "sourceLine" | "sourceColumn"
+  >
+): string | undefined {
+  const parts: string[] = [];
+  if (evidence.sourceFile) {
+    parts.push(
+      evidence.sourceLine
+        ? `${evidence.sourceFile}:${evidence.sourceLine}`
+        : evidence.sourceFile
+    );
+  }
+  if (evidence.source) {
+    parts.push(evidence.source);
+  }
+  return parts.length > 0 ? parts.join(" - ") : undefined;
+}
+
+function finishSentence(text: string): string {
+  return /[.!?;]$/.test(text.trim()) ? text : `${text}.`;
+}
+
+function branchConditionText(exit: XlatedReturnExit): string | undefined {
+  const branch = exit.branchEvidence?.at(-1);
+  if (!branch) return undefined;
+
+  const branchText = branch.source
+    ? `"${branch.source}"`
+    : `branch at insn ${branch.insnIndex}`;
+  if (branch.branch === "taken") return `${branchText} is taken`;
+  if (branch.branch === "fallthrough") return `${branchText} falls through`;
+  return branchText;
+}
+
+function constantExitExplanation(
+  exit: XlatedReturnExit,
+  semantics: PacketActionSemantics
+): PacketVerdictExplanation | null {
+  if (exit.value === undefined) return null;
+
+  const verdict = classifyPacketReturnConstant(exit.value, semantics);
+  const condition = branchConditionText(exit);
+  const source = sourceText(exit);
+  const location = source ? ` from ${source}` : "";
+  const conditionText = condition ? ` when ${condition}` : "";
+
+  return {
+    verdict,
+    summary: finishSentence(
+      `${verdictAction(verdict)} with return ${exit.value} at exit ${exit.exitIndex}${conditionText}${location}`
+    ),
+    exitIndex: exit.exitIndex,
+    returnValue: exit.value,
+    source: exit.source,
+    sourceFile: exit.sourceFile,
+    sourceLine: exit.sourceLine,
+    sourceColumn: exit.sourceColumn,
+    branchEvidence: exit.branchEvidence,
+  };
+}
+
+function unknownExitExplanation(
+  exit: XlatedReturnExit
+): PacketVerdictExplanation {
+  const source = sourceText(exit);
+  const location = source ? ` from ${source}` : "";
+  const reason = exit.reason ?? "unknown";
+
+  return {
+    verdict: "unknown",
+    summary: finishSentence(
+      `May return a runtime-dependent verdict at exit ${exit.exitIndex} (${reason})${location}`
+    ),
+    exitIndex: exit.exitIndex,
+    source: exit.source,
+    sourceFile: exit.sourceFile,
+    sourceLine: exit.sourceLine,
+    sourceColumn: exit.sourceColumn,
+    branchEvidence: exit.branchEvidence,
+  };
+}
+
+function buildVerdictExplanations(
+  analysis: XlatedReturnAnalysis | null | undefined,
+  semantics: PacketActionSemantics
+): PacketVerdictExplanation[] {
+  if (!analysis) {
+    return [
+      {
+        verdict: "unknown",
+        summary: "No return analysis is available for this program.",
+      },
+    ];
+  }
+  if (analysis.exitCount === 0) {
+    return [
+      {
+        verdict: "unknown",
+        summary: "No reachable BPF exit instructions were found.",
+      },
+    ];
+  }
+
+  const explanations = analysis.constantExits
+    .map(exit => constantExitExplanation(exit, semantics))
+    .filter(
+      (explanation): explanation is PacketVerdictExplanation =>
+        explanation !== null
+    );
+
+  explanations.push(...analysis.unknownExits.map(unknownExitExplanation));
+
+  if (analysis.hasTailCalls) {
+    explanations.push({
+      verdict: "unknown",
+      summary: `Tail calls at instruction(s) ${analysis.tailCallIndices.join(", ")} can transfer the final verdict to another program.`,
+    });
+  }
+
+  return explanations;
 }
 
 function analyzeProgramVerdicts(
@@ -244,6 +378,7 @@ export function predictPacketChain(
       label: verdictLabel(verdicts, programHasUnknown),
       tone: verdictTone(verdicts, programHasUnknown),
       title: verdictTitle(analysis),
+      verdictExplanations: buildVerdictExplanations(analysis, semantics),
       reachability,
       canTerminateChain,
       definitelyTerminatesChain,

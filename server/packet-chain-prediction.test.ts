@@ -139,6 +139,59 @@ describe("predictPacketChain", () => {
     ]);
   });
 
+  it("explains packet verdicts with source and branch evidence", () => {
+    const firstProgram = returnAnalysis([0, 2]);
+    firstProgram.constantExits[1] = {
+      ...firstProgram.constantExits[1],
+      exitIndex: 9,
+      source: "return TC_ACT_SHOT;",
+      branchEvidence: [
+        {
+          insnIndex: 4,
+          disasm: "(15) if r1 == 0x0 goto pc+4",
+          targetIndex: 8,
+          branch: "taken",
+          source: "if (blocked)",
+          sourceFile: "prog.bpf.c",
+          sourceLine: 12,
+        },
+      ],
+    };
+
+    const analyses = new Map([
+      [1, firstProgram],
+      [2, returnAnalysis([0])],
+      [3, returnAnalysis([0])],
+    ]);
+
+    const prediction = predictPacketChain(tcChain(), id => analyses.get(id));
+
+    expect(prediction?.steps[0].verdictExplanations).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          verdict: "pass",
+          summary: "Can pass with return 0 at exit 0.",
+          exitIndex: 0,
+          returnValue: 0,
+        }),
+        expect.objectContaining({
+          verdict: "drop",
+          summary:
+            'Can drop with return 2 at exit 9 when "if (blocked)" is taken from return TC_ACT_SHOT;',
+          exitIndex: 9,
+          returnValue: 2,
+          branchEvidence: [
+            expect.objectContaining({
+              insnIndex: 4,
+              branch: "taken",
+              source: "if (blocked)",
+            }),
+          ],
+        }),
+      ])
+    );
+  });
+
   it("marks later programs not reached when an earlier program always drops", () => {
     const analyses = new Map([
       [1, returnAnalysis([0])],

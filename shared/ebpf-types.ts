@@ -268,6 +268,7 @@ export interface PacketProgramPrediction {
   label: string;
   tone: PacketVerdict;
   title: string;
+  verdictExplanations: PacketVerdictExplanation[];
   reachability: PacketChainReachability;
   canTerminateChain: boolean;
   definitelyTerminatesChain: boolean;
@@ -275,6 +276,18 @@ export interface PacketProgramPrediction {
   hasSideEffects: boolean;
   sideEffectLabels: string[];
   sideEffectTitle?: string;
+}
+
+export interface PacketVerdictExplanation {
+  verdict: PacketVerdict;
+  summary: string;
+  exitIndex?: number;
+  returnValue?: number;
+  source?: string;
+  sourceFile?: string;
+  sourceLine?: number;
+  sourceColumn?: number;
+  branchEvidence?: XlatedBranchEvidence[];
 }
 
 export interface PacketChainPrediction {

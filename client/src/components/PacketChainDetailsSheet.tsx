@@ -22,6 +22,7 @@ import type {
   BpfProgram,
   PacketChainPrediction,
   PacketProgramPrediction,
+  PacketVerdictExplanation,
   PacketVerdict,
   ProgramChain,
   ProgramReturnAnalysisResult,
@@ -93,6 +94,44 @@ function formatConfidence(prediction: PacketChainPrediction): string {
 
 function EmptyLine({ children }: { children: ReactNode }) {
   return <div className="text-[11px] text-muted-foreground/60">{children}</div>;
+}
+
+function VerdictExplanations({
+  explanations,
+}: {
+  explanations: PacketVerdictExplanation[];
+}) {
+  if (explanations.length === 0) {
+    return <EmptyLine>No verdict explanations available.</EmptyLine>;
+  }
+
+  return (
+    <div className="space-y-1">
+      {explanations.slice(0, 8).map((explanation, index) => (
+        <div
+          key={`${explanation.verdict}-${explanation.exitIndex ?? index}-${explanation.returnValue ?? "unknown"}`}
+          className={cn(
+            "rounded border px-2 py-1.5",
+            VERDICT_TONE_CLASSES[explanation.verdict]
+          )}
+        >
+          <div className="text-[11px] leading-relaxed">
+            {explanation.summary}
+          </div>
+          {explanation.branchEvidence &&
+            explanation.branchEvidence.length > 0 && (
+              <div className="mt-1 text-[10px] text-current/70">
+                Path uses {explanation.branchEvidence.length} resolved branch
+                {explanation.branchEvidence.length === 1 ? "" : "es"}.
+              </div>
+            )}
+        </div>
+      ))}
+      {explanations.length > 8 && (
+        <EmptyLine>+{explanations.length - 8} more explanations.</EmptyLine>
+      )}
+    </div>
+  );
 }
 
 function ReturnEvidence({
@@ -268,6 +307,13 @@ function StepDetails({
           Analysis unavailable: {analysisResult.error}
         </div>
       )}
+
+      <div className="mt-3">
+        <div className="mb-1 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+          Verdict Explanation
+        </div>
+        <VerdictExplanations explanations={step.verdictExplanations} />
+      </div>
 
       {analysis && (
         <div className="mt-3 space-y-3">
