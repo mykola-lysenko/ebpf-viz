@@ -1,5 +1,6 @@
 import React, { useState, useMemo } from "react";
 import { useEbpf } from "@/contexts/EbpfContext";
+import { PacketChainDetailsSheet } from "@/components/PacketChainDetailsSheet";
 import { ProgBadge } from "@/components/ProgBadge";
 import {
   Network,
@@ -16,6 +17,7 @@ import { predictPacketChain } from "../../../shared/packet-chain-prediction";
 import type {
   BpfProgram,
   NetworkInterface,
+  PacketChainPrediction,
   PacketVerdict,
   ProgramChain,
   ProgramReturnAnalysisResult,
@@ -144,6 +146,11 @@ function OsiLayerRow({
 }) {
   const { historyMap } = useEbpf();
   const hasProgs = programs.length > 0;
+  const [selectedChainDetails, setSelectedChainDetails] = useState<{
+    chain: ProgramChain;
+    prediction: PacketChainPrediction;
+    programs: BpfProgram[];
+  } | null>(null);
 
   // Build a position map from all relevant chains: progId → { position, chain }
   const positionMap = useMemo(() => {
@@ -187,265 +194,292 @@ function OsiLayerRow({
   }, [programs, positionMap]);
 
   return (
-    <div className={cn("osi-layer", hasProgs && "has-progs")}>
-      <div
-        className="w-16 shrink-0 text-center"
-        style={{ color: layerDef.color }}
-      >
-        <div className="text-xs font-bold font-mono">{layerDef.key}</div>
-        <div className="text-[10px] text-muted-foreground mt-0.5 leading-tight">
-          {layerDef.sublabel}
+    <>
+      <div className={cn("osi-layer", hasProgs && "has-progs")}>
+        <div
+          className="w-16 shrink-0 text-center"
+          style={{ color: layerDef.color }}
+        >
+          <div className="text-xs font-bold font-mono">{layerDef.key}</div>
+          <div className="text-[10px] text-muted-foreground mt-0.5 leading-tight">
+            {layerDef.sublabel}
+          </div>
         </div>
-      </div>
-      <div
-        className="w-px self-stretch shrink-0"
-        style={{ background: `${layerDef.color}30` }}
-      />
-      <div className="flex-1 min-w-0">
-        <div className="text-xs text-muted-foreground mb-1">
-          {layerDef.description}
-        </div>
-        {hasProgs ? (
-          <div className="space-y-2">
-            {/* Chain groups — programs shown in execution order */}
-            {chainGroups.map(({ chain, progs }) => {
-              const hasAnyAnalysis = chain.programs.some(program =>
-                returnAnalysisById.has(program.id)
-              );
-              const prediction =
-                chain.packetContext &&
-                (hasAnyAnalysis || !returnAnalysisLoading)
-                  ? predictPacketChain(
-                      chain,
-                      progId => returnAnalysisById.get(progId)?.returnAnalysis
-                    )
-                  : null;
-              const predictionStepsById = new Map(
-                prediction?.steps.map(step => [step.progId, step]) ?? []
-              );
-              const firstTerminal = prediction?.firstTerminalPrograms[0];
+        <div
+          className="w-px self-stretch shrink-0"
+          style={{ background: `${layerDef.color}30` }}
+        />
+        <div className="flex-1 min-w-0">
+          <div className="text-xs text-muted-foreground mb-1">
+            {layerDef.description}
+          </div>
+          {hasProgs ? (
+            <div className="space-y-2">
+              {/* Chain groups — programs shown in execution order */}
+              {chainGroups.map(({ chain, progs }) => {
+                const hasAnyAnalysis = chain.programs.some(program =>
+                  returnAnalysisById.has(program.id)
+                );
+                const prediction =
+                  chain.packetContext &&
+                  (hasAnyAnalysis || !returnAnalysisLoading)
+                    ? predictPacketChain(
+                        chain,
+                        progId => returnAnalysisById.get(progId)?.returnAnalysis
+                      )
+                    : null;
+                const predictionStepsById = new Map(
+                  prediction?.steps.map(step => [step.progId, step]) ?? []
+                );
+                const firstTerminal = prediction?.firstTerminalPrograms[0];
 
-              return (
-                <div key={chain.hookId}>
-                  <div className="flex items-center gap-1.5 mb-1">
-                    <span className="text-[10px] text-muted-foreground/70 font-mono">
-                      {chain.attachType}
-                    </span>
-                    <span className="text-[9px] text-muted-foreground/50">
-                      chain of {chain.programs.length}
-                    </span>
-                    {chain.canShortCircuit && (
-                      <span className="text-[9px] text-amber-400/70 flex items-center gap-0.5">
-                        <AlertTriangle size={8} />
-                        can short-circuit
+                return (
+                  <div key={chain.hookId}>
+                    <div className="flex items-center gap-1.5 mb-1">
+                      <span className="text-[10px] text-muted-foreground/70 font-mono">
+                        {chain.attachType}
                       </span>
-                    )}
-                  </div>
-                  {chain.packetContext && (
-                    <div
-                      className="mb-1 ml-1 flex flex-wrap items-center gap-1.5 text-[9px] font-mono text-muted-foreground/70"
-                      title={chain.packetContext.summary}
-                    >
-                      <span className="rounded border border-border/60 px-1 py-0.5 text-muted-foreground">
-                        {chain.packetContext.family}
-                        {chain.packetContext.direction !== "unknown" &&
-                          `/${chain.packetContext.direction}`}
+                      <span className="text-[9px] text-muted-foreground/50">
+                        chain of {chain.programs.length}
                       </span>
-                      <span className="rounded border border-emerald-500/25 bg-emerald-500/5 px-1 py-0.5 text-emerald-400/80">
-                        pass:{" "}
-                        {formatActions(chain.packetContext.semantics.pass)}
-                      </span>
-                      <span className="rounded border border-red-500/25 bg-red-500/5 px-1 py-0.5 text-red-400/80">
-                        drop:{" "}
-                        {formatActions(chain.packetContext.semantics.drop)}
-                      </span>
-                      {chain.packetContext.semantics.redirect.length > 0 && (
-                        <span className="rounded border border-cyan-500/25 bg-cyan-500/5 px-1 py-0.5 text-cyan-400/80">
-                          redirect:{" "}
-                          {formatActions(
-                            chain.packetContext.semantics.redirect
-                          )}
+                      {chain.canShortCircuit && (
+                        <span className="text-[9px] text-amber-400/70 flex items-center gap-0.5">
+                          <AlertTriangle size={8} />
+                          can short-circuit
                         </span>
                       )}
                     </div>
-                  )}
-                  {chain.packetContext && (
-                    <div className="mb-1.5 ml-1">
-                      {prediction ? (
-                        <div
-                          className={cn(
-                            "rounded border px-2 py-1 text-[10px] leading-snug",
-                            VERDICT_TONE_CLASSES[
-                              chainTone(
-                                prediction.possibleOutcomes,
-                                prediction.hasUnknownBehavior
-                              )
-                            ]
-                          )}
-                          title={
-                            firstTerminal
-                              ? `First program that may alter normal chain flow: #${firstTerminal.position} ${firstTerminal.name}. Confidence: ${prediction.confidence}.`
-                              : `Confidence: ${prediction.confidence}.`
-                          }
-                        >
-                          <span className="font-medium">
-                            {prediction.summary}
+                    {chain.packetContext && (
+                      <div
+                        className="mb-1 ml-1 flex flex-wrap items-center gap-1.5 text-[9px] font-mono text-muted-foreground/70"
+                        title={chain.packetContext.summary}
+                      >
+                        <span className="rounded border border-border/60 px-1 py-0.5 text-muted-foreground">
+                          {chain.packetContext.family}
+                          {chain.packetContext.direction !== "unknown" &&
+                            `/${chain.packetContext.direction}`}
+                        </span>
+                        <span className="rounded border border-emerald-500/25 bg-emerald-500/5 px-1 py-0.5 text-emerald-400/80">
+                          pass:{" "}
+                          {formatActions(chain.packetContext.semantics.pass)}
+                        </span>
+                        <span className="rounded border border-red-500/25 bg-red-500/5 px-1 py-0.5 text-red-400/80">
+                          drop:{" "}
+                          {formatActions(chain.packetContext.semantics.drop)}
+                        </span>
+                        {chain.packetContext.semantics.redirect.length > 0 && (
+                          <span className="rounded border border-cyan-500/25 bg-cyan-500/5 px-1 py-0.5 text-cyan-400/80">
+                            redirect:{" "}
+                            {formatActions(
+                              chain.packetContext.semantics.redirect
+                            )}
                           </span>
-                          <span className="ml-1 opacity-75">
-                            confidence: {prediction.confidence}
-                          </span>
-                          {firstTerminal && (
+                        )}
+                      </div>
+                    )}
+                    {chain.packetContext && (
+                      <div className="mb-1.5 ml-1">
+                        {prediction ? (
+                          <button
+                            type="button"
+                            className={cn(
+                              "w-full rounded border px-2 py-1 text-left text-[10px] leading-snug transition-colors hover:bg-accent/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50",
+                              VERDICT_TONE_CLASSES[
+                                chainTone(
+                                  prediction.possibleOutcomes,
+                                  prediction.hasUnknownBehavior
+                                )
+                              ]
+                            )}
+                            title={
+                              firstTerminal
+                                ? `First program that may alter normal chain flow: #${firstTerminal.position} ${firstTerminal.name}. Confidence: ${prediction.confidence}.`
+                                : `Confidence: ${prediction.confidence}.`
+                            }
+                            onClick={() =>
+                              setSelectedChainDetails({
+                                chain,
+                                prediction,
+                                programs: progs,
+                              })
+                            }
+                          >
+                            <span className="font-medium">
+                              {prediction.summary}
+                            </span>
                             <span className="ml-1 opacity-75">
-                              first possible stop: #{firstTerminal.position}{" "}
-                              {firstTerminal.name}
+                              confidence: {prediction.confidence}
                             </span>
-                          )}
-                        </div>
-                      ) : (
-                        <div className="rounded border border-border/60 px-2 py-1 text-[10px] text-muted-foreground/60">
-                          Predicting packet path…
-                        </div>
-                      )}
-                    </div>
-                  )}
-                  <div className="space-y-0.5 ml-1">
-                    {progs.map((p, pIdx) => {
-                      const pos = positionMap.get(p.id)?.position;
-                      const predictionStep = predictionStepsById.get(p.id);
-                      // Drop indicator: compare live rates, not cumulative run_cnt
-                      const currRate = historyMap.get(p.id)?.latest
-                        ?.callsPerSec;
-                      const prevRate =
-                        chain.canShortCircuit && pIdx > 0
-                          ? historyMap.get(progs[pIdx - 1].id)?.latest
-                              ?.callsPerSec
-                          : undefined;
-                      const dropInfo = classifyRateDrop(prevRate, currRate);
-                      return (
-                        <React.Fragment key={p.id}>
-                          {dropInfo && (
-                            <div
-                              className="flex items-center gap-1 ml-5 text-[9px] font-mono py-0.5"
-                              style={{ color: dropInfo.color }}
-                            >
-                              <AlertTriangle size={8} />
-                              {dropInfo.label} (live rate)
-                            </div>
-                          )}
-                          <div className="flex items-center gap-1.5 flex-wrap">
-                            {pos != null && (
-                              <span
-                                className="w-4 h-4 rounded-full flex items-center justify-center text-[9px] font-bold shrink-0"
-                                style={{
-                                  background: `${p.color}20`,
-                                  border: `1.5px solid ${p.color}`,
-                                  color: p.color,
-                                }}
-                              >
-                                {pos}
+                            {firstTerminal && (
+                              <span className="ml-1 opacity-75">
+                                first possible stop: #{firstTerminal.position}{" "}
+                                {firstTerminal.name}
                               </span>
                             )}
-                            <ProgBadge program={p} />
-                            {predictionStep && (
-                              <span
-                                className={cn(
-                                  "rounded border px-1.5 py-0.5 text-[9px] font-mono",
-                                  VERDICT_TONE_CLASSES[predictionStep.tone]
-                                )}
-                                title={predictionStep.title}
-                              >
-                                {predictionStep.label}
-                              </span>
-                            )}
-                            {predictionStep?.hasSideEffects && (
-                              <span
-                                className="rounded border border-cyan-500/25 bg-cyan-500/5 px-1.5 py-0.5 text-[9px] font-mono text-cyan-300/80"
-                                title={predictionStep.sideEffectTitle}
-                              >
-                                effects:{" "}
-                                {formatActions(predictionStep.sideEffectLabels)}
-                              </span>
-                            )}
-                            {predictionStep?.reachability === "conditional" && (
-                              <span
-                                className="rounded border border-amber-500/25 bg-amber-500/5 px-1.5 py-0.5 text-[9px] font-mono text-amber-300/80"
-                                title="An earlier program may terminate packet processing before this program runs."
-                              >
-                                conditional
-                              </span>
-                            )}
-                            {predictionStep?.reachability === "not-reached" && (
-                              <span
-                                className="rounded border border-slate-500/25 bg-slate-500/5 px-1.5 py-0.5 text-[9px] font-mono text-slate-300/80"
-                                title="An earlier analyzed program always terminates normal chain flow before this program."
-                              >
-                                not reached
-                              </span>
-                            )}
-                            {chain.packetContext &&
-                              !predictionStep &&
-                              (() => {
-                                const result = returnAnalysisById.get(p.id);
-                                if (returnAnalysisLoading && !result) {
-                                  return (
-                                    <span className="rounded border border-border/60 px-1.5 py-0.5 text-[9px] font-mono text-muted-foreground/60">
-                                      analyzing
-                                    </span>
-                                  );
-                                }
-                                if (result?.error) {
-                                  return (
-                                    <span
-                                      className="rounded border border-amber-500/25 bg-amber-500/5 px-1.5 py-0.5 text-[9px] font-mono text-amber-300/80"
-                                      title={result.error}
-                                    >
-                                      analysis unavailable
-                                    </span>
-                                  );
-                                }
-                                return null;
-                              })()}
-                            <span className="text-[9px] font-mono text-muted-foreground/50 tabular-nums shrink-0">
-                              {p.runCnt != null &&
-                                `${formatRunCnt(p.runCnt)} total`}
-                              {p.loadedAt > 0 &&
-                                ` · loaded ${formatAge(p.loadedAt)}`}
+                            <span className="ml-1 opacity-60">
+                              click for details
                             </span>
+                          </button>
+                        ) : (
+                          <div className="rounded border border-border/60 px-2 py-1 text-[10px] text-muted-foreground/60">
+                            Predicting packet path…
                           </div>
-                        </React.Fragment>
-                      );
-                    })}
+                        )}
+                      </div>
+                    )}
+                    <div className="space-y-0.5 ml-1">
+                      {progs.map((p, pIdx) => {
+                        const pos = positionMap.get(p.id)?.position;
+                        const predictionStep = predictionStepsById.get(p.id);
+                        // Drop indicator: compare live rates, not cumulative run_cnt
+                        const currRate = historyMap.get(p.id)?.latest
+                          ?.callsPerSec;
+                        const prevRate =
+                          chain.canShortCircuit && pIdx > 0
+                            ? historyMap.get(progs[pIdx - 1].id)?.latest
+                                ?.callsPerSec
+                            : undefined;
+                        const dropInfo = classifyRateDrop(prevRate, currRate);
+                        return (
+                          <React.Fragment key={p.id}>
+                            {dropInfo && (
+                              <div
+                                className="flex items-center gap-1 ml-5 text-[9px] font-mono py-0.5"
+                                style={{ color: dropInfo.color }}
+                              >
+                                <AlertTriangle size={8} />
+                                {dropInfo.label} (live rate)
+                              </div>
+                            )}
+                            <div className="flex items-center gap-1.5 flex-wrap">
+                              {pos != null && (
+                                <span
+                                  className="w-4 h-4 rounded-full flex items-center justify-center text-[9px] font-bold shrink-0"
+                                  style={{
+                                    background: `${p.color}20`,
+                                    border: `1.5px solid ${p.color}`,
+                                    color: p.color,
+                                  }}
+                                >
+                                  {pos}
+                                </span>
+                              )}
+                              <ProgBadge program={p} />
+                              {predictionStep && (
+                                <span
+                                  className={cn(
+                                    "rounded border px-1.5 py-0.5 text-[9px] font-mono",
+                                    VERDICT_TONE_CLASSES[predictionStep.tone]
+                                  )}
+                                  title={predictionStep.title}
+                                >
+                                  {predictionStep.label}
+                                </span>
+                              )}
+                              {predictionStep?.hasSideEffects && (
+                                <span
+                                  className="rounded border border-cyan-500/25 bg-cyan-500/5 px-1.5 py-0.5 text-[9px] font-mono text-cyan-300/80"
+                                  title={predictionStep.sideEffectTitle}
+                                >
+                                  effects:{" "}
+                                  {formatActions(
+                                    predictionStep.sideEffectLabels
+                                  )}
+                                </span>
+                              )}
+                              {predictionStep?.reachability ===
+                                "conditional" && (
+                                <span
+                                  className="rounded border border-amber-500/25 bg-amber-500/5 px-1.5 py-0.5 text-[9px] font-mono text-amber-300/80"
+                                  title="An earlier program may terminate packet processing before this program runs."
+                                >
+                                  conditional
+                                </span>
+                              )}
+                              {predictionStep?.reachability ===
+                                "not-reached" && (
+                                <span
+                                  className="rounded border border-slate-500/25 bg-slate-500/5 px-1.5 py-0.5 text-[9px] font-mono text-slate-300/80"
+                                  title="An earlier analyzed program always terminates normal chain flow before this program."
+                                >
+                                  not reached
+                                </span>
+                              )}
+                              {chain.packetContext &&
+                                !predictionStep &&
+                                (() => {
+                                  const result = returnAnalysisById.get(p.id);
+                                  if (returnAnalysisLoading && !result) {
+                                    return (
+                                      <span className="rounded border border-border/60 px-1.5 py-0.5 text-[9px] font-mono text-muted-foreground/60">
+                                        analyzing
+                                      </span>
+                                    );
+                                  }
+                                  if (result?.error) {
+                                    return (
+                                      <span
+                                        className="rounded border border-amber-500/25 bg-amber-500/5 px-1.5 py-0.5 text-[9px] font-mono text-amber-300/80"
+                                        title={result.error}
+                                      >
+                                        analysis unavailable
+                                      </span>
+                                    );
+                                  }
+                                  return null;
+                                })()}
+                              <span className="text-[9px] font-mono text-muted-foreground/50 tabular-nums shrink-0">
+                                {p.runCnt != null &&
+                                  `${formatRunCnt(p.runCnt)} total`}
+                                {p.loadedAt > 0 &&
+                                  ` · loaded ${formatAge(p.loadedAt)}`}
+                              </span>
+                            </div>
+                          </React.Fragment>
+                        );
+                      })}
+                    </div>
                   </div>
+                );
+              })}
+              {/* Unchained programs */}
+              {unchained.length > 0 && (
+                <div className="flex flex-wrap gap-1.5">
+                  {unchained.map(p => (
+                    <ProgBadge key={p.id} program={p} />
+                  ))}
                 </div>
-              );
-            })}
-            {/* Unchained programs */}
-            {unchained.length > 0 && (
-              <div className="flex flex-wrap gap-1.5">
-                {unchained.map(p => (
-                  <ProgBadge key={p.id} program={p} />
-                ))}
-              </div>
-            )}
-          </div>
-        ) : (
-          <span className="text-xs text-muted-foreground/50 italic">
-            No programs attached
-          </span>
-        )}
+              )}
+            </div>
+          ) : (
+            <span className="text-xs text-muted-foreground/50 italic">
+              No programs attached
+            </span>
+          )}
+        </div>
+        <Badge
+          variant="outline"
+          className="text-[10px] px-1.5 py-0 shrink-0 self-start"
+          style={
+            hasProgs
+              ? { borderColor: `${layerDef.color}50`, color: layerDef.color }
+              : {}
+          }
+        >
+          {programs.length}
+        </Badge>
       </div>
-      <Badge
-        variant="outline"
-        className="text-[10px] px-1.5 py-0 shrink-0 self-start"
-        style={
-          hasProgs
-            ? { borderColor: `${layerDef.color}50`, color: layerDef.color }
-            : {}
-        }
-      >
-        {programs.length}
-      </Badge>
-    </div>
+      <PacketChainDetailsSheet
+        open={selectedChainDetails !== null}
+        onOpenChange={open => {
+          if (!open) setSelectedChainDetails(null);
+        }}
+        chain={selectedChainDetails?.chain ?? null}
+        prediction={selectedChainDetails?.prediction ?? null}
+        programs={selectedChainDetails?.programs ?? []}
+        returnAnalysisById={returnAnalysisById}
+      />
+    </>
   );
 }
 
