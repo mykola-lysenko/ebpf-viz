@@ -49,6 +49,12 @@ function hasXlatedSourceInfo(insn: XlatedInsn): boolean {
   return !!insn.linum || !!insn.source || !!insn.sourceFile || insn.sourceLine !== undefined;
 }
 
+function xlatedInsnWidth(disasm: string): number {
+  // BPF_LD | BPF_DW | BPF_IMM consumes two BPF instruction slots. bpftool
+  // JSON emits it as one object, but branch offsets still count both slots.
+  return /^\(18\)\s/.test(disasm.trim()) ? 2 : 1;
+}
+
 /**
  * Parse `bpftool -jp prog dump xlated id N` JSON output.
  * Each element is { "disasm": "..." } and optionally source metadata:
@@ -58,30 +64,37 @@ export function parseXlatedJson(raw: string): XlatedInsn[] {
   try {
     const parsed = JSON.parse(raw) as unknown;
     const arr = Array.isArray(parsed) ? parsed : [];
-    return arr
-      .filter(isRecord)
-      .filter(e => optionalString(e.disasm))
-      .map((e, idx) => {
-        const insn: XlatedInsn = {
-          index: idx,
-          disasm: optionalString(e.disasm)!,
-        };
-        const opcodes = optionalString(e.opcodes);
-        const source = optionalString(e.src);
-        const sourceFile = optionalString(e.file);
-        const sourceLine = optionalFiniteNumber(e.line_num);
-        const sourceColumn = optionalFiniteNumber(e.line_col);
+    const result: XlatedInsn[] = [];
+    let pc = 0;
 
-        if (opcodes) insn.opcodes = opcodes;
-        if (source) {
-          insn.linum = source;
-          insn.source = source;
-        }
-        if (sourceFile) insn.sourceFile = sourceFile;
-        if (sourceLine !== undefined) insn.sourceLine = sourceLine;
-        if (sourceColumn !== undefined) insn.sourceColumn = sourceColumn;
-        return insn;
-      });
+    for (const e of arr) {
+      if (!isRecord(e)) continue;
+      const disasm = optionalString(e.disasm);
+      if (!disasm) continue;
+
+      const insn: XlatedInsn = {
+        index: pc,
+        disasm,
+      };
+      const opcodes = optionalString(e.opcodes);
+      const source = optionalString(e.src);
+      const sourceFile = optionalString(e.file);
+      const sourceLine = optionalFiniteNumber(e.line_num);
+      const sourceColumn = optionalFiniteNumber(e.line_col);
+
+      if (opcodes) insn.opcodes = opcodes;
+      if (source) {
+        insn.linum = source;
+        insn.source = source;
+      }
+      if (sourceFile) insn.sourceFile = sourceFile;
+      if (sourceLine !== undefined) insn.sourceLine = sourceLine;
+      if (sourceColumn !== undefined) insn.sourceColumn = sourceColumn;
+      result.push(insn);
+      pc += xlatedInsnWidth(disasm);
+    }
+
+    return result;
   } catch {
     return [];
   }
@@ -98,7 +111,6 @@ function parseXlatedLinum(raw: string): XlatedInsn[] {
   const lines = raw.split("\n");
   const result: XlatedInsn[] = [];
   let pendingLinum: string | undefined;
-  let idx = 0;
 
   for (const line of lines) {
     const trimmed = line.trim();
@@ -114,7 +126,7 @@ function parseXlatedLinum(raw: string): XlatedInsn[] {
     const m = trimmed.match(/^(\d+):\s+(.+)$/);
     if (m) {
       result.push({
-        index: idx++,
+        index: Number.parseInt(m[1], 10),
         disasm: m[2],
         linum: pendingLinum,
         source: pendingLinum,
@@ -438,10 +450,13 @@ function buildMinimalDot(insns: XlatedInsn[]): string {
     if (m) {
       const offset = parseInt(m[1]);
       const target = insn.index + 1 + offset;
+      const body = insn.disasm.trim().replace(/^\([0-9a-fA-F]+\)\s+/, "");
       jumpTargets.add(target);
       const targets = jumpSources.get(insn.index) ?? [];
       targets.push(target);
-      targets.push(insn.index + 1); // fall-through
+      if (!body.startsWith("goto ")) {
+        targets.push(insn.index + 1); // conditional fall-through
+      }
       jumpSources.set(insn.index, targets);
     }
   }
@@ -463,6 +478,13 @@ function buildMinimalDot(insns: XlatedInsn[]): string {
   }
   if (current.length > 0) blocks.push({ start: current[0].index, insns: current });
 
+  const findBlockByPc = (pc: number) => {
+    return blocks.find((block, idx) => {
+      const next = blocks[idx + 1];
+      return block.start <= pc && (!next || pc < next.start);
+    });
+  };
+
   // Render DOT
   const lines: string[] = [`digraph "BPF CFG" {`, `  node [shape=record fontname="monospace" fontsize=10];`];
 
@@ -479,7 +501,7 @@ function buildMinimalDot(insns: XlatedInsn[]): string {
     const targets = jumpSources.get(last.index);
     if (targets) {
       for (const t of targets) {
-        const targetBlock = blocks.find(b => b.start <= t && t < b.start + b.insns.length);
+        const targetBlock = findBlockByPc(t);
         if (targetBlock) {
           lines.push(`  bb_${block.start} -> bb_${targetBlock.start};`);
         }

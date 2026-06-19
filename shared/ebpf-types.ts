@@ -384,8 +384,8 @@ export interface XlatedReturnExit {
   sourceFile?: string;
   sourceLine?: number;
   sourceColumn?: number;
-  /** Why the return value could not be resolved to a direct constant. */
-  reason?: "no-direct-assignment" | "dynamic-assignment";
+  /** Why the return value could not be resolved to a constant. */
+  reason?: "no-direct-assignment" | "dynamic-assignment" | "conflicting-values" | "analysis-limit";
 }
 
 export interface XlatedReturnConstantSummary {
@@ -394,13 +394,13 @@ export interface XlatedReturnConstantSummary {
 }
 
 export interface XlatedReturnAnalysis {
-  /** Total number of BPF exit instructions observed. */
+  /** Total number of reachable final BPF exit instructions analyzed. */
   exitCount: number;
-  /** Exits where the immediately preceding instruction assigns a constant to r0/w0. */
+  /** Reachable exits where the analyzer resolved r0/w0 to a constant. */
   constantExits: XlatedReturnExit[];
-  /** Exits where the return value is not resolved by the simple direct-assignment analyzer. */
+  /** Reachable exits where the analyzer could not resolve r0/w0 to a constant. */
   unknownExits: XlatedReturnExit[];
-  /** Unique constant return values observed at simple exits. */
+  /** Unique constant return values observed at reachable final exits. */
   observedConstants: XlatedReturnConstantSummary[];
   /** Tail calls can transfer control to another program, so final verdict may be outside this dump. */
   tailCallIndices: number[];

@@ -146,6 +146,16 @@ describe("parseXlatedJson", () => {
       },
     ]);
   });
+
+  it("accounts for wide ldimm64 instructions in parsed instruction PCs", () => {
+    const result = parseXlatedJson(JSON.stringify([
+      { disasm: "(18) r1 = map[id:4014980]" },
+      { disasm: "(18) r2 = map[id:4014997][0]+20" },
+      { disasm: "(07) r1 += 248" },
+    ]));
+
+    expect(result.map(insn => insn.index)).toEqual([0, 2, 4]);
+  });
 });
 
 describe("ProgDump structure", () => {

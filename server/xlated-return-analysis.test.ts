@@ -34,12 +34,14 @@ describe("analyzeXlatedReturns", () => {
 
   it("detects direct w0 constant returns and aggregates constants", () => {
     const result = analyzeXlatedReturns([
-      insn(0, "(b4) w0 = 0"),
-      insn(1, "(95) exit"),
-      insn(2, "(b4) w0 = 0"),
-      insn(3, "(95) exit"),
-      insn(4, "(b7) r0 = -1"),
+      insn(0, "(15) if r1 == 0x0 goto pc+2"),
+      insn(1, "(b4) w0 = 0"),
+      insn(2, "(95) exit"),
+      insn(3, "(15) if r2 == 0x0 goto pc+2"),
+      insn(4, "(b4) w0 = 0"),
       insn(5, "(95) exit"),
+      insn(6, "(b7) r0 = -1"),
+      insn(7, "(95) exit"),
     ]);
 
     expect(result.exitCount).toBe(3);
@@ -56,6 +58,67 @@ describe("analyzeXlatedReturns", () => {
     ]);
 
     expect(result.constantExits[0].value).toBe(7);
+  });
+
+  it("normalizes unsigned 32-bit return constants", () => {
+    const result = analyzeXlatedReturns([
+      insn(10, "(b7) r0 = 0xffffffff"),
+      insn(11, "(95) exit"),
+    ]);
+
+    expect(result.constantExits[0].value).toBe(-1);
+    expect(result.observedConstants).toEqual([{ value: -1, exitCount: 1 }]);
+  });
+
+  it("resolves return values through register copies", () => {
+    const result = analyzeXlatedReturns([
+      insn(0, "(b7) r6 = 2"),
+      insn(1, "(61) r1 = *(u32 *)(r1 +0)"),
+      insn(2, "(bf) r0 = r6"),
+      insn(3, "(95) exit"),
+    ]);
+
+    expect(result).toMatchObject({
+      exitCount: 1,
+      hasUnknownExits: false,
+      observedConstants: [{ value: 2, exitCount: 1 }],
+    });
+    expect(result.constantExits[0]).toMatchObject({
+      exitIndex: 3,
+      assignmentIndex: 2,
+      assignmentDisasm: "(bf) r0 = r6",
+      value: 2,
+    });
+  });
+
+  it("resolves return values through shared exit blocks", () => {
+    const result = analyzeXlatedReturns([
+      insn(0, "(b7) r0 = 0"),
+      insn(1, "(05) goto pc+1"),
+      insn(2, "(b7) r1 = 42"),
+      insn(3, "(95) exit"),
+    ]);
+
+    expect(result).toMatchObject({
+      exitCount: 1,
+      hasUnknownExits: false,
+      observedConstants: [{ value: 0, exitCount: 1 }],
+    });
+  });
+
+  it("ignores exits that are not reachable from the program entry", () => {
+    const result = analyzeXlatedReturns([
+      insn(0, "(b7) r0 = 0"),
+      insn(1, "(95) exit"),
+      insn(2, "(b7) r0 = 2"),
+      insn(3, "(95) exit"),
+    ]);
+
+    expect(result).toMatchObject({
+      exitCount: 1,
+      hasUnknownExits: false,
+      observedConstants: [{ value: 0, exitCount: 1 }],
+    });
   });
 
   it("marks dynamic r0 assignments as unknown exits", () => {
@@ -78,7 +141,7 @@ describe("analyzeXlatedReturns", () => {
     });
   });
 
-  it("marks exits without direct r0/w0 assignment as unknown", () => {
+  it("marks helper return values as dynamic unknown exits", () => {
     const result = analyzeXlatedReturns([
       insn(0, "(85) call bpf_map_lookup_elem#1"),
       insn(1, "(95) exit"),
@@ -89,8 +152,42 @@ describe("analyzeXlatedReturns", () => {
       exitDisasm: "(95) exit",
       assignmentIndex: 0,
       assignmentDisasm: "(85) call bpf_map_lookup_elem#1",
+      reason: "dynamic-assignment",
+    }]);
+  });
+
+  it("marks exits without any r0/w0 assignment as unknown", () => {
+    const result = analyzeXlatedReturns([
+      insn(0, "(b7) r1 = 0"),
+      insn(1, "(95) exit"),
+    ]);
+
+    expect(result.unknownExits).toEqual([{
+      exitIndex: 1,
+      exitDisasm: "(95) exit",
       reason: "no-direct-assignment",
     }]);
+  });
+
+  it("marks conflicting branch return values as unknown", () => {
+    const result = analyzeXlatedReturns([
+      insn(0, "(15) if r1 == 0x0 goto pc+2"),
+      insn(1, "(b7) r0 = 0"),
+      insn(2, "(05) goto pc+1"),
+      insn(3, "(b7) r0 = 2"),
+      insn(4, "(95) exit"),
+    ]);
+
+    expect(result).toMatchObject({
+      exitCount: 1,
+      hasUnknownExits: true,
+      constantExits: [],
+      unknownExits: [{
+        exitIndex: 4,
+        exitDisasm: "(95) exit",
+        reason: "conflicting-values",
+      }],
+    });
   });
 
   it("handles programs with no exits", () => {
