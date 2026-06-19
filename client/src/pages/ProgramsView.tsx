@@ -1,7 +1,8 @@
-import React, { useState, useMemo } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useEbpf } from "@/contexts/EbpfContext";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { Activity, SortAsc, SortDesc, Filter, X, Zap, AlertTriangle } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { BpfProgram, ProgHistory } from "../../../shared/ebpf-types";
@@ -11,6 +12,84 @@ import { formatRelativeTime, formatFullTimestamp, useNow } from "@/lib/time";
 
 type SortKey = "id" | "name" | "type" | "loadedAt" | "runCnt" | "bytesXlated" | "callsPerSec" | "avgLatency" | "cpuFraction";
 type SortDir = "asc" | "desc";
+const PROGRAM_COLUMN_STORAGE_KEY = "ebpf-viz:programs-table-column-widths";
+
+const PROGRAM_COLUMN_ORDER = [
+  "id",
+  "name",
+  "type",
+  "callsPerSec",
+  "avgLatency",
+  "cpuFraction",
+  "tag",
+  "flags",
+  "bytesXlated",
+  "loadedAt",
+] as const;
+
+type ProgramColumnKey = typeof PROGRAM_COLUMN_ORDER[number];
+
+interface ProgramColumnConfig {
+  key: ProgramColumnKey;
+  label: string;
+  defaultWidth: number;
+  minWidth: number;
+  maxWidth: number;
+  sortKey?: SortKey;
+  className?: string;
+}
+
+type ProgramColumnWidths = Record<ProgramColumnKey, number>;
+
+const PROGRAM_COLUMNS: Record<ProgramColumnKey, ProgramColumnConfig> = {
+  id:          { key: "id",          label: "ID",          defaultWidth: 72,  minWidth: 56,  maxWidth: 120, sortKey: "id" },
+  name:        { key: "name",        label: "Name",        defaultWidth: 260, minWidth: 150, maxWidth: 520, sortKey: "name" },
+  type:        { key: "type",        label: "Type",        defaultWidth: 140, minWidth: 110, maxWidth: 240, sortKey: "type" },
+  callsPerSec: { key: "callsPerSec", label: "Calls/s",     defaultWidth: 160, minWidth: 140, maxWidth: 260, sortKey: "callsPerSec", className: "hidden lg:table-cell" },
+  avgLatency:  { key: "avgLatency",  label: "Avg Latency", defaultWidth: 140, minWidth: 120, maxWidth: 240, sortKey: "avgLatency", className: "hidden xl:table-cell" },
+  cpuFraction: { key: "cpuFraction", label: "CPU%",        defaultWidth: 110, minWidth: 90,  maxWidth: 180, sortKey: "cpuFraction", className: "hidden xl:table-cell" },
+  tag:         { key: "tag",         label: "Tag",         defaultWidth: 260, minWidth: 150, maxWidth: 420, className: "hidden md:table-cell" },
+  flags:       { key: "flags",       label: "Flags",       defaultWidth: 160, minWidth: 120, maxWidth: 260, className: "hidden lg:table-cell" },
+  bytesXlated: { key: "bytesXlated", label: "Size",        defaultWidth: 100, minWidth: 80,  maxWidth: 160, sortKey: "bytesXlated", className: "hidden xl:table-cell" },
+  loadedAt:    { key: "loadedAt",    label: "Loaded",      defaultWidth: 150, minWidth: 120, maxWidth: 260, sortKey: "loadedAt", className: "hidden sm:table-cell" },
+};
+
+function getDefaultColumnWidths(): ProgramColumnWidths {
+  return PROGRAM_COLUMN_ORDER.reduce((acc, key) => {
+    acc[key] = PROGRAM_COLUMNS[key].defaultWidth;
+    return acc;
+  }, {} as ProgramColumnWidths);
+}
+
+function clampWidth(key: ProgramColumnKey, width: number): number {
+  const column = PROGRAM_COLUMNS[key];
+  return Math.min(column.maxWidth, Math.max(column.minWidth, Math.round(width)));
+}
+
+function readColumnWidths(): ProgramColumnWidths {
+  const defaults = getDefaultColumnWidths();
+  if (typeof window === "undefined") return defaults;
+
+  try {
+    const raw = window.localStorage.getItem(PROGRAM_COLUMN_STORAGE_KEY);
+    if (!raw) return defaults;
+    const parsed = JSON.parse(raw) as Partial<Record<ProgramColumnKey, unknown>>;
+    return PROGRAM_COLUMN_ORDER.reduce((acc, key) => {
+      const value = parsed[key];
+      acc[key] = typeof value === "number" && Number.isFinite(value)
+        ? clampWidth(key, value)
+        : defaults[key];
+      return acc;
+    }, {} as ProgramColumnWidths);
+  } catch {
+    return defaults;
+  }
+}
+
+function getColumnStyle(widths: ProgramColumnWidths, key: ProgramColumnKey): React.CSSProperties {
+  const width = widths[key];
+  return { width, minWidth: width, maxWidth: width };
+}
 
 function formatBytes(b: number) {
   if (b < 1024) return `${b}B`;
@@ -26,6 +105,28 @@ function latencyColor(ns: number): string {
   return "#f87171";
 }
 
+function TruncatedProgramName({ name }: { name: string }) {
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <span
+          className="min-w-0 flex-1 truncate text-sm font-mono text-foreground group-hover:text-primary transition-colors"
+          title={name}
+        >
+          {name}
+        </span>
+      </TooltipTrigger>
+      <TooltipContent
+        side="top"
+        align="start"
+        className="max-w-[min(520px,calc(100vw-2rem))] break-all bg-popover text-popover-foreground border border-border shadow-xl font-mono"
+      >
+        {name}
+      </TooltipContent>
+    </Tooltip>
+  );
+}
+
 function ProgramRow({
   prog,
   history,
@@ -33,6 +134,7 @@ function ProgramRow({
   tagCount,
   onTagFilter,
   now,
+  columnWidths,
 }: {
   prog: BpfProgram;
   history?: ProgHistory | null;
@@ -40,9 +142,11 @@ function ProgramRow({
   tagCount: Map<string, number>;
   onTagFilter: (tag: string) => void;
   now: number;
+  columnWidths: ProgramColumnWidths;
 }) {
   const { setSelectedProgram } = useEbpf();
   const color = BPF_PROGRAM_TYPE_COLORS[prog.rawType] ?? BPF_PROGRAM_TYPE_COLORS.unknown;
+  const displayName = prog.name || `prog_${prog.id}`;
 
   const callsPerSec = history?.latest?.callsPerSec ?? 0;
   const avgLatencyNs = history?.latest?.avgLatencyNs ?? 0;
@@ -63,18 +167,21 @@ function ProgramRow({
       onClick={() => setSelectedProgram(prog)}
     >
       {/* ID */}
-      <td className="px-4 py-3 font-mono text-xs text-muted-foreground w-16">{prog.id}</td>
+      <td
+        className="px-4 py-3 font-mono text-xs text-muted-foreground"
+        style={getColumnStyle(columnWidths, "id")}
+      >
+        {prog.id}
+      </td>
 
       {/* Name */}
-      <td className="px-4 py-3">
-        <div className="flex items-center gap-2">
+      <td className="px-4 py-3" style={getColumnStyle(columnWidths, "name")}>
+        <div className="flex min-w-0 items-center gap-2">
           <span
             className="w-2 h-2 rounded-full shrink-0"
             style={{ background: color, boxShadow: `0 0 6px ${color}60` }}
           />
-          <span className="text-sm font-mono text-foreground group-hover:text-primary transition-colors truncate max-w-[180px]">
-            {prog.name || `prog_${prog.id}`}
-          </span>
+          <TruncatedProgramName name={displayName} />
           {prog.orphaned && (
             <Badge variant="outline" className="text-[10px] px-1.5 py-0 border-destructive/50 text-destructive shrink-0">
               orphaned
@@ -84,7 +191,7 @@ function ProgramRow({
       </td>
 
       {/* Type */}
-      <td className="px-4 py-3">
+      <td className="px-4 py-3" style={getColumnStyle(columnWidths, "type")}>
         <span
           className="text-[11px] font-mono px-2 py-0.5 rounded border"
           style={{ color, borderColor: `${color}40`, background: `${color}10` }}
@@ -94,7 +201,10 @@ function ProgramRow({
       </td>
 
       {/* Calls/sec — with inline bar + sparkline */}
-      <td className="px-4 py-3 hidden lg:table-cell min-w-[140px]">
+      <td
+        className="px-4 py-3 hidden lg:table-cell"
+        style={getColumnStyle(columnWidths, "callsPerSec")}
+      >
         {hasStats ? (
           <div className="flex flex-col gap-1">
             <div className="flex items-center gap-2">
@@ -123,7 +233,10 @@ function ProgramRow({
       </td>
 
       {/* Avg Latency */}
-      <td className="px-4 py-3 hidden xl:table-cell">
+      <td
+        className="px-4 py-3 hidden xl:table-cell"
+        style={getColumnStyle(columnWidths, "avgLatency")}
+      >
         {avgLatencyNs > 0 ? (
           <span className="text-xs font-mono tabular-nums" style={{ color: lColor }}>
             {fmtNs(avgLatencyNs)}
@@ -134,7 +247,10 @@ function ProgramRow({
       </td>
 
       {/* CPU% */}
-      <td className="px-4 py-3 hidden xl:table-cell">
+      <td
+        className="px-4 py-3 hidden xl:table-cell"
+        style={getColumnStyle(columnWidths, "cpuFraction")}
+      >
         {cpuFraction > 0 ? (
           <span className="text-xs font-mono tabular-nums text-violet-400">
             {fmtCpu(cpuFraction)}
@@ -145,9 +261,12 @@ function ProgramRow({
       </td>
 
       {/* Tag */}
-      <td className="px-4 py-3 text-xs font-mono text-muted-foreground hidden md:table-cell">
-        <div className="flex items-center gap-1.5 flex-wrap">
-          <span>{prog.tag}</span>
+      <td
+        className="px-4 py-3 text-xs font-mono text-muted-foreground hidden md:table-cell"
+        style={getColumnStyle(columnWidths, "tag")}
+      >
+        <div className="flex min-w-0 items-center gap-1.5 flex-wrap">
+          <span className="min-w-0 truncate">{prog.tag}</span>
           {(tagCount.get(prog.tag) ?? 1) > 1 && (
             <button
               onClick={e => { e.stopPropagation(); onTagFilter(prog.tag); }}
@@ -161,7 +280,10 @@ function ProgramRow({
       </td>
 
       {/* Flags */}
-      <td className="px-4 py-3 text-xs text-muted-foreground hidden lg:table-cell">
+      <td
+        className="px-4 py-3 text-xs text-muted-foreground hidden lg:table-cell"
+        style={getColumnStyle(columnWidths, "flags")}
+      >
         <div className="flex gap-1 flex-wrap">
           {prog.jited && (
             <span className="text-[10px] px-1.5 py-0.5 rounded bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">JIT</span>
@@ -176,12 +298,18 @@ function ProgramRow({
       </td>
 
       {/* Size */}
-      <td className="px-4 py-3 text-xs font-mono text-muted-foreground hidden xl:table-cell">
+      <td
+        className="px-4 py-3 text-xs font-mono text-muted-foreground hidden xl:table-cell"
+        style={getColumnStyle(columnWidths, "bytesXlated")}
+      >
         {formatBytes(prog.bytesXlated)}
       </td>
 
       {/* Loaded */}
-      <td className="px-4 py-3 text-xs text-muted-foreground hidden sm:table-cell">
+      <td
+        className="px-4 py-3 text-xs text-muted-foreground hidden sm:table-cell"
+        style={getColumnStyle(columnWidths, "loadedAt")}
+      >
         <span title={formatFullTimestamp(prog.loadedAt)}>
           {formatRelativeTime(prog.loadedAt, now)}
         </span>
@@ -196,6 +324,8 @@ export default function ProgramsView() {
   const [sortDir, setSortDir] = useState<SortDir>("asc");
   const [tagFilter, setTagFilter] = useState<string | null>(null);
   const [orphanFilter, setOrphanFilter] = useState(false);
+  const [columnWidths, setColumnWidths] = useState<ProgramColumnWidths>(readColumnWidths);
+  const resizeCleanupRef = useRef<(() => void) | null>(null);
   const now = useNow(30_000); // refresh relative times every 30s
 
   // Compute tag frequency map across ALL programs (not just filtered)
@@ -222,6 +352,65 @@ export default function ProgramsView() {
       return Math.max(max, h?.latest?.callsPerSec ?? 0);
     }, 0);
   }, [visiblePrograms, historyMap]);
+
+  const tableMinWidth = useMemo(
+    () => PROGRAM_COLUMN_ORDER.reduce((total, key) => total + columnWidths[key], 0),
+    [columnWidths]
+  );
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(PROGRAM_COLUMN_STORAGE_KEY, JSON.stringify(columnWidths));
+    } catch {
+      // Ignore persistence failures, e.g. private browsing or quota errors.
+    }
+  }, [columnWidths]);
+
+  useEffect(() => {
+    return () => {
+      resizeCleanupRef.current?.();
+    };
+  }, []);
+
+  const resizeColumnBy = useCallback((key: ProgramColumnKey, delta: number) => {
+    setColumnWidths(prev => ({
+      ...prev,
+      [key]: clampWidth(key, prev[key] + delta),
+    }));
+  }, []);
+
+  const startColumnResize = useCallback((key: ProgramColumnKey, event: React.PointerEvent<HTMLButtonElement>) => {
+    event.preventDefault();
+    event.stopPropagation();
+    resizeCleanupRef.current?.();
+
+    const startX = event.clientX;
+    const startWidth = columnWidths[key];
+    const previousCursor = document.body.style.cursor;
+    const previousUserSelect = document.body.style.userSelect;
+
+    document.body.style.cursor = "col-resize";
+    document.body.style.userSelect = "none";
+
+    const handleMove = (moveEvent: PointerEvent) => {
+      setColumnWidths(prev => ({
+        ...prev,
+        [key]: clampWidth(key, startWidth + moveEvent.clientX - startX),
+      }));
+    };
+
+    const cleanup = () => {
+      document.removeEventListener("pointermove", handleMove);
+      document.removeEventListener("pointerup", cleanup);
+      document.body.style.cursor = previousCursor;
+      document.body.style.userSelect = previousUserSelect;
+      resizeCleanupRef.current = null;
+    };
+
+    resizeCleanupRef.current = cleanup;
+    document.addEventListener("pointermove", handleMove);
+    document.addEventListener("pointerup", cleanup);
+  }, [columnWidths]);
 
   if (!snapshot) {
     return <div className="flex items-center justify-center h-full"><p className="text-muted-foreground">Loading…</p></div>;
@@ -260,16 +449,40 @@ export default function ProgramsView() {
     return sortDir === "asc" ? <SortAsc size={11} className="text-primary" /> : <SortDesc size={11} className="text-primary" />;
   }
 
-  function ColHeader({ col, label, className }: { col: SortKey; label: string; className?: string }) {
+  function ColHeader({ columnKey }: { columnKey: ProgramColumnKey }) {
+    const column = PROGRAM_COLUMNS[columnKey];
+    const sortable = column.sortKey !== undefined;
+
     return (
       <th
-        className={cn("px-4 py-3 text-left text-xs font-semibold text-muted-foreground cursor-pointer hover:text-foreground transition-colors select-none", className)}
-        onClick={() => handleSort(col)}
+        className={cn(
+          "relative px-4 py-3 text-left text-xs font-semibold text-muted-foreground select-none transition-colors",
+          sortable && "cursor-pointer hover:text-foreground",
+          column.className
+        )}
+        style={getColumnStyle(columnWidths, columnKey)}
+        onClick={sortable ? () => handleSort(column.sortKey!) : undefined}
       >
-        <div className="flex items-center gap-1">
-          {label}
-          <SortIcon col={col} />
+        <div className="flex min-w-0 items-center gap-1 pr-2">
+          <span className="truncate">{column.label}</span>
+          {sortable && <SortIcon col={column.sortKey!} />}
         </div>
+        <button
+          type="button"
+          aria-label={`Resize ${column.label} column`}
+          className="absolute right-0 top-0 h-full w-2 cursor-col-resize touch-none border-r border-transparent hover:border-primary/60 focus-visible:border-primary focus-visible:outline-none"
+          onClick={e => e.stopPropagation()}
+          onPointerDown={e => startColumnResize(columnKey, e)}
+          onKeyDown={e => {
+            if (e.key === "ArrowLeft") {
+              e.preventDefault();
+              resizeColumnBy(columnKey, -16);
+            } else if (e.key === "ArrowRight") {
+              e.preventDefault();
+              resizeColumnBy(columnKey, 16);
+            }
+          }}
+        />
       </th>
     );
   }
@@ -371,19 +584,15 @@ export default function ProgramsView() {
       {/* Table */}
       <div className="glass rounded-xl overflow-hidden">
         <div className="overflow-x-auto">
-          <table className="w-full">
+          <table
+            className="w-full"
+            style={{ minWidth: tableMinWidth, tableLayout: "fixed" }}
+          >
             <thead>
               <tr className="border-b border-border/60 bg-muted/20">
-                <ColHeader col="id" label="ID" className="w-16" />
-                <ColHeader col="name" label="Name" />
-                <ColHeader col="type" label="Type" />
-                <ColHeader col="callsPerSec" label="Calls/s" className="hidden lg:table-cell" />
-                <ColHeader col="avgLatency" label="Avg Latency" className="hidden xl:table-cell" />
-                <ColHeader col="cpuFraction" label="CPU%" className="hidden xl:table-cell" />
-                <th className="px-4 py-3 text-left text-xs font-semibold text-muted-foreground hidden md:table-cell">Tag</th>
-                <th className="px-4 py-3 text-left text-xs font-semibold text-muted-foreground hidden lg:table-cell">Flags</th>
-                <ColHeader col="bytesXlated" label="Size" className="hidden xl:table-cell" />
-                <ColHeader col="loadedAt" label="Loaded" className="hidden sm:table-cell" />
+                {PROGRAM_COLUMN_ORDER.map(columnKey => (
+                  <ColHeader key={columnKey} columnKey={columnKey} />
+                ))}
               </tr>
             </thead>
             <tbody>
@@ -396,11 +605,12 @@ export default function ProgramsView() {
                   tagCount={tagCount}
                   onTagFilter={setTagFilter}
                   now={now}
+                  columnWidths={columnWidths}
                 />
               ))}
               {sorted.length === 0 && (
                 <tr>
-                  <td colSpan={10} className="px-4 py-12 text-center text-muted-foreground text-sm">
+                  <td colSpan={PROGRAM_COLUMN_ORDER.length} className="px-4 py-12 text-center text-muted-foreground text-sm">
                     No programs match the current filter.
                   </td>
                 </tr>
