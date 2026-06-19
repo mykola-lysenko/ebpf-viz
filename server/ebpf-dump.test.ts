@@ -1,4 +1,5 @@
 import { describe, it, expect } from "vitest";
+import { parseJitedJson, parseJitedText } from "./ebpf-dump";
 
 // ─── Unit tests for the dump module helpers ────────────────────────────────
 // We test the pure parsing logic without calling bpftool (which requires root).
@@ -172,5 +173,92 @@ describe("JIT availability logic", () => {
     const kptrRestrict = 0;
     const canDumpJit = jited && kptrRestrict === 0;
     expect(canDumpJit).toBe(true);
+  });
+});
+
+describe("parseJitedJson", () => {
+  it("parses nested bpftool JIT JSON with operation and operands", () => {
+    const result = parseJitedJson(JSON.stringify([{
+      proto: "int bpfj_fs_file_open(unsigned long long * ctx)",
+      name: "bpf_prog_20b9278d511c15b8_bpfj_fs_file_open",
+      insns: [
+        {
+          src: "int BPF_PROG(bpfj_fs_file_open, struct file* file) {",
+          pc: "0x0",
+          operation: "nopl",
+          operands: ["%rax", "%rax"],
+        },
+        {
+          pc: "0x5",
+          operation: "nop",
+          operands: [null],
+        },
+        {
+          pc: "0x7",
+          operation: "pushq",
+          operands: ["%rbp"],
+        },
+      ],
+    }]));
+
+    expect(result).toEqual([
+      { pc: "0x0", disasm: "nopl %rax,%rax" },
+      { pc: "0x5", disasm: "nop" },
+      { pc: "0x7", disasm: "pushq %rbp" },
+    ]);
+  });
+
+  it("keeps supporting flat JIT JSON with disasm", () => {
+    const result = parseJitedJson(JSON.stringify([
+      { pc: "0x0", disasm: "push %rbp", opcodes: "55" },
+      { pc: "0x1", disasm: "mov %rsp,%rbp" },
+    ]));
+
+    expect(result).toEqual([
+      { pc: "0x0", disasm: "push %rbp", opcodes: "55" },
+      { pc: "0x1", disasm: "mov %rsp,%rbp" },
+    ]);
+  });
+});
+
+describe("parseJitedText", () => {
+  it("parses plain text JIT dumps with opcode bytes", () => {
+    const result = parseJitedText(`
+bpf_prog_1234567890abcdef:
+   0:   55                      push   %rbp
+   1:   48 89 e5                mov    %rsp,%rbp
+   4:   e8 00 00 00 00          callq  0x9
+`);
+
+    expect(result).toEqual([
+      { pc: "0x0", opcodes: "55", disasm: "push   %rbp" },
+      { pc: "0x1", opcodes: "48 89 e5", disasm: "mov    %rsp,%rbp" },
+      { pc: "0x4", opcodes: "e8 00 00 00 00", disasm: "callq  0x9" },
+    ]);
+  });
+
+  it("parses plain text JIT dumps without opcode bytes", () => {
+    const result = parseJitedText(`
+   0:   nopl   0x0(%rax,%rax,1)
+   5:   push   %rbp
+`);
+
+    expect(result).toEqual([
+      { pc: "0x0", disasm: "nopl   0x0(%rax,%rax,1)" },
+      { pc: "0x5", disasm: "push   %rbp" },
+    ]);
+  });
+
+  it("uses the base address label when bpftool prints one", () => {
+    const result = parseJitedText(`
+ffffffffc0010000:
+   0:   55                      push   %rbp
+  10:   c3                      retq
+`);
+
+    expect(result).toEqual([
+      { pc: "0xffffffffc0010000", opcodes: "55", disasm: "push   %rbp" },
+      { pc: "0xffffffffc001000a", opcodes: "c3", disasm: "retq" },
+    ]);
   });
 });

@@ -88,6 +88,17 @@ describe("parseProgList", () => {
     expect(prog!.tag).toBe("aabbccdd11223344");
   });
 
+  it("marks programs as JITed when bpftool reports bytes_jited without a jited boolean", () => {
+    const map = parseProgList([{
+      ...xdpProg,
+      id: 99,
+      jited: undefined,
+      bytes_jited: 384,
+    }]);
+
+    expect(map.get(99)!.jited).toBe(true);
+  });
+
   it("generates a fallback name for unnamed programs", () => {
     const map = parseProgList([cgroupSkbProg]);
     const prog = map.get(2);

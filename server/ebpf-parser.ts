@@ -140,7 +140,7 @@ export function parseProgList(raw: RawBpfProg[]): Map<number, BpfProgram> {
       loadedAt: r.loaded_at ?? 0,
       orphaned: r.orphaned ?? false,
       bytesXlated: r.bytes_xlated ?? 0,
-      jited: r.jited ?? false,
+      jited: r.jited ?? (r.bytes_jited ?? 0) > 0,
       memlock: r.bytes_memlock ?? 0,
       mapIds: r.map_ids ?? [],
       btfId: r.btf_id,

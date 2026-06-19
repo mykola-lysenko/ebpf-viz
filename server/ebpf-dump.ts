@@ -22,7 +22,7 @@ async function run(args: string[]): Promise<{ stdout: string; stderr: string; fa
   try {
     const result = await execFileAsync(cmd, argv, {
       timeout: 10_000,
-      maxBuffer: 8 * 1024 * 1024, // 8 MB — large programs can produce big dumps
+      maxBuffer: 64 * 1024 * 1024, // Large programs can produce very large code dumps.
     });
     return { stdout: result.stdout, stderr: result.stderr, failed: false };
   } catch (err: any) {
@@ -89,23 +89,144 @@ function parseXlatedLinum(raw: string): XlatedInsn[] {
   return result;
 }
 
+interface JitedJsonInsn {
+  pc?: unknown;
+  disasm?: unknown;
+  opcodes?: unknown;
+  operation?: unknown;
+  operands?: unknown;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
+function collectJitedJsonInsns(parsed: unknown): JitedJsonInsn[] {
+  const items = Array.isArray(parsed) ? parsed : [parsed];
+  const result: JitedJsonInsn[] = [];
+
+  for (const item of items) {
+    if (!isRecord(item)) continue;
+    if (Array.isArray(item.insns)) {
+      result.push(...item.insns.filter(isRecord));
+    } else {
+      result.push(item);
+    }
+  }
+
+  return result;
+}
+
+function formatJitedJsonDisasm(insn: JitedJsonInsn): string | undefined {
+  if (typeof insn.disasm === "string" && insn.disasm.trim()) {
+    return insn.disasm.trim();
+  }
+
+  if (typeof insn.operation !== "string" || !insn.operation.trim()) {
+    return undefined;
+  }
+
+  const operands = Array.isArray(insn.operands)
+    ? insn.operands.filter((operand): operand is string => typeof operand === "string" && operand.length > 0)
+    : [];
+  return operands.length > 0
+    ? `${insn.operation.trim()} ${operands.join(",")}`
+    : insn.operation.trim();
+}
+
 /**
- * Parse `bpftool -jp prog dump jited id N` JSON output.
- * Each element: { "pc": "0xffffc...", "disasm": "push %rbp" }
+ * Parse `bpftool -jp prog dump jited id N` JSON output. bpftool versions differ:
+ * some return flat instructions with `disasm`; others return program objects
+ * with nested `insns` using `operation` and `operands`.
  */
-function parseJitedJson(raw: string): JitedInsn[] {
+export function parseJitedJson(raw: string): JitedInsn[] {
   try {
-    const arr: Array<{ pc?: string; disasm?: string; opcodes?: string }> = JSON.parse(raw);
-    return arr
-      .filter(e => e.disasm)
-      .map(e => ({
-        pc: e.pc ?? "0x?",
-        disasm: e.disasm!,
-        opcodes: e.opcodes,
-      }));
+    const result: JitedInsn[] = [];
+    for (const insn of collectJitedJsonInsns(JSON.parse(raw))) {
+      const disasm = formatJitedJsonDisasm(insn);
+      if (!disasm) continue;
+
+      const parsed: JitedInsn = {
+        pc: typeof insn.pc === "string" ? insn.pc : "0x?",
+        disasm,
+      };
+      if (typeof insn.opcodes === "string") {
+        parsed.opcodes = insn.opcodes;
+      }
+      result.push(parsed);
+    }
+    return result;
   } catch {
     return [];
   }
+}
+
+function formatTextPc(offset: bigint, basePc: bigint | null): string {
+  const pc = basePc === null ? offset : basePc + offset;
+  return `0x${pc.toString(16)}`;
+}
+
+function normalizeHexPc(pc: string): string {
+  return pc.startsWith("0x") ? pc : `0x${pc}`;
+}
+
+function splitJitedInstruction(raw: string): { disasm: string; opcodes?: string } {
+  const trimmed = raw.trim();
+  const opcodeMatch = trimmed.match(/^((?:[0-9a-fA-F]{2}\s+)+)(.+)$/);
+  if (!opcodeMatch) return { disasm: trimmed };
+
+  return {
+    opcodes: opcodeMatch[1].trim().replace(/\s+/g, " "),
+    disasm: opcodeMatch[2].trim(),
+  };
+}
+
+/**
+ * Parse `bpftool prog dump jited id N` text output. Some bpftool versions do
+ * not return useful JSON for JIT dumps, while text mode still prints native
+ * assembly.
+ */
+export function parseJitedText(raw: string): JitedInsn[] {
+  const result: JitedInsn[] = [];
+  let basePc: bigint | null = null;
+
+  for (const line of raw.split("\n")) {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith(";")) continue;
+
+    const baseMatch = trimmed.match(/^(?:0x)?([0-9a-fA-F]{8,}):$/);
+    if (baseMatch) {
+      basePc = BigInt(`0x${baseMatch[1]}`);
+      continue;
+    }
+
+    const absoluteMatch = trimmed.match(/^(0x[0-9a-fA-F]+|[0-9a-fA-F]{8,}):\s+(\d+):\s+(.+)$/);
+    if (absoluteMatch) {
+      const parsed = splitJitedInstruction(absoluteMatch[3]);
+      if (parsed.disasm) {
+        result.push({
+          pc: normalizeHexPc(absoluteMatch[1]),
+          disasm: parsed.disasm,
+          opcodes: parsed.opcodes,
+        });
+      }
+      continue;
+    }
+
+    const offsetMatch = trimmed.match(/^(\d+):\s+(.+)$/);
+    if (!offsetMatch) continue;
+
+    const parsed = splitJitedInstruction(offsetMatch[2]);
+    if (parsed.disasm) {
+      result.push({
+        pc: formatTextPc(BigInt(offsetMatch[1]), basePc),
+        disasm: parsed.disasm,
+        opcodes: parsed.opcodes,
+      });
+    }
+  }
+
+  return result;
 }
 
 // ─── Main export ──────────────────────────────────────────────────────────────
@@ -177,13 +298,26 @@ export async function fetchProgDump(progId: number, hasBtf: boolean, isJited: bo
       await execFileAsync(sysctlCmd, sysctlArgv, { timeout: 5_000 });
     } catch { /* best-effort — JIT dump may still work */ }
 
-    const jitedResult = await run(["-jp", "prog", "dump", "jited", "id", String(progId)]);
-    const parsed = jitedResult.failed ? [] : parseJitedJson(jitedResult.stdout);
+    const jitedJsonResult = await run(["-jp", "prog", "dump", "jited", "id", String(progId)]);
+    let parsed = jitedJsonResult.failed
+      ? []
+      : [
+          ...parseJitedJson(jitedJsonResult.stdout),
+          ...parseJitedText(jitedJsonResult.stdout),
+        ];
+
+    let jitedTextResult: Awaited<ReturnType<typeof run>> | undefined;
+    if (parsed.length === 0) {
+      jitedTextResult = await run(["prog", "dump", "jited", "id", String(progId)]);
+      if (!jitedTextResult.failed) {
+        parsed = parseJitedText(jitedTextResult.stdout);
+      }
+    }
 
     if (parsed.length > 0) {
       jited = parsed;
     } else {
-      const jitedErr = jitedResult.stderr;
+      const jitedErr = jitedTextResult?.stderr || jitedJsonResult.stderr;
       jitedUnavailableReason =
         jitedErr.includes("kptr_restrict")
           ? "JIT dump blocked by kernel.kptr_restrict. Run: sudo sysctl -w kernel.kptr_restrict=0"
