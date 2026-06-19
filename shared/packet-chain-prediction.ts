@@ -93,6 +93,25 @@ function verdictTitle(
   return `Observed return constants: ${observedText}; ${unknownText}; ${tailCallText}.`;
 }
 
+function sideEffectTitle(
+  analysis: XlatedReturnAnalysis | null | undefined
+): string | undefined {
+  const effects = analysis?.sideEffects.effects ?? [];
+  if (effects.length === 0) return undefined;
+
+  const visible = effects
+    .slice(0, 6)
+    .map(effect =>
+      effect.helper
+        ? `${effect.label}: ${effect.helper} at insn ${effect.insnIndex}`
+        : `${effect.label} at insn ${effect.insnIndex}`
+    );
+  if (effects.length > visible.length) {
+    visible.push(`+${effects.length - visible.length} more`);
+  }
+  return visible.join("; ");
+}
+
 function analyzeProgramVerdicts(
   analysis: XlatedReturnAnalysis | null | undefined,
   semantics: PacketActionSemantics
@@ -150,10 +169,16 @@ function stepDefinitelyTerminates(
 
 function summarizeChain(
   outcomes: PacketVerdict[],
-  hasUnknownBehavior: boolean
+  hasUnknownBehavior: boolean,
+  sideEffectLabels: string[]
 ): string {
+  const sideEffectText =
+    sideEffectLabels.length > 0
+      ? ` Known side effects: ${sideEffectLabels.join(", ")}.`
+      : "";
+
   if (outcomes.length === 1 && outcomes[0] === "pass" && !hasUnknownBehavior) {
-    return "All analyzed exits pass; packets should continue through this chain.";
+    return `All analyzed exits pass; packets should continue through this chain.${sideEffectText}`;
   }
 
   const actions: string[] = [];
@@ -164,12 +189,12 @@ function summarizeChain(
     actions.push("take another hook-specific action");
 
   if (actions.length > 0 && hasUnknownBehavior) {
-    return `Packets may ${actions.join(", ")}; some exits remain unknown.`;
+    return `Packets may ${actions.join(", ")}; some exits remain unknown.${sideEffectText}`;
   }
   if (actions.length > 0) {
-    return `Packets may ${actions.join(" or ")} in this chain.`;
+    return `Packets may ${actions.join(" or ")} in this chain.${sideEffectText}`;
   }
-  return "Packet outcome is unknown for this chain.";
+  return `Packet outcome is unknown for this chain.${sideEffectText}`;
 }
 
 export function predictPacketChain(
@@ -184,6 +209,7 @@ export function predictPacketChain(
   let mayReachEnd = true;
   let hasUnknownBehavior = false;
   const possibleOutcomes = new Set<PacketVerdict>();
+  const chainSideEffectLabels = new Set<string>();
 
   for (const program of chain.programs) {
     const analysis = getAnalysis(program.id);
@@ -195,6 +221,10 @@ export function predictPacketChain(
       chain.canShortCircuit &&
       stepDefinitelyTerminates(verdicts, programHasUnknown);
     const terminalVerdicts = verdicts.filter(verdict => verdict !== "pass");
+    const sideEffectLabels = analysis?.sideEffects.labels ?? [];
+    for (const label of sideEffectLabels) {
+      chainSideEffectLabels.add(label);
+    }
 
     if (reachability !== "not-reached") {
       for (const verdict of terminalVerdicts) {
@@ -218,6 +248,9 @@ export function predictPacketChain(
       canTerminateChain,
       definitelyTerminatesChain,
       hasUnknownBehavior: programHasUnknown,
+      hasSideEffects: sideEffectLabels.length > 0,
+      sideEffectLabels,
+      sideEffectTitle: sideEffectTitle(analysis),
     });
 
     if (reachability !== "not-reached" && canTerminateChain) {
@@ -233,6 +266,7 @@ export function predictPacketChain(
   }
 
   const outcomes = uniqueVerdicts(Array.from(possibleOutcomes));
+  const sideEffectLabels = Array.from(chainSideEffectLabels);
   const firstTerminalReachability = steps.find(
     step => step.canTerminateChain && step.reachability !== "not-reached"
   )?.position;
@@ -250,11 +284,13 @@ export function predictPacketChain(
 
   return {
     chainId: chain.hookId,
-    summary: summarizeChain(outcomes, hasUnknownBehavior),
+    summary: summarizeChain(outcomes, hasUnknownBehavior, sideEffectLabels),
     confidence,
     possibleOutcomes: outcomes,
     alwaysPass,
     hasUnknownBehavior,
+    hasSideEffects: sideEffectLabels.length > 0,
+    sideEffectLabels,
     firstTerminalPrograms,
     steps,
   };

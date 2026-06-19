@@ -357,6 +357,15 @@ function OsiLayerRow({
                                 {predictionStep.label}
                               </span>
                             )}
+                            {predictionStep?.hasSideEffects && (
+                              <span
+                                className="rounded border border-cyan-500/25 bg-cyan-500/5 px-1.5 py-0.5 text-[9px] font-mono text-cyan-300/80"
+                                title={predictionStep.sideEffectTitle}
+                              >
+                                effects:{" "}
+                                {formatActions(predictionStep.sideEffectLabels)}
+                              </span>
+                            )}
                             {predictionStep?.reachability === "conditional" && (
                               <span
                                 className="rounded border border-amber-500/25 bg-amber-500/5 px-1.5 py-0.5 text-[9px] font-mono text-amber-300/80"

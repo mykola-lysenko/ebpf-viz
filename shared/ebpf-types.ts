@@ -272,6 +272,9 @@ export interface PacketProgramPrediction {
   canTerminateChain: boolean;
   definitelyTerminatesChain: boolean;
   hasUnknownBehavior: boolean;
+  hasSideEffects: boolean;
+  sideEffectLabels: string[];
+  sideEffectTitle?: string;
 }
 
 export interface PacketChainPrediction {
@@ -281,6 +284,8 @@ export interface PacketChainPrediction {
   possibleOutcomes: PacketVerdict[];
   alwaysPass: boolean;
   hasUnknownBehavior: boolean;
+  hasSideEffects: boolean;
+  sideEffectLabels: string[];
   firstTerminalPrograms: PacketProgramPrediction[];
   steps: PacketProgramPrediction[];
 }
@@ -448,6 +453,40 @@ export interface XlatedReturnConstantSummary {
   exitCount: number;
 }
 
+export type XlatedSideEffectKind =
+  | "map-write"
+  | "direct-memory-write"
+  | "packet-mutation"
+  | "redirect-helper"
+  | "telemetry-output"
+  | "tail-call"
+  | "socket-mutation";
+
+export interface XlatedSideEffect {
+  kind: XlatedSideEffectKind;
+  label: string;
+  insnIndex: number;
+  disasm: string;
+  helper?: string;
+  source?: string;
+  sourceFile?: string;
+  sourceLine?: number;
+  sourceColumn?: number;
+}
+
+export interface XlatedSideEffectSummary {
+  hasSideEffects: boolean;
+  labels: string[];
+  effects: XlatedSideEffect[];
+  hasMapWrites: boolean;
+  hasDirectMemoryWrites: boolean;
+  hasPacketMutations: boolean;
+  hasRedirects: boolean;
+  hasTelemetryOutput: boolean;
+  hasTailCalls: boolean;
+  hasSocketMutations: boolean;
+}
+
 export interface XlatedReturnAnalysis {
   /** Total number of reachable final BPF exit instructions analyzed. */
   exitCount: number;
@@ -461,6 +500,8 @@ export interface XlatedReturnAnalysis {
   tailCallIndices: number[];
   hasUnknownExits: boolean;
   hasTailCalls: boolean;
+  /** Known helper/direct-write side effects detected in xlated bytecode. */
+  sideEffects: XlatedSideEffectSummary;
 }
 
 export interface ProgramReturnAnalysisResult {

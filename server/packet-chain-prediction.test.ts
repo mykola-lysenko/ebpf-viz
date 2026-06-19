@@ -1,6 +1,23 @@
 import { describe, expect, it } from "vitest";
-import type { ProgramChain, XlatedReturnAnalysis } from "../shared/ebpf-types";
+import type {
+  ProgramChain,
+  XlatedReturnAnalysis,
+  XlatedSideEffectSummary,
+} from "../shared/ebpf-types";
 import { predictPacketChain } from "../shared/packet-chain-prediction";
+
+const EMPTY_SIDE_EFFECTS: XlatedSideEffectSummary = {
+  hasSideEffects: false,
+  labels: [],
+  effects: [],
+  hasMapWrites: false,
+  hasDirectMemoryWrites: false,
+  hasPacketMutations: false,
+  hasRedirects: false,
+  hasTelemetryOutput: false,
+  hasTailCalls: false,
+  hasSocketMutations: false,
+};
 
 function tcChain(): ProgramChain {
   return {
@@ -35,7 +52,11 @@ function tcChain(): ProgramChain {
 
 function returnAnalysis(
   constants: number[],
-  options: { unknown?: boolean; tailCall?: boolean } = {}
+  options: {
+    unknown?: boolean;
+    tailCall?: boolean;
+    sideEffects?: XlatedSideEffectSummary;
+  } = {}
 ): XlatedReturnAnalysis {
   const counts = new Map<number, number>();
   for (const value of constants) {
@@ -64,6 +85,7 @@ function returnAnalysis(
     tailCallIndices: options.tailCall ? [42] : [],
     hasUnknownExits: !!options.unknown,
     hasTailCalls: !!options.tailCall,
+    sideEffects: options.sideEffects ?? EMPTY_SIDE_EFFECTS,
   };
 }
 
@@ -155,5 +177,54 @@ describe("predictPacketChain", () => {
       definitelyTerminatesChain: false,
     });
     expect(prediction?.steps[2].reachability).toBe("conditional");
+  });
+
+  it("keeps all-pass verdict prediction while reporting known side effects", () => {
+    const sideEffects: XlatedSideEffectSummary = {
+      ...EMPTY_SIDE_EFFECTS,
+      hasSideEffects: true,
+      labels: ["updates maps", "emits events"],
+      hasMapWrites: true,
+      hasTelemetryOutput: true,
+      effects: [
+        {
+          kind: "map-write",
+          label: "updates maps",
+          insnIndex: 4,
+          disasm: "(85) call map_update_elem",
+          helper: "map_update_elem",
+        },
+        {
+          kind: "telemetry-output",
+          label: "emits events",
+          insnIndex: 8,
+          disasm: "(85) call ringbuf_output",
+          helper: "ringbuf_output",
+        },
+      ],
+    };
+    const analyses = new Map([
+      [1, returnAnalysis([0], { sideEffects })],
+      [2, returnAnalysis([0])],
+      [3, returnAnalysis([0])],
+    ]);
+
+    const prediction = predictPacketChain(tcChain(), id => analyses.get(id));
+
+    expect(prediction).toMatchObject({
+      possibleOutcomes: ["pass"],
+      alwaysPass: true,
+      hasSideEffects: true,
+      sideEffectLabels: ["updates maps", "emits events"],
+    });
+    expect(prediction?.summary).toContain(
+      "Known side effects: updates maps, emits events."
+    );
+    expect(prediction?.steps[0]).toMatchObject({
+      hasSideEffects: true,
+      sideEffectLabels: ["updates maps", "emits events"],
+      sideEffectTitle:
+        "updates maps: map_update_elem at insn 4; emits events: ringbuf_output at insn 8",
+    });
   });
 });
