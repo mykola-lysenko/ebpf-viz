@@ -879,6 +879,17 @@ export interface MapEntry {
   perCpuValues?: Array<{ cpu: number; hex: string; decimal: string | null }>;
 }
 
+/** A resolved entry from a prog_array map used by bpf_tail_call. */
+export interface ProgArrayTarget {
+  mapId: number;
+  /** prog_array slot/index used as the bpf_tail_call third argument. */
+  slot: number;
+  /** Program id stored in that slot, when bpftool exposes it. */
+  targetProgId: number;
+  /** Row index in the parsed map dump. */
+  entryIndex: number;
+}
+
 /** Result of a map dump operation */
 export interface MapDumpResult {
   mapId: number;
@@ -891,6 +902,8 @@ export interface MapDumpResult {
   /** Maximum entries returned in one dump call */
   maxReturned: number;
   entries: MapEntry[];
+  /** Parsed prog_array slot -> program-id targets, only present for prog_array dumps. */
+  progArrayTargets?: ProgArrayTarget[];
   /** True when BTF info was used to decode keys/values */
   btfDecoded: boolean;
   /** Error message if the dump failed entirely */

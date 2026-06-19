@@ -18,7 +18,12 @@ import { fetchProgDump, fetchProgReturnAnalysis } from "./ebpf-dump";
 import { buildSnapshot } from "./ebpf-parser";
 import { parseMaps } from "./ebpf-map-parser";
 import { buildMockProgDump } from "./ebpf-mock-dump";
-import { dumpMapEntries, parseEntry, MAX_DUMP_ENTRIES } from "./ebpf-map-dump";
+import {
+  dumpMapEntries,
+  parseEntry,
+  parseProgArrayTargets,
+  MAX_DUMP_ENTRIES,
+} from "./ebpf-map-dump";
 import type { RawBpfMap, RawBpfProg, RawCgroupEntry, RawMapEntry, RawNetSnapshot, MapDumpResult, ProgramReturnAnalysisResult } from "../shared/ebpf-types";
 import { parseMapDumpsInputSchema, rawSnapshotInputSchema } from "../shared/snapshot-validation";
 import { buildMockMapDump } from "./ebpf-mock-map-dump";
@@ -290,6 +295,14 @@ export const appRouter = router({
             error: null,
             unsupported: false,
             entries,
+            ...(mapType.toLowerCase().replace(/-/g, "_") === "prog_array"
+              ? {
+                  progArrayTargets: parseProgArrayTargets(
+                    (rawEntries as RawMapEntry[]).slice(0, MAX_DUMP_ENTRIES),
+                    mapId,
+                  ),
+                }
+              : {}),
           };
         }
 

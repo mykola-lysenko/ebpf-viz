@@ -12,7 +12,13 @@
 
 import { execFile } from "child_process";
 import { promisify } from "util";
-import type { MapDumpResult, MapEntry, RawMapEntry } from "../shared/ebpf-types";
+import type {
+  JsonValue,
+  MapDumpResult,
+  MapEntry,
+  ProgArrayTarget,
+  RawMapEntry,
+} from "../shared/ebpf-types";
 
 const execFileAsync = promisify(execFile);
 
@@ -56,6 +62,93 @@ export function btfToString(v: unknown): string {
   if (typeof v === "string") return v;
   if (typeof v === "number") return String(v);
   return JSON.stringify(v);
+}
+
+function isRecord(value: unknown): value is Record<string, JsonValue> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function integerFromJson(value: JsonValue | undefined): number | null {
+  if (typeof value === "number" && Number.isSafeInteger(value) && value >= 0) {
+    return value;
+  }
+  if (typeof value === "string" && /^(0|[1-9]\d*)$/.test(value)) {
+    const parsed = Number.parseInt(value, 10);
+    return Number.isSafeInteger(parsed) ? parsed : null;
+  }
+  return null;
+}
+
+function isStringArray(value: unknown): value is string[] {
+  return Array.isArray(value) && value.every(item => typeof item === "string");
+}
+
+function integerFromRawValue(
+  value: string[] | JsonValue | undefined,
+): number | null {
+  if (value === undefined) return null;
+  if (isStringArray(value)) {
+    const decimal = hexBytesToDecimal(value);
+    if (!decimal) return null;
+    const parsed = Number.parseInt(decimal, 10);
+    return Number.isSafeInteger(parsed) ? parsed : null;
+  }
+  if (Array.isArray(value)) return null;
+  return integerFromJson(value);
+}
+
+function integerFromObjectFields(
+  value: JsonValue | undefined,
+  fields: string[],
+): number | null {
+  if (!isRecord(value)) return null;
+  for (const field of fields) {
+    const parsed = integerFromJson(value[field]);
+    if (parsed !== null) return parsed;
+  }
+  return null;
+}
+
+function parseProgArraySlot(raw: RawMapEntry): number | null {
+  return (
+    integerFromRawValue(raw.formatted?.key) ??
+    integerFromObjectFields(raw.formatted?.key, ["slot", "index", "key"]) ??
+    integerFromRawValue(raw.key) ??
+    integerFromObjectFields(raw.key, ["slot", "index", "key"])
+  );
+}
+
+function parseProgArrayTargetProgId(raw: RawMapEntry): number | null {
+  const value = raw.value;
+  return (
+    integerFromRawValue(raw.formatted?.value) ??
+    integerFromObjectFields(raw.formatted?.value, [
+      "prog_id",
+      "progId",
+      "program_id",
+      "id",
+    ]) ??
+    integerFromRawValue(value) ??
+    integerFromObjectFields(value, ["prog_id", "progId", "program_id", "id"])
+  );
+}
+
+function isProgArrayMap(mapType: string): boolean {
+  return mapType.toLowerCase().replace(/-/g, "_") === "prog_array";
+}
+
+export function parseProgArrayTargets(
+  rawEntries: RawMapEntry[],
+  mapId: number,
+): ProgArrayTarget[] {
+  const targets: ProgArrayTarget[] = [];
+  rawEntries.forEach((raw, entryIndex) => {
+    const slot = parseProgArraySlot(raw);
+    const targetProgId = parseProgArrayTargetProgId(raw);
+    if (slot === null || targetProgId === null) return;
+    targets.push({ mapId, slot, targetProgId, entryIndex });
+  });
+  return targets;
 }
 
 /** Parse a single raw entry into a normalized MapEntry */
@@ -181,6 +274,9 @@ export function parseMapDumpOutput(
     truncated,
     btfDecoded,
     entries,
+    ...(isProgArrayMap(mapType)
+      ? { progArrayTargets: parseProgArrayTargets(slice, mapId) }
+      : {}),
   };
 }
 

@@ -76,7 +76,12 @@ function result(
   mapType: string,
   mapName: string,
   entries: MapEntry[],
-  opts: { btfDecoded?: boolean; unsupported?: boolean; error?: string } = {},
+  opts: {
+    btfDecoded?: boolean;
+    unsupported?: boolean;
+    error?: string;
+    progArrayTargets?: MapDumpResult["progArrayTargets"];
+  } = {},
 ): MapDumpResult {
   return {
     mapId,
@@ -89,6 +94,9 @@ function result(
     error: opts.error ?? null,
     unsupported: opts.unsupported ?? false,
     entries,
+    ...(opts.progArrayTargets
+      ? { progArrayTargets: opts.progArrayTargets }
+      : {}),
   };
 }
 
@@ -433,5 +441,24 @@ export function buildMockMapDump(
       );
   }
 
-  return result(mapId, mapType, mapName, entries);
+  return result(
+    mapId,
+    mapType,
+    mapName,
+    entries,
+    mapType === "prog_array"
+      ? {
+          progArrayTargets: entries.flatMap(entry =>
+            entry.keyDecimal !== null && entry.valueDecimal !== null
+              ? [{
+                  mapId,
+                  slot: Number.parseInt(entry.keyDecimal, 10),
+                  targetProgId: Number.parseInt(entry.valueDecimal, 10),
+                  entryIndex: entry.index,
+                }]
+              : [],
+          ),
+        }
+      : {},
+  );
 }

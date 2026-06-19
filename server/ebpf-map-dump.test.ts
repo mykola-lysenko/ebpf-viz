@@ -12,6 +12,7 @@ import {
   btfToString,
   parseEntry,
   parseMapDumpOutput,
+  parseProgArrayTargets,
   MAX_DUMP_ENTRIES,
 } from "./ebpf-map-dump";
 import type { RawMapEntry } from "../shared/ebpf-types";
@@ -328,6 +329,28 @@ describe("parseMapDumpOutput", () => {
       keyDecimal: "4",
       valueBtf: '{"prog_id":456,"name":"tail_target"}',
     });
+    expect(result.progArrayTargets).toEqual([
+      { mapId: 21, slot: 3, targetProgId: 123, entryIndex: 0 },
+      { mapId: 21, slot: 4, targetProgId: 456, entryIndex: 1 },
+    ]);
+  });
+
+  it("extracts prog_array targets from numeric, object, and formatted shapes", () => {
+    const targets = parseProgArrayTargets([
+      { key: 3, value: 123 },
+      { key: { slot: 4 }, value: { prog_id: 456 } },
+      {
+        key: { ignored: true },
+        value: { ignored: true },
+        formatted: { key: { index: 5 }, value: { id: "789" } },
+      },
+    ], 21);
+
+    expect(targets).toEqual([
+      { mapId: 21, slot: 3, targetProgId: 123, entryIndex: 0 },
+      { mapId: 21, slot: 4, targetProgId: 456, entryIndex: 1 },
+      { mapId: 21, slot: 5, targetProgId: 789, entryIndex: 2 },
+    ]);
   });
 });
 
