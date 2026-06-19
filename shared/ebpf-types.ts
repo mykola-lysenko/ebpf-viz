@@ -117,7 +117,16 @@ export interface BpfProgram {
 }
 
 export interface BpfAttachment {
-  kind: "xdp" | "tc" | "tcx" | "netkit" | "flow_dissector" | "netfilter" | "cgroup" | "perf" | "unknown";
+  kind:
+    | "xdp"
+    | "tc"
+    | "tcx"
+    | "netkit"
+    | "flow_dissector"
+    | "netfilter"
+    | "cgroup"
+    | "perf"
+    | "unknown";
   detail: string; // e.g. "eth0 (driver)", "cgroup_inet_ingress", "sys_enter_openat"
   ifname?: string;
   cgroupPath?: string;
@@ -135,10 +144,10 @@ export interface NetworkInterface {
    *  "sockmap" = synthetic socket-level attachment point (sk_msg, sk_skb, sk_lookup, sock_ops) */
   kind: "nic" | "sockmap";
   layers: {
-    L2: BpfProgram[];  // XDP, netkit (NIC only)
-    L3: BpfProgram[];  // TC, netfilter, flow_dissector (NIC only)
-    L4: BpfProgram[];  // sk_skb, sk_lookup (sockmap only)
-    L7: BpfProgram[];  // sk_msg, sock_ops (sockmap only)
+    L2: BpfProgram[]; // XDP, netkit (NIC only)
+    L3: BpfProgram[]; // TC, netfilter, flow_dissector (NIC only)
+    L4: BpfProgram[]; // sk_skb, sk_lookup (sockmap only)
+    L7: BpfProgram[]; // sk_msg, sock_ops (sockmap only)
   };
   allPrograms: BpfProgram[];
 }
@@ -179,7 +188,11 @@ export interface KernelAttachmentZone {
 
 // ─── Program chain (execution order at a hook point) ─────────────────────
 
-export type PacketDirection = "ingress" | "egress" | "bidirectional" | "unknown";
+export type PacketDirection =
+  | "ingress"
+  | "egress"
+  | "bidirectional"
+  | "unknown";
 
 export type PacketHookFamily =
   | "xdp"
@@ -239,6 +252,37 @@ export interface ProgramChain {
   canShortCircuit: boolean;
   /** Packet/socket context and return-value semantics for this hook. */
   packetContext?: PacketChainContext;
+}
+
+export type PacketVerdict = "pass" | "drop" | "redirect" | "other" | "unknown";
+
+export type PacketChainReachability = "always" | "conditional" | "not-reached";
+
+export type PacketChainPredictionConfidence = "high" | "partial" | "unknown";
+
+export interface PacketProgramPrediction {
+  progId: number;
+  position: number;
+  name: string;
+  verdicts: PacketVerdict[];
+  label: string;
+  tone: PacketVerdict;
+  title: string;
+  reachability: PacketChainReachability;
+  canTerminateChain: boolean;
+  definitelyTerminatesChain: boolean;
+  hasUnknownBehavior: boolean;
+}
+
+export interface PacketChainPrediction {
+  chainId: string;
+  summary: string;
+  confidence: PacketChainPredictionConfidence;
+  possibleOutcomes: PacketVerdict[];
+  alwaysPass: boolean;
+  hasUnknownBehavior: boolean;
+  firstTerminalPrograms: PacketProgramPrediction[];
+  steps: PacketProgramPrediction[];
 }
 
 // ─── Top-level snapshot ────────────────────────────────────────────────────
@@ -312,7 +356,14 @@ export interface ProgHistory {
 /** Summary of all programs' activity for the current snapshot */
 export interface ActivitySummary {
   /** Programs sorted by current calls/sec descending */
-  topByCallsPerSec: Array<{ id: number; name: string; rawType: string; callsPerSec: number; avgLatencyNs: number; cpuFraction: number }>;
+  topByCallsPerSec: Array<{
+    id: number;
+    name: string;
+    rawType: string;
+    callsPerSec: number;
+    avgLatencyNs: number;
+    cpuFraction: number;
+  }>;
   /** Total calls/sec across all programs */
   totalCallsPerSec: number;
   /** Total CPU fraction across all programs */
@@ -385,7 +436,11 @@ export interface XlatedReturnExit {
   sourceLine?: number;
   sourceColumn?: number;
   /** Why the return value could not be resolved to a constant. */
-  reason?: "no-direct-assignment" | "dynamic-assignment" | "conflicting-values" | "analysis-limit";
+  reason?:
+    | "no-direct-assignment"
+    | "dynamic-assignment"
+    | "conflicting-values"
+    | "analysis-limit";
 }
 
 export interface XlatedReturnConstantSummary {
@@ -455,14 +510,38 @@ export interface RawBpfMap {
 
 /** Normalized BPF map type */
 export type BpfMapType =
-  | "hash" | "array" | "prog_array" | "perf_event_array"
-  | "percpu_hash" | "percpu_array" | "stack_trace" | "cgroup_array"
-  | "lru_hash" | "lru_percpu_hash" | "lpm_trie" | "array_of_maps"
-  | "hash_of_maps" | "devmap" | "sockmap" | "cpumap" | "xskmap"
-  | "sockhash" | "cgroup_storage" | "reuseport_sockarray"
-  | "percpu_cgroup_storage" | "queue" | "stack" | "sk_storage"
-  | "devmap_hash" | "struct_ops" | "ringbuf" | "inode_storage"
-  | "task_storage" | "bloom_filter" | "user_ringbuf" | "cgrp_storage"
+  | "hash"
+  | "array"
+  | "prog_array"
+  | "perf_event_array"
+  | "percpu_hash"
+  | "percpu_array"
+  | "stack_trace"
+  | "cgroup_array"
+  | "lru_hash"
+  | "lru_percpu_hash"
+  | "lpm_trie"
+  | "array_of_maps"
+  | "hash_of_maps"
+  | "devmap"
+  | "sockmap"
+  | "cpumap"
+  | "xskmap"
+  | "sockhash"
+  | "cgroup_storage"
+  | "reuseport_sockarray"
+  | "percpu_cgroup_storage"
+  | "queue"
+  | "stack"
+  | "sk_storage"
+  | "devmap_hash"
+  | "struct_ops"
+  | "ringbuf"
+  | "inode_storage"
+  | "task_storage"
+  | "bloom_filter"
+  | "user_ringbuf"
+  | "cgrp_storage"
   | "unknown";
 
 /** Enriched BPF map with program relationships */
@@ -488,45 +567,178 @@ export interface BpfMap {
 }
 
 /** Map type metadata: color, category, description */
-export const MAP_TYPE_META: Record<string, { category: BpfMap["category"]; color: string; description: string }> = {
-  hash:                  { category: "data",    color: "#3b82f6", description: "Hash table — O(1) lookup by key" },
-  array:                 { category: "data",    color: "#2563eb", description: "Array indexed by integer key" },
-  percpu_hash:           { category: "data",    color: "#1d4ed8", description: "Per-CPU hash table" },
-  percpu_array:          { category: "data",    color: "#1e40af", description: "Per-CPU array" },
-  lru_hash:              { category: "data",    color: "#0ea5e9", description: "LRU hash — auto-evicts oldest entries" },
-  lru_percpu_hash:       { category: "data",    color: "#38bdf8", description: "Per-CPU LRU hash" },
-  lpm_trie:              { category: "data",    color: "#7dd3fc", description: "Longest-prefix-match trie (routing tables)" },
-  bloom_filter:          { category: "data",    color: "#bae6fd", description: "Probabilistic membership test" },
-  queue:                 { category: "data",    color: "#e0f2fe", description: "FIFO queue" },
-  stack:                 { category: "data",    color: "#f0f9ff", description: "LIFO stack" },
-  perf_event_array:      { category: "event",   color: "#f59e0b", description: "Ring buffer for perf events (legacy)" },
-  ringbuf:               { category: "event",   color: "#d97706", description: "High-performance ring buffer" },
-  user_ringbuf:          { category: "event",   color: "#b45309", description: "User-space ring buffer" },
-  stack_trace:           { category: "event",   color: "#92400e", description: "Stack trace storage" },
-  prog_array:            { category: "control", color: "#10b981", description: "Program array for tail calls" },
-  array_of_maps:         { category: "control", color: "#059669", description: "Array of inner maps" },
-  hash_of_maps:          { category: "control", color: "#047857", description: "Hash of inner maps" },
-  cgroup_array:          { category: "control", color: "#065f46", description: "Cgroup references" },
-  cgroup_storage:        { category: "control", color: "#064e3b", description: "Per-cgroup storage" },
-  percpu_cgroup_storage: { category: "control", color: "#022c22", description: "Per-CPU per-cgroup storage" },
-  cgrp_storage:          { category: "control", color: "#14532d", description: "Cgroup local storage" },
-  devmap:                { category: "control", color: "#7c3aed", description: "Device redirect map (XDP)" },
-  devmap_hash:           { category: "control", color: "#6d28d9", description: "Device redirect hash map" },
-  cpumap:                { category: "control", color: "#5b21b6", description: "CPU redirect map (XDP)" },
-  xskmap:                { category: "control", color: "#4c1d95", description: "AF_XDP socket map" },
-  sockmap:               { category: "socket",  color: "#ec4899", description: "Socket map for redirection" },
-  sockhash:              { category: "socket",  color: "#db2777", description: "Socket hash map" },
-  sk_storage:            { category: "socket",  color: "#be185d", description: "Per-socket local storage" },
-  reuseport_sockarray:   { category: "socket",  color: "#9d174d", description: "Reuseport socket array" },
-  struct_ops:            { category: "other",   color: "#14b8a6", description: "Struct ops (kernel callbacks)" },
-  inode_storage:         { category: "other",   color: "#0d9488", description: "Per-inode local storage" },
-  task_storage:          { category: "other",   color: "#0f766e", description: "Per-task local storage" },
-  unknown:               { category: "other",   color: "#6b7280", description: "Unknown map type" },
+export const MAP_TYPE_META: Record<
+  string,
+  { category: BpfMap["category"]; color: string; description: string }
+> = {
+  hash: {
+    category: "data",
+    color: "#3b82f6",
+    description: "Hash table — O(1) lookup by key",
+  },
+  array: {
+    category: "data",
+    color: "#2563eb",
+    description: "Array indexed by integer key",
+  },
+  percpu_hash: {
+    category: "data",
+    color: "#1d4ed8",
+    description: "Per-CPU hash table",
+  },
+  percpu_array: {
+    category: "data",
+    color: "#1e40af",
+    description: "Per-CPU array",
+  },
+  lru_hash: {
+    category: "data",
+    color: "#0ea5e9",
+    description: "LRU hash — auto-evicts oldest entries",
+  },
+  lru_percpu_hash: {
+    category: "data",
+    color: "#38bdf8",
+    description: "Per-CPU LRU hash",
+  },
+  lpm_trie: {
+    category: "data",
+    color: "#7dd3fc",
+    description: "Longest-prefix-match trie (routing tables)",
+  },
+  bloom_filter: {
+    category: "data",
+    color: "#bae6fd",
+    description: "Probabilistic membership test",
+  },
+  queue: { category: "data", color: "#e0f2fe", description: "FIFO queue" },
+  stack: { category: "data", color: "#f0f9ff", description: "LIFO stack" },
+  perf_event_array: {
+    category: "event",
+    color: "#f59e0b",
+    description: "Ring buffer for perf events (legacy)",
+  },
+  ringbuf: {
+    category: "event",
+    color: "#d97706",
+    description: "High-performance ring buffer",
+  },
+  user_ringbuf: {
+    category: "event",
+    color: "#b45309",
+    description: "User-space ring buffer",
+  },
+  stack_trace: {
+    category: "event",
+    color: "#92400e",
+    description: "Stack trace storage",
+  },
+  prog_array: {
+    category: "control",
+    color: "#10b981",
+    description: "Program array for tail calls",
+  },
+  array_of_maps: {
+    category: "control",
+    color: "#059669",
+    description: "Array of inner maps",
+  },
+  hash_of_maps: {
+    category: "control",
+    color: "#047857",
+    description: "Hash of inner maps",
+  },
+  cgroup_array: {
+    category: "control",
+    color: "#065f46",
+    description: "Cgroup references",
+  },
+  cgroup_storage: {
+    category: "control",
+    color: "#064e3b",
+    description: "Per-cgroup storage",
+  },
+  percpu_cgroup_storage: {
+    category: "control",
+    color: "#022c22",
+    description: "Per-CPU per-cgroup storage",
+  },
+  cgrp_storage: {
+    category: "control",
+    color: "#14532d",
+    description: "Cgroup local storage",
+  },
+  devmap: {
+    category: "control",
+    color: "#7c3aed",
+    description: "Device redirect map (XDP)",
+  },
+  devmap_hash: {
+    category: "control",
+    color: "#6d28d9",
+    description: "Device redirect hash map",
+  },
+  cpumap: {
+    category: "control",
+    color: "#5b21b6",
+    description: "CPU redirect map (XDP)",
+  },
+  xskmap: {
+    category: "control",
+    color: "#4c1d95",
+    description: "AF_XDP socket map",
+  },
+  sockmap: {
+    category: "socket",
+    color: "#ec4899",
+    description: "Socket map for redirection",
+  },
+  sockhash: {
+    category: "socket",
+    color: "#db2777",
+    description: "Socket hash map",
+  },
+  sk_storage: {
+    category: "socket",
+    color: "#be185d",
+    description: "Per-socket local storage",
+  },
+  reuseport_sockarray: {
+    category: "socket",
+    color: "#9d174d",
+    description: "Reuseport socket array",
+  },
+  struct_ops: {
+    category: "other",
+    color: "#14b8a6",
+    description: "Struct ops (kernel callbacks)",
+  },
+  inode_storage: {
+    category: "other",
+    color: "#0d9488",
+    description: "Per-inode local storage",
+  },
+  task_storage: {
+    category: "other",
+    color: "#0f766e",
+    description: "Per-task local storage",
+  },
+  unknown: {
+    category: "other",
+    color: "#6b7280",
+    description: "Unknown map type",
+  },
 };
 
 // ─── Map Entries Inspector ────────────────────────────────────────────────────
 
-export type JsonValue = string | number | boolean | null | JsonValue[] | { [key: string]: JsonValue };
+export type JsonValue =
+  | string
+  | number
+  | boolean
+  | null
+  | JsonValue[]
+  | { [key: string]: JsonValue };
 
 /**
  * A single raw entry from `bpftool -jp map dump id N`.
