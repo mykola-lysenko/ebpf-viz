@@ -435,22 +435,24 @@ export const MAP_TYPE_META: Record<string, { category: BpfMap["category"]; color
 
 // ─── Map Entries Inspector ────────────────────────────────────────────────────
 
+export type JsonValue = string | number | boolean | null | JsonValue[] | { [key: string]: JsonValue };
+
 /**
  * A single raw entry from `bpftool -jp map dump id N`.
  * Both key and value can be:
  *   - string[] — hex byte array like ["0x00","0x01",...]
- *   - Record<string,unknown> — BTF-decoded struct/primitive
+ *   - JsonValue — BTF-decoded struct/primitive
  *   - { error: string } — when bpftool cannot read the value (e.g. perf_event_array)
  */
 export interface RawMapEntry {
-  key: string[] | Record<string, unknown>;
-  value: string[] | Record<string, unknown> | { error: string };
+  key: string[] | JsonValue;
+  value?: string[] | JsonValue | { error: string };
   /** Present for per-cpu maps: one value per CPU */
-  values?: Array<{ cpu: number; value: string[] | Record<string, unknown> }>;
+  values?: Array<{ cpu: number; value: string[] | JsonValue }>;
   /** Formatted key string (hex, decimal, or BTF) */
   formatted?: {
-    key: string | Record<string, unknown>;
-    value: string | Record<string, unknown>;
+    key: JsonValue;
+    value: JsonValue;
   };
 }
 

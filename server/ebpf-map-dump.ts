@@ -72,8 +72,8 @@ export function parseEntry(raw: RawMapEntry, index: number): MapEntry {
   } else if (raw.key && typeof raw.key === "object") {
     keyBtf = btfToString(raw.key);
     keyHex = "";
-  } else if (typeof raw.key === "string") {
-    keyBtf = raw.key;
+  } else if (raw.key !== undefined) {
+    keyBtf = btfToString(raw.key);
     keyHex = "";
   }
 
@@ -106,6 +106,9 @@ export function parseEntry(raw: RawMapEntry, index: number): MapEntry {
     valueHex = hexBytesToString(raw.value as string[]);
     valueDecimal = hexBytesToDecimal(raw.value as string[]);
   } else if (raw.value && typeof raw.value === "object") {
+    valueBtf = btfToString(raw.value);
+    valueHex = "";
+  } else if (raw.value !== undefined) {
     valueBtf = btfToString(raw.value);
     valueHex = "";
   }

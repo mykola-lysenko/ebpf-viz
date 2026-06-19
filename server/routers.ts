@@ -19,7 +19,8 @@ import { buildSnapshot } from "./ebpf-parser";
 import { parseMaps } from "./ebpf-map-parser";
 import { buildMockProgDump } from "./ebpf-mock-dump";
 import { dumpMapEntries, parseEntry, MAX_DUMP_ENTRIES } from "./ebpf-map-dump";
-import type { RawMapEntry, MapDumpResult } from "../shared/ebpf-types";
+import type { RawBpfMap, RawBpfProg, RawCgroupEntry, RawMapEntry, RawNetSnapshot, MapDumpResult } from "../shared/ebpf-types";
+import { parseMapDumpsInputSchema, rawSnapshotInputSchema } from "../shared/snapshot-validation";
 import { buildMockMapDump } from "./ebpf-mock-map-dump";
 
 export const appRouter = router({
@@ -187,24 +188,12 @@ export const appRouter = router({
      * and runs the full server-side buildSnapshot() pipeline.
      */
     parseSnapshot: publicProcedure
-      .input(z.object({
-        raw: z.object({
-          progs: z.array(z.any()),
-          maps: z.array(z.any()).optional(),
-          net: z.array(z.any()).optional(),
-          cgroups: z.array(z.any()).optional(),
-        }),
-        hostname: z.string().optional(),
-        kernelVersion: z.string().optional(),
-        bpftoolVersion: z.string().optional(),
-        capturedAt: z.string().optional(),
-        timestamp: z.number().optional(),
-      }))
+      .input(rawSnapshotInputSchema)
       .mutation(({ input }) => {
         const snap = buildSnapshot(
-          input.raw.progs,
-          input.raw.net ?? [],
-          input.raw.cgroups ?? [],
+          input.raw.progs as RawBpfProg[],
+          (input.raw.net ?? []) as RawNetSnapshot[],
+          (input.raw.cgroups ?? []) as RawCgroupEntry[],
           {
             hostname: input.hostname ?? "unknown",
             kernelVersion: input.kernelVersion ?? "unknown",
@@ -213,9 +202,9 @@ export const appRouter = router({
           }
         );
         // Preserve the original capture timestamp if provided
-        if (input.timestamp) snap.timestamp = input.timestamp;
+        if (input.timestamp !== undefined) snap.timestamp = input.timestamp;
         // Parse maps from raw data and cross-reference with programs
-        const maps = parseMaps((input.raw.maps ?? []) as import("../shared/ebpf-types").RawBpfMap[], snap.programs);
+        const maps = parseMaps((input.raw.maps ?? []) as RawBpfMap[], snap.programs);
         return { snapshot: snap, maps };
       }),
 
@@ -227,15 +216,7 @@ export const appRouter = router({
      * in snapshot mode without calling the live bpftool.
      */
     parseMapDumps: publicProcedure
-      .input(z.object({
-        mapDumps: z.record(z.string(), z.array(z.any())),
-        // Optional: BpfMap metadata to enrich the results
-        maps: z.array(z.object({
-          id: z.number(),
-          rawType: z.string(),
-          name: z.string(),
-        })).optional(),
-      }))
+      .input(parseMapDumpsInputSchema)
       .mutation(({ input }) => {
         const result: Record<number, MapDumpResult> = {};
         const mapsById = new Map((input.maps ?? []).map(m => [m.id, m]));
@@ -248,6 +229,7 @@ export const appRouter = router({
           const mapType = mapMeta?.rawType ?? "unknown";
           const mapName = mapMeta?.name ?? `map#${mapId}`;
 
+          const totalEntries = rawEntries.length;
           const entries = (rawEntries as RawMapEntry[]).slice(0, MAX_DUMP_ENTRIES).map((r, i) => parseEntry(r, i));
           const btfDecoded = entries.length > 0 && (
             (rawEntries[0] as RawMapEntry).key !== undefined &&
@@ -259,8 +241,8 @@ export const appRouter = router({
             mapId,
             mapType,
             mapName,
-            totalEntries: entries.length,
-            truncated: (rawEntries as unknown[]).length > MAX_DUMP_ENTRIES,
+            totalEntries,
+            truncated: totalEntries > MAX_DUMP_ENTRIES,
             maxReturned: MAX_DUMP_ENTRIES,
             btfDecoded,
             error: null,
