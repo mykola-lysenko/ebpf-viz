@@ -144,7 +144,7 @@ function OsiLayerRow({
   returnAnalysisById: Map<number, ProgramReturnAnalysisResult>;
   returnAnalysisLoading: boolean;
 }) {
-  const { historyMap } = useEbpf();
+  const { historyMap, maps } = useEbpf();
   const hasProgs = programs.length > 0;
   const [selectedChainDetails, setSelectedChainDetails] = useState<{
     chain: ProgramChain;
@@ -225,7 +225,9 @@ function OsiLayerRow({
                   (hasAnyAnalysis || !returnAnalysisLoading)
                     ? predictPacketChain(
                         chain,
-                        progId => returnAnalysisById.get(progId)?.returnAnalysis
+                        progId =>
+                          returnAnalysisById.get(progId)?.returnAnalysis,
+                        { maps }
                       )
                     : null;
                 const predictionStepsById = new Map(

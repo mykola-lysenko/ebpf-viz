@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type {
+  BpfMap,
   ProgramChain,
   XlatedReturnAnalysis,
   XlatedSideEffectSummary,
@@ -18,6 +19,25 @@ const EMPTY_SIDE_EFFECTS: XlatedSideEffectSummary = {
   hasTailCalls: false,
   hasSocketMutations: false,
 };
+
+function progArrayMap(id: number, name: string): BpfMap {
+  return {
+    id,
+    type: "prog_array",
+    rawType: "prog_array",
+    name,
+    flags: 0,
+    bytesKey: 4,
+    bytesValue: 4,
+    maxEntries: 16,
+    bytesMemlock: 4096,
+    frozen: false,
+    pinnedPaths: [],
+    usedByProgIds: [1],
+    color: "#f59e0b",
+    category: "control",
+  };
+}
 
 function tcChain(): ProgramChain {
   return {
@@ -230,6 +250,37 @@ describe("predictPacketChain", () => {
       definitelyTerminatesChain: false,
     });
     expect(prediction?.steps[2].reachability).toBe("conditional");
+  });
+
+  it("explains tail calls with resolved prog-array map and slot", () => {
+    const analysis = returnAnalysis([0], { tailCall: true });
+    analysis.tailCalls = [
+      {
+        insnIndex: 42,
+        disasm: "(85) call bpf_tail_call#12",
+        mapId: 21,
+        slot: 3,
+      },
+    ];
+    const analyses = new Map([
+      [1, analysis],
+      [2, returnAnalysis([0])],
+      [3, returnAnalysis([0])],
+    ]);
+
+    const prediction = predictPacketChain(tcChain(), id => analyses.get(id), {
+      maps: [progArrayMap(21, "tail_calls")],
+    });
+
+    expect(prediction?.steps[0].verdictExplanations).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          verdict: "unknown",
+          summary:
+            "Tail call at instruction 42 may continue in prog-array tail_calls (#21) slot 3; target program is not resolved from current snapshot.",
+        }),
+      ])
+    );
   });
 
   it("keeps all-pass verdict prediction while reporting known side effects", () => {

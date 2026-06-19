@@ -529,10 +529,36 @@ export interface XlatedReturnAnalysis {
   observedConstants: XlatedReturnConstantSummary[];
   /** Tail calls can transfer control to another program, so final verdict may be outside this dump. */
   tailCallIndices: number[];
+  /** Tail-call sites with best-effort prog-array map and slot extraction. */
+  tailCalls?: XlatedTailCall[];
   hasUnknownExits: boolean;
   hasTailCalls: boolean;
   /** Known helper/direct-write side effects detected in xlated bytecode. */
   sideEffects: XlatedSideEffectSummary;
+}
+
+export interface XlatedTailCall {
+  /** Instruction index of the bpf_tail_call helper call. */
+  insnIndex: number;
+  /** Tail-call instruction disassembly. */
+  disasm: string;
+  /** Prog-array map id passed in r2, when statically resolved. */
+  mapId?: number;
+  /** Instruction index that assigned the map reference to r2, when found. */
+  mapAssignmentIndex?: number;
+  /** Disassembly of the map assignment instruction, when found. */
+  mapAssignmentDisasm?: string;
+  /** Constant prog-array slot/index passed in r3, when statically resolved. */
+  slot?: number;
+  /** Instruction index that assigned the slot/index to r3, when found. */
+  slotAssignmentIndex?: number;
+  /** Disassembly of the slot/index assignment instruction, when found. */
+  slotAssignmentDisasm?: string;
+  /** Source statement associated with the call, when available. */
+  source?: string;
+  sourceFile?: string;
+  sourceLine?: number;
+  sourceColumn?: number;
 }
 
 export interface ProgramReturnAnalysisResult {

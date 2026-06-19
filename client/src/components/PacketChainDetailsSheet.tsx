@@ -29,6 +29,7 @@ import type {
   XlatedBranchEvidence,
   XlatedReturnExit,
   XlatedSideEffect,
+  XlatedTailCall,
 } from "../../../shared/ebpf-types";
 
 const VERDICT_TONE_CLASSES: Record<PacketVerdict, string> = {
@@ -250,6 +251,61 @@ function SideEffectEvidence({ effects }: { effects: XlatedSideEffect[] }) {
   );
 }
 
+function formatTailCall(tailCall: XlatedTailCall): string {
+  const mapText =
+    tailCall.mapId !== undefined
+      ? `prog-array map #${tailCall.mapId}`
+      : "unresolved prog-array map";
+  const slotText =
+    tailCall.slot !== undefined ? `slot ${tailCall.slot}` : "unresolved slot";
+  return `insn ${tailCall.insnIndex}: ${mapText}, ${slotText}`;
+}
+
+function TailCallEvidence({
+  tailCalls,
+  fallbackIndices,
+}: {
+  tailCalls?: XlatedTailCall[];
+  fallbackIndices: number[];
+}) {
+  const calls =
+    tailCalls ??
+    fallbackIndices.map(
+      (insnIndex): XlatedTailCall => ({
+        insnIndex,
+        disasm: "bpf_tail_call",
+      })
+    );
+
+  return (
+    <div className="mt-1 space-y-1">
+      {calls.map(tailCall => (
+        <div
+          key={tailCall.insnIndex}
+          className="rounded border border-amber-500/25 bg-amber-500/5 px-2 py-1 text-[11px] text-amber-300"
+        >
+          <div>
+            {formatTailCall(tailCall)}. Final verdict may be in another program.
+          </div>
+          <div className="mt-0.5 break-all font-mono text-[10px] text-amber-300/70">
+            {tailCall.disasm}
+          </div>
+          {tailCall.mapAssignmentDisasm && (
+            <div className="mt-0.5 break-all font-mono text-[10px] text-amber-300/60">
+              map: {tailCall.mapAssignmentDisasm}
+            </div>
+          )}
+          {tailCall.slotAssignmentDisasm && (
+            <div className="mt-0.5 break-all font-mono text-[10px] text-amber-300/60">
+              slot: {tailCall.slotAssignmentDisasm}
+            </div>
+          )}
+        </div>
+      ))}
+    </div>
+  );
+}
+
 function StepDetails({
   step,
   program,
@@ -331,11 +387,10 @@ function StepDetails({
               </div>
               <ReturnEvidence exits={analysis.unknownExits} label="unknown" />
               {analysis.hasTailCalls && (
-                <div className="mt-1 rounded border border-amber-500/25 bg-amber-500/5 px-2 py-1 text-[11px] text-amber-300">
-                  Tail calls at instruction(s):{" "}
-                  {analysis.tailCallIndices.join(", ")}. Final verdict may be in
-                  another program.
-                </div>
+                <TailCallEvidence
+                  tailCalls={analysis.tailCalls}
+                  fallbackIndices={analysis.tailCallIndices}
+                />
               )}
             </div>
           )}

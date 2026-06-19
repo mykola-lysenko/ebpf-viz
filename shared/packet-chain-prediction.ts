@@ -1,4 +1,5 @@
 import type {
+  BpfMap,
   PacketActionSemantics,
   PacketChainPrediction,
   PacketProgramPrediction,
@@ -7,11 +8,16 @@ import type {
   ProgramChain,
   XlatedReturnAnalysis,
   XlatedReturnExit,
+  XlatedTailCall,
 } from "./ebpf-types";
 
 type AnalysisLookup = (
   progId: number
 ) => XlatedReturnAnalysis | null | undefined;
+
+interface PredictionContext {
+  maps?: BpfMap[];
+}
 
 const VERDICT_ORDER: PacketVerdict[] = [
   "drop",
@@ -208,7 +214,8 @@ function unknownExitExplanation(
 
 function buildVerdictExplanations(
   analysis: XlatedReturnAnalysis | null | undefined,
-  semantics: PacketActionSemantics
+  semantics: PacketActionSemantics,
+  context: PredictionContext = {}
 ): PacketVerdictExplanation[] {
   if (!analysis) {
     return [
@@ -237,10 +244,40 @@ function buildVerdictExplanations(
   explanations.push(...analysis.unknownExits.map(unknownExitExplanation));
 
   if (analysis.hasTailCalls) {
-    explanations.push({
-      verdict: "unknown",
-      summary: `Tail calls at instruction(s) ${analysis.tailCallIndices.join(", ")} can transfer the final verdict to another program.`,
-    });
+    const mapById = new Map((context.maps ?? []).map(map => [map.id, map]));
+    const tailCalls =
+      analysis.tailCalls ??
+      analysis.tailCallIndices.map(
+        (insnIndex): XlatedTailCall => ({
+          insnIndex,
+          disasm: "bpf_tail_call",
+        })
+      );
+
+    for (const tailCall of tailCalls) {
+      const map =
+        tailCall.mapId !== undefined ? mapById.get(tailCall.mapId) : undefined;
+      const mapText =
+        tailCall.mapId !== undefined
+          ? map
+            ? `prog-array ${map.name} (#${tailCall.mapId})`
+            : `prog-array map #${tailCall.mapId}`
+          : "an unresolved prog-array map";
+      const slotText =
+        tailCall.slot !== undefined
+          ? ` slot ${tailCall.slot}`
+          : " an unresolved slot";
+
+      explanations.push({
+        verdict: "unknown",
+        summary: `Tail call at instruction ${tailCall.insnIndex} may continue in ${mapText}${slotText}; target program is not resolved from current snapshot.`,
+        exitIndex: tailCall.insnIndex,
+        source: tailCall.source,
+        sourceFile: tailCall.sourceFile,
+        sourceLine: tailCall.sourceLine,
+        sourceColumn: tailCall.sourceColumn,
+      });
+    }
   }
 
   return explanations;
@@ -333,7 +370,8 @@ function summarizeChain(
 
 export function predictPacketChain(
   chain: ProgramChain,
-  getAnalysis: AnalysisLookup
+  getAnalysis: AnalysisLookup,
+  context: PredictionContext = {}
 ): PacketChainPrediction | null {
   const semantics = chain.packetContext?.semantics;
   if (!semantics) return null;
@@ -378,7 +416,11 @@ export function predictPacketChain(
       label: verdictLabel(verdicts, programHasUnknown),
       tone: verdictTone(verdicts, programHasUnknown),
       title: verdictTitle(analysis),
-      verdictExplanations: buildVerdictExplanations(analysis, semantics),
+      verdictExplanations: buildVerdictExplanations(
+        analysis,
+        semantics,
+        context
+      ),
       reachability,
       canTerminateChain,
       definitelyTerminatesChain,

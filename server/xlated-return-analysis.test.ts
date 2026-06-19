@@ -300,4 +300,35 @@ describe("analyzeXlatedReturns", () => {
     expect(result.tailCallIndices).toEqual([0]);
     expect(result.hasTailCalls).toBe(true);
   });
+
+  it("extracts prog-array map and slot for tail calls", () => {
+    const result = analyzeXlatedReturns([
+      insn(0, "(bf) r1 = r6"),
+      insn(1, "(18) r2 = map[id:123]"),
+      insn(3, "(b7) r3 = 7"),
+      insn(4, "(85) call bpf_tail_call#12", {
+        source: "bpf_tail_call(ctx, &jmp_table, 7);",
+        sourceFile: "prog.bpf.c",
+        sourceLine: 50,
+      }),
+      insn(5, "(b7) r0 = 0"),
+      insn(6, "(95) exit"),
+    ]);
+
+    expect(result.tailCalls).toEqual([
+      {
+        insnIndex: 4,
+        disasm: "(85) call bpf_tail_call#12",
+        mapId: 123,
+        mapAssignmentIndex: 1,
+        mapAssignmentDisasm: "(18) r2 = map[id:123]",
+        slot: 7,
+        slotAssignmentIndex: 3,
+        slotAssignmentDisasm: "(b7) r3 = 7",
+        source: "bpf_tail_call(ctx, &jmp_table, 7);",
+        sourceFile: "prog.bpf.c",
+        sourceLine: 50,
+      },
+    ]);
+  });
 });

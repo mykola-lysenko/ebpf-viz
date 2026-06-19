@@ -3,6 +3,7 @@ import type {
   XlatedInsn,
   XlatedReturnAnalysis,
   XlatedReturnExit,
+  XlatedTailCall,
 } from "../shared/ebpf-types";
 import { analyzeXlatedSideEffects } from "./xlated-side-effect-analysis";
 
@@ -20,11 +21,13 @@ interface ParsedInsn {
 
 type RegisterWrite =
   | { kind: "const"; reg: RegisterName; value: number; insn: XlatedInsn }
+  | { kind: "map"; reg: RegisterName; mapId: number; insn: XlatedInsn }
   | { kind: "copy"; reg: RegisterName; source: RegisterName; insn: XlatedInsn }
   | { kind: "unknown"; reg: RegisterName; insn: XlatedInsn };
 
 type ResolveResult =
-  | { kind: "known"; value: number; assignmentInsn?: XlatedInsn }
+  | { kind: "const"; value: number; assignmentInsn?: XlatedInsn }
+  | { kind: "map"; mapId: number; assignmentInsn?: XlatedInsn }
   | { kind: "unknown"; reason: UnknownReason; assignmentInsn?: XlatedInsn };
 
 const RETURN_REGISTER: RegisterName = "r0";
@@ -76,11 +79,11 @@ function isTailCallInsn(disasm: string): boolean {
 function sourceEvidence(
   insn: XlatedInsn
 ): Pick<
-  XlatedReturnExit,
+  XlatedReturnExit | XlatedTailCall,
   "source" | "sourceFile" | "sourceLine" | "sourceColumn"
 > {
   const evidence: Pick<
-    XlatedReturnExit,
+    XlatedReturnExit | XlatedTailCall,
     "source" | "sourceFile" | "sourceLine" | "sourceColumn"
   > = {};
   if (insn.source) evidence.source = insn.source;
@@ -108,6 +111,15 @@ function parseRegisterWrites(insn: XlatedInsn): RegisterWrite[] {
     const value = parseIntegerLiteral(constMatch[2]);
     if (reg && value !== null) {
       return [{ kind: "const", reg, value, insn }];
+    }
+  }
+
+  const mapMatch = body.match(/^([rw](?:10|[0-9]))\s*=\s*map\[id:(\d+)\]/);
+  if (mapMatch) {
+    const reg = normalizeRegister(mapMatch[1]);
+    const mapId = Number.parseInt(mapMatch[2], 10);
+    if (reg && Number.isFinite(mapId)) {
+      return [{ kind: "map", reg, mapId, insn }];
     }
   }
 
@@ -279,23 +291,57 @@ function mergeResults(results: ResolveResult[]): ResolveResult {
   );
   if (unknown) return unknown;
 
-  const known = results as Array<Extract<ResolveResult, { kind: "known" }>>;
-  const firstValue = known[0]?.value;
-  if (
-    firstValue === undefined ||
-    known.some(result => result.value !== firstValue)
-  ) {
-    return { kind: "unknown", reason: "conflicting-values" };
+  const constants = results.filter(
+    (result): result is Extract<ResolveResult, { kind: "const" }> =>
+      result.kind === "const"
+  );
+  if (constants.length === results.length) {
+    const firstValue = constants[0]?.value;
+    if (
+      firstValue === undefined ||
+      constants.some(result => result.value !== firstValue)
+    ) {
+      return { kind: "unknown", reason: "conflicting-values" };
+    }
+
+    const firstAssignmentIndex = constants[0]?.assignmentInsn?.index;
+    const assignmentInsn =
+      firstAssignmentIndex !== undefined &&
+      constants.every(
+        result => result.assignmentInsn?.index === firstAssignmentIndex
+      )
+        ? constants[0]?.assignmentInsn
+        : undefined;
+
+    return { kind: "const", value: firstValue, assignmentInsn };
   }
 
-  const firstAssignmentIndex = known[0]?.assignmentInsn?.index;
-  const assignmentInsn =
-    firstAssignmentIndex !== undefined &&
-    known.every(result => result.assignmentInsn?.index === firstAssignmentIndex)
-      ? known[0]?.assignmentInsn
-      : undefined;
+  const maps = results.filter(
+    (result): result is Extract<ResolveResult, { kind: "map" }> =>
+      result.kind === "map"
+  );
+  if (maps.length === results.length) {
+    const firstMapId = maps[0]?.mapId;
+    if (
+      firstMapId === undefined ||
+      maps.some(result => result.mapId !== firstMapId)
+    ) {
+      return { kind: "unknown", reason: "conflicting-values" };
+    }
 
-  return { kind: "known", value: firstValue, assignmentInsn };
+    const firstAssignmentIndex = maps[0]?.assignmentInsn?.index;
+    const assignmentInsn =
+      firstAssignmentIndex !== undefined &&
+      maps.every(
+        result => result.assignmentInsn?.index === firstAssignmentIndex
+      )
+        ? maps[0]?.assignmentInsn
+        : undefined;
+
+    return { kind: "map", mapId: firstMapId, assignmentInsn };
+  }
+
+  return { kind: "unknown", reason: "conflicting-values" };
 }
 
 function writeForRegister(
@@ -305,11 +351,12 @@ function writeForRegister(
   return parsed.writes.find(write => write.reg === reg);
 }
 
-function resolveRegisterAtExit(
+function createRegisterResolver(
   parsed: ParsedInsn[],
-  predecessors: number[][],
-  exitPos: number
-): ResolveResult {
+  predecessors: number[][]
+): {
+  resolveBefore: (pos: number, reg: RegisterName) => ResolveResult;
+} {
   const memo = new Map<string, ResolveResult>();
   const visiting = new Set<string>();
   let steps = 0;
@@ -346,23 +393,31 @@ function resolveRegisterAtExit(
       result = resolveBefore(pos, reg);
     } else if (write.kind === "const") {
       result = {
-        kind: "known",
+        kind: "const",
         value: write.value,
+        assignmentInsn: write.insn,
+      };
+    } else if (write.kind === "map") {
+      result = {
+        kind: "map",
+        mapId: write.mapId,
         assignmentInsn: write.insn,
       };
     } else if (write.kind === "copy") {
       const source = resolveBefore(pos, write.source);
       result =
-        source.kind === "known"
-          ? { kind: "known", value: source.value, assignmentInsn: write.insn }
-          : {
-              kind: "unknown",
-              reason:
-                source.reason === "no-direct-assignment"
-                  ? "dynamic-assignment"
-                  : source.reason,
-              assignmentInsn: write.insn,
-            };
+        source.kind === "const"
+          ? { kind: "const", value: source.value, assignmentInsn: write.insn }
+          : source.kind === "map"
+            ? { kind: "map", mapId: source.mapId, assignmentInsn: write.insn }
+            : {
+                kind: "unknown",
+                reason:
+                  source.reason === "no-direct-assignment"
+                    ? "dynamic-assignment"
+                    : source.reason,
+                assignmentInsn: write.insn,
+              };
     } else {
       result = {
         kind: "unknown",
@@ -376,12 +431,59 @@ function resolveRegisterAtExit(
     return result;
   };
 
-  return resolveBefore(exitPos, RETURN_REGISTER);
+  return { resolveBefore };
+}
+
+function resolveRegisterAtExit(
+  parsed: ParsedInsn[],
+  predecessors: number[][],
+  exitPos: number
+): ResolveResult {
+  return createRegisterResolver(parsed, predecessors).resolveBefore(
+    exitPos,
+    RETURN_REGISTER
+  );
+}
+
+function extractTailCalls(
+  parsed: ParsedInsn[],
+  predecessors: number[][]
+): XlatedTailCall[] {
+  const resolver = createRegisterResolver(parsed, predecessors);
+  const tailCalls: XlatedTailCall[] = [];
+
+  for (const parsedInsn of parsed) {
+    if (!isTailCallInsn(parsedInsn.insn.disasm)) continue;
+
+    const map = resolver.resolveBefore(parsedInsn.pos, "r2");
+    const slot = resolver.resolveBefore(parsedInsn.pos, "r3");
+    const tailCall: XlatedTailCall = {
+      insnIndex: parsedInsn.insn.index,
+      disasm: parsedInsn.insn.disasm,
+      ...sourceEvidence(parsedInsn.insn),
+    };
+
+    if (map.kind === "map") {
+      tailCall.mapId = map.mapId;
+      tailCall.mapAssignmentIndex = map.assignmentInsn?.index;
+      tailCall.mapAssignmentDisasm = map.assignmentInsn?.disasm;
+    }
+
+    if (slot.kind === "const") {
+      tailCall.slot = slot.value;
+      tailCall.slotAssignmentIndex = slot.assignmentInsn?.index;
+      tailCall.slotAssignmentDisasm = slot.assignmentInsn?.disasm;
+    }
+
+    tailCalls.push(tailCall);
+  }
+
+  return tailCalls;
 }
 
 function toKnownExit(
   exitInsn: XlatedInsn,
-  resolved: Extract<ResolveResult, { kind: "known" }>,
+  resolved: Extract<ResolveResult, { kind: "const" }>,
   branchEvidence?: XlatedBranchEvidence[]
 ): XlatedReturnExit {
   return {
@@ -430,6 +532,7 @@ export function analyzeXlatedReturns(
     .map(insn => insn.index);
   const parsed = parseInstructions(insns);
   const { predecessors, reachable } = buildControlFlow(parsed);
+  const tailCalls = extractTailCalls(parsed, predecessors);
 
   for (const parsedInsn of parsed) {
     if (!parsedInsn.isExit) continue;
@@ -445,7 +548,7 @@ export function analyzeXlatedReturns(
       predecessors,
       parsedInsn.pos
     );
-    if (resolved.kind === "known") {
+    if (resolved.kind === "const") {
       constantExits.push(
         toKnownExit(parsedInsn.insn, resolved, branchEvidence)
       );
@@ -456,7 +559,19 @@ export function analyzeXlatedReturns(
       continue;
     }
 
-    unknownExits.push(toUnknownExit(parsedInsn.insn, resolved, branchEvidence));
+    unknownExits.push(
+      toUnknownExit(
+        parsedInsn.insn,
+        resolved.kind === "unknown"
+          ? resolved
+          : {
+              kind: "unknown",
+              reason: "dynamic-assignment",
+              assignmentInsn: resolved.assignmentInsn,
+            },
+        branchEvidence
+      )
+    );
   }
 
   return {
@@ -467,6 +582,7 @@ export function analyzeXlatedReturns(
       .map(([value, exitCount]) => ({ value, exitCount }))
       .sort((a, b) => a.value - b.value),
     tailCallIndices,
+    ...(tailCalls.length > 0 ? { tailCalls } : {}),
     hasUnknownExits: unknownExits.length > 0,
     hasTailCalls: tailCallIndices.length > 0,
     sideEffects: analyzeXlatedSideEffects(insns),
