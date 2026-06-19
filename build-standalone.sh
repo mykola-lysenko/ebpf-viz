@@ -207,12 +207,6 @@ if [ "$NODE_MAJOR" -lt 16 ]; then
   exit 1
 fi
 
-# ── Install optional deps for Node 16 (undici for fetch/Headers) ──────────────
-if [ "$NODE_MAJOR" -lt 18 ] && [ ! -d "$SCRIPT_DIR/node_modules/undici" ]; then
-  echo "[compat] Node.js < 18 detected — installing undici for fetch/Headers support..."
-  (cd "$SCRIPT_DIR" && npm install --no-save 2>/dev/null) || echo "[compat] Warning: could not install undici. tRPC may not work."
-fi
-
 # ── Load .env if present ───────────────────────────────────────────────────────
 if [ -f "$SCRIPT_DIR/.env" ]; then
   set -o allexport
@@ -259,25 +253,87 @@ exec node --no-warnings "$SCRIPT_DIR/server.js"
 STARTSCRIPT
 chmod +x "$OUT_DIR/start.sh"
 
-# Write a minimal package.json (ESM bundle)
-# undici is an optional dependency for Node 16 (provides fetch/Headers globals).
-# On Node 18+ it's a no-op — the globals are built in.
+# Write a minimal package.json (ESM bundle).
+# undici is required for Node 16 because it provides fetch/Headers globals used
+# by tRPC. It is intentionally installed at build time and bundled into the
+# tarball so target machines need only Node.js, not npm or registry access.
 cat > "$OUT_DIR/package.json" << 'PKGJSON'
 {
   "name": "ebpf-viz-standalone",
   "version": "1.0.0",
   "type": "module",
-  "optionalDependencies": {
-    "undici": "6.27.0"
+  "dependencies": {
+    "undici": "5.29.0"
   }
 }
 PKGJSON
 
-# Install undici for Node 16 compatibility (provides fetch/Headers globals).
-# Bundled in the tarball so the standalone package works on Node 16
-# without requiring npm on the target machine.
-echo "  Installing undici (Node 16 polyfill)..."
-(cd "$OUT_DIR" && npm install --production 2>&1 | tail -3)
+# Copy and verify the Node 16 runtime polyfill dependency from the already
+# installed project dependencies. This avoids a second registry install during
+# standalone assembly and guarantees target machines never need npm.
+echo "  Copying undici for Node 16 compatibility..."
+OUT_DIR="$OUT_DIR" node <<'NODE'
+const fs = require("fs");
+const path = require("path");
+
+function copyPackage(name, paths) {
+  const source = path.dirname(require.resolve(`${name}/package.json`, paths ? { paths } : undefined));
+  const destination = path.join(process.env.OUT_DIR, "node_modules", ...name.split("/"));
+  fs.rmSync(destination, { recursive: true, force: true });
+  fs.mkdirSync(path.dirname(destination), { recursive: true });
+  fs.cpSync(source, destination, { recursive: true, dereference: true });
+  return source;
+}
+
+const undiciDir = copyPackage("undici");
+copyPackage("@fastify/busboy", [undiciDir]);
+NODE
+
+# Keep a lockfile in standalone/ so CI/release can audit the packaged runtime
+# dependency without mutating the package.
+cat > "$OUT_DIR/package-lock.json" << 'PKGLOCK'
+{
+  "name": "ebpf-viz-standalone",
+  "version": "1.0.0",
+  "lockfileVersion": 3,
+  "requires": true,
+  "packages": {
+    "": {
+      "name": "ebpf-viz-standalone",
+      "version": "1.0.0",
+      "dependencies": {
+        "undici": "5.29.0"
+      }
+    },
+    "node_modules/@fastify/busboy": {
+      "version": "2.1.1",
+      "resolved": "https://registry.npmjs.org/@fastify/busboy/-/busboy-2.1.1.tgz",
+      "integrity": "sha512-vBZP4NlzfOlerQTnba4aqZoMhE/a9HY7HRqoOPaETQcSQuWEIyZMHGfVu6w9wGtGK5fED5qRs2DteVCjOH60sA==",
+      "license": "MIT",
+      "engines": {
+        "node": ">=14"
+      }
+    },
+    "node_modules/undici": {
+      "version": "5.29.0",
+      "resolved": "https://registry.npmjs.org/undici/-/undici-5.29.0.tgz",
+      "integrity": "sha512-raqeBD6NQK4SkWhQzeYKd1KmIG6dllBOTt55Rmkt4HtI9mwdWtJljnrXjAFUBLTSN67HWrOIZ3EPF4kjUw80Bg==",
+      "license": "MIT",
+      "dependencies": {
+        "@fastify/busboy": "^2.0.0"
+      },
+      "engines": {
+        "node": ">=14.0"
+      }
+    }
+  }
+}
+PKGLOCK
+
+(cd "$OUT_DIR" && node -e 'require.resolve("undici"); const undici = require("undici"); if (!undici.fetch || !undici.Headers) throw new Error("invalid undici install");')
+test -f "$OUT_DIR/node_modules/undici/package.json"
+test -f "$OUT_DIR/node_modules/@fastify/busboy/package.json"
+echo "  Verified bundled undici runtime dependency."
 
 # ── 6. Create the tarball ──────────────────────────────────────────────────────
 echo "[6/6] Creating tarball: $TARBALL"

@@ -22,7 +22,8 @@ If your devserver has **only Node.js** (no npm, no Docker, no internet access), 
 
 This produces `ebpf-viz-standalone.tar.gz` (~4–6 MB). The tarball contains:
 - `public/` — pre-compiled frontend (HTML, JS, CSS)
-- `server.js` — Express server **with all runtime dependencies bundled** (single file, no `node_modules` needed)
+- `server.js` — Express server with runtime dependencies bundled into the server file where possible
+- `node_modules/undici` — Node 16 Web API polyfill dependency, installed at build time so the target does not need npm or internet access
 - `start.sh` — launch script that loads `.env` and starts the server
 - `.env.example` — configuration template
 
@@ -42,7 +43,7 @@ cd standalone
 cp .env.example .env
 vi .env
 
-# Start (requires Node.js ≥ 18 only)
+# Start (requires Node.js ≥ 16 only)
 sudo ./start.sh          # sudo needed for bpftool access
 ```
 

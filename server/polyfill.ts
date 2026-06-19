@@ -36,7 +36,7 @@ if (nodeMajor < 18) {
 
   // Patch ReadableStream.prototype.pipeTo to strip the abort signal.
   // stream/web is available since Node 16.5.0 and must be installed before
-  // requiring undici 6.x, which expects Web Streams globals to exist.
+  // requiring undici, which expects Web Streams globals to exist.
   try {
     // eslint-disable-next-line @typescript-eslint/no-require-imports
     const { ReadableStream } = require("stream/web") as typeof import("stream/web");
@@ -71,17 +71,15 @@ if (nodeMajor < 18) {
     // stream/web unavailable (Node < 16.5) — skip the pipeTo patch
   }
 
-  // undici provides fetch/Headers/etc. for Node 16.
-  // The require is wrapped in try/catch so the standalone esbuild bundle
-  // (which inlines all deps) doesn't fail at bundle time if undici isn't
-  // installed — the standalone tarball ships a separate copy via npm.
+  // undici provides fetch/Headers/etc. for Node 16. The standalone build ships
+  // it inside node_modules so target machines do not need npm or registry access.
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   let undici: Record<string, any> | null = null;
   try {
     // eslint-disable-next-line @typescript-eslint/no-require-imports
     undici = require("undici");
   } catch {
-    console.error("[polyfill] undici not found — install it for Node 16 support: npm install undici@6.27.0");
+    throw new Error("[polyfill] undici not found. Rebuild the standalone package so Node 16 support is bundled.");
   }
 
   if (undici) {

@@ -27,8 +27,8 @@ The script performs six steps automatically:
 2. Builds the React frontend with Vite into `dist/public/`.
 3. Creates no-op stubs for dev-only packages (`vite`, `@vitejs/plugin-react`, etc.) so they are never executed at runtime.
 4. Bundles the Express/tRPC server and all its runtime dependencies into a single `dist/server.js` file using esbuild (ESM format with a `createRequire` compatibility shim for CommonJS modules).
-5. Assembles a `standalone/` directory containing `server.js`, the built `public/` assets, a `start.sh` launcher, and a `package.json`.
-6. Packages everything into `ebpf-viz-standalone.tar.gz` (~2 MB compressed).
+5. Assembles a `standalone/` directory containing `server.js`, the built `public/` assets, a `start.sh` launcher, a `package.json`, and the preinstalled `undici` Node 16 polyfill dependency.
+6. Packages everything into `ebpf-viz-standalone.tar.gz`.
 
 ---
 
@@ -184,7 +184,7 @@ standalone/
 └── .env.example    ← Environment variable template
 ```
 
-The tarball is approximately **2 MB** compressed. No `node_modules` directory is needed on the target server.
+The tarball includes the minimal `node_modules/undici` dependency required for Node 16. The target server still does not need npm, pnpm, Docker, or internet access.
 
 ---
 
