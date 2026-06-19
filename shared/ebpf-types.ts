@@ -446,6 +446,24 @@ export interface XlatedReturnExit {
     | "dynamic-assignment"
     | "conflicting-values"
     | "analysis-limit";
+  /** Conservative branch decisions on the unique CFG path leading to this exit. */
+  branchEvidence?: XlatedBranchEvidence[];
+}
+
+export interface XlatedBranchEvidence {
+  /** Instruction index of the conditional branch. */
+  insnIndex: number;
+  /** Branch instruction disassembly. */
+  disasm: string;
+  /** Instruction index reached when this branch is taken, when resolved. */
+  targetIndex?: number;
+  /** Which branch edge was followed on the unique path to the exit. */
+  branch: "taken" | "fallthrough" | "unknown";
+  /** Source statement associated with the branch, when available. */
+  source?: string;
+  sourceFile?: string;
+  sourceLine?: number;
+  sourceColumn?: number;
 }
 
 export interface XlatedReturnConstantSummary {

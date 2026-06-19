@@ -61,6 +61,52 @@ describe("analyzeXlatedReturns", () => {
     ]);
   });
 
+  it("attaches branch evidence on unique paths to exits", () => {
+    const result = analyzeXlatedReturns([
+      insn(0, "(15) if r1 == 0x0 goto pc+2", {
+        source: "if (!ok) return TC_ACT_SHOT;",
+        sourceFile: "prog.bpf.c",
+        sourceLine: 10,
+      }),
+      insn(1, "(b7) r0 = 0"),
+      insn(2, "(95) exit"),
+      insn(3, "(b7) r0 = 2"),
+      insn(4, "(95) exit"),
+    ]);
+
+    expect(result.constantExits).toHaveLength(2);
+    expect(result.constantExits.find(exit => exit.value === 0)).toMatchObject({
+      exitIndex: 2,
+      value: 0,
+      branchEvidence: [
+        {
+          insnIndex: 0,
+          disasm: "(15) if r1 == 0x0 goto pc+2",
+          targetIndex: 3,
+          branch: "fallthrough",
+          source: "if (!ok) return TC_ACT_SHOT;",
+          sourceFile: "prog.bpf.c",
+          sourceLine: 10,
+        },
+      ],
+    });
+    expect(result.constantExits.find(exit => exit.value === 2)).toMatchObject({
+      exitIndex: 4,
+      value: 2,
+      branchEvidence: [
+        {
+          insnIndex: 0,
+          disasm: "(15) if r1 == 0x0 goto pc+2",
+          targetIndex: 3,
+          branch: "taken",
+          source: "if (!ok) return TC_ACT_SHOT;",
+          sourceFile: "prog.bpf.c",
+          sourceLine: 10,
+        },
+      ],
+    });
+  });
+
   it("parses hexadecimal return constants", () => {
     const result = analyzeXlatedReturns([
       insn(10, "(b7) r0 = 0x7"),
@@ -206,6 +252,18 @@ describe("analyzeXlatedReturns", () => {
         },
       ],
     });
+  });
+
+  it("does not attach branch evidence when control flow merges", () => {
+    const result = analyzeXlatedReturns([
+      insn(0, "(15) if r1 == 0x0 goto pc+2"),
+      insn(1, "(b7) r0 = 0"),
+      insn(2, "(05) goto pc+1"),
+      insn(3, "(b7) r0 = 2"),
+      insn(4, "(95) exit"),
+    ]);
+
+    expect(result.unknownExits[0].branchEvidence).toBeUndefined();
   });
 
   it("handles programs with no exits", () => {

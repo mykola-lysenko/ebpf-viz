@@ -25,6 +25,7 @@ import type {
   PacketVerdict,
   ProgramChain,
   ProgramReturnAnalysisResult,
+  XlatedBranchEvidence,
   XlatedReturnExit,
   XlatedSideEffect,
 } from "../../../shared/ebpf-types";
@@ -47,7 +48,7 @@ interface PacketChainDetailsSheetProps {
 }
 
 function formatSource(
-  exit: XlatedReturnExit | XlatedSideEffect
+  exit: XlatedReturnExit | XlatedSideEffect | XlatedBranchEvidence
 ): string | null {
   const parts: string[] = [];
   if (exit.sourceFile) {
@@ -61,6 +62,16 @@ function formatSource(
     parts.push(exit.source);
   }
   return parts.length > 0 ? parts.join(" - ") : null;
+}
+
+function formatBranchEvidence(branch: XlatedBranchEvidence): string {
+  if (branch.branch === "taken") {
+    return branch.targetIndex !== undefined
+      ? `taken -> ${branch.targetIndex}`
+      : "taken";
+  }
+  if (branch.branch === "fallthrough") return "fallthrough";
+  return "branch edge";
 }
 
 function formatReachability(step: PacketProgramPrediction): string {
@@ -121,6 +132,36 @@ function ReturnEvidence({
           {formatSource(exit) && (
             <div className="mt-0.5 break-words text-[10px] text-muted-foreground/70">
               {formatSource(exit)}
+            </div>
+          )}
+          {exit.branchEvidence && exit.branchEvidence.length > 0 && (
+            <div className="mt-1 space-y-1 border-t border-border/50 pt-1">
+              <div className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/70">
+                Path evidence
+              </div>
+              {exit.branchEvidence.map(branch => (
+                <div
+                  key={`${exit.exitIndex}-${branch.insnIndex}-${branch.branch}`}
+                  className="rounded border border-border/40 bg-background/30 px-1.5 py-1"
+                >
+                  <div className="flex flex-wrap items-center gap-1.5 text-[10px] font-mono">
+                    <span className="text-muted-foreground">
+                      insn {branch.insnIndex}
+                    </span>
+                    <span className="rounded border border-border/50 px-1 py-0.5 text-foreground/80">
+                      {formatBranchEvidence(branch)}
+                    </span>
+                  </div>
+                  <div className="mt-0.5 break-all text-[10px] font-mono text-muted-foreground">
+                    {branch.disasm}
+                  </div>
+                  {formatSource(branch) && (
+                    <div className="mt-0.5 break-words text-[10px] text-muted-foreground/70">
+                      {formatSource(branch)}
+                    </div>
+                  )}
+                </div>
+              ))}
             </div>
           )}
         </div>

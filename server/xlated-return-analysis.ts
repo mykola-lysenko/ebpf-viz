@@ -1,4 +1,5 @@
 import type {
+  XlatedBranchEvidence,
   XlatedInsn,
   XlatedReturnAnalysis,
   XlatedReturnExit,
@@ -36,6 +37,8 @@ const CALL_CLOBBERED_REGS: RegisterName[] = [
   "r5",
 ];
 const MAX_RESOLUTION_STEPS = 10_000;
+const MAX_BRANCH_EVIDENCE = 4;
+const MAX_BRANCH_WALK_STEPS = 32;
 
 function isExitInsn(disasm: string): boolean {
   return /^\(95\)\s+exit\b/.test(disasm.trim());
@@ -204,6 +207,67 @@ function buildControlFlow(parsed: ParsedInsn[]): {
   return { predecessors, reachable };
 }
 
+function sourceEvidenceForBranch(
+  insn: XlatedInsn
+): Pick<
+  XlatedBranchEvidence,
+  "source" | "sourceFile" | "sourceLine" | "sourceColumn"
+> {
+  return sourceEvidence(insn);
+}
+
+function extractBranchEvidence(
+  parsed: ParsedInsn[],
+  predecessors: number[][],
+  exitPos: number
+): XlatedBranchEvidence[] | undefined {
+  const evidence: XlatedBranchEvidence[] = [];
+  const visited = new Set<number>();
+  let currentPos = exitPos;
+
+  for (
+    let step = 0;
+    step < MAX_BRANCH_WALK_STEPS && evidence.length < MAX_BRANCH_EVIDENCE;
+    step += 1
+  ) {
+    if (visited.has(currentPos)) break;
+    visited.add(currentPos);
+
+    const preds = predecessors[currentPos] ?? [];
+    if (preds.length !== 1) break;
+
+    const predPos = preds[0];
+    const pred = parsed[predPos];
+    if (!pred) break;
+
+    if (pred.jump === "conditional") {
+      const fallthroughPos =
+        pred.pos + 1 < parsed.length ? pred.pos + 1 : undefined;
+      const branch =
+        pred.jumpTargetPos === currentPos
+          ? "taken"
+          : fallthroughPos === currentPos
+            ? "fallthrough"
+            : "unknown";
+
+      evidence.push({
+        insnIndex: pred.insn.index,
+        disasm: pred.insn.disasm,
+        targetIndex:
+          pred.jumpTargetPos !== undefined
+            ? parsed[pred.jumpTargetPos]?.insn.index
+            : undefined,
+        branch,
+        ...sourceEvidenceForBranch(pred.insn),
+      });
+    }
+
+    currentPos = predPos;
+  }
+
+  return evidence.length > 0 ? evidence.reverse() : undefined;
+}
+
 function mergeResults(results: ResolveResult[]): ResolveResult {
   if (results.length === 0) {
     return { kind: "unknown", reason: "no-direct-assignment" };
@@ -317,7 +381,8 @@ function resolveRegisterAtExit(
 
 function toKnownExit(
   exitInsn: XlatedInsn,
-  resolved: Extract<ResolveResult, { kind: "known" }>
+  resolved: Extract<ResolveResult, { kind: "known" }>,
+  branchEvidence?: XlatedBranchEvidence[]
 ): XlatedReturnExit {
   return {
     exitIndex: exitInsn.index,
@@ -325,13 +390,15 @@ function toKnownExit(
     assignmentIndex: resolved.assignmentInsn?.index,
     assignmentDisasm: resolved.assignmentInsn?.disasm,
     value: resolved.value,
+    ...(branchEvidence ? { branchEvidence } : {}),
     ...sourceEvidence(resolved.assignmentInsn ?? exitInsn),
   };
 }
 
 function toUnknownExit(
   exitInsn: XlatedInsn,
-  resolved: Extract<ResolveResult, { kind: "unknown" }>
+  resolved: Extract<ResolveResult, { kind: "unknown" }>,
+  branchEvidence?: XlatedBranchEvidence[]
 ): XlatedReturnExit {
   return {
     exitIndex: exitInsn.index,
@@ -339,6 +406,7 @@ function toUnknownExit(
     assignmentIndex: resolved.assignmentInsn?.index,
     assignmentDisasm: resolved.assignmentInsn?.disasm,
     reason: resolved.reason,
+    ...(branchEvidence ? { branchEvidence } : {}),
     ...sourceEvidence(resolved.assignmentInsn ?? exitInsn),
   };
 }
@@ -372,8 +440,15 @@ export function analyzeXlatedReturns(
       predecessors,
       parsedInsn.pos
     );
+    const branchEvidence = extractBranchEvidence(
+      parsed,
+      predecessors,
+      parsedInsn.pos
+    );
     if (resolved.kind === "known") {
-      constantExits.push(toKnownExit(parsedInsn.insn, resolved));
+      constantExits.push(
+        toKnownExit(parsedInsn.insn, resolved, branchEvidence)
+      );
       constantCounts.set(
         resolved.value,
         (constantCounts.get(resolved.value) ?? 0) + 1
@@ -381,7 +456,7 @@ export function analyzeXlatedReturns(
       continue;
     }
 
-    unknownExits.push(toUnknownExit(parsedInsn.insn, resolved));
+    unknownExits.push(toUnknownExit(parsedInsn.insn, resolved, branchEvidence));
   }
 
   return {
