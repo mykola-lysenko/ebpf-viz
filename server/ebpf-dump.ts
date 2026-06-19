@@ -11,6 +11,7 @@ import { execFile } from "child_process";
 import { promisify } from "util";
 import type { ProgDump, XlatedInsn, JitedInsn } from "../shared/ebpf-types";
 import { getBpftoolPath, isSudoEnabled } from "./ebpf-poller";
+import { analyzeXlatedReturns } from "./xlated-return-analysis";
 
 const execFileAsync = promisify(execFile);
 
@@ -383,6 +384,7 @@ export async function fetchProgDump(progId: number, hasBtf: boolean, isJited: bo
     hasLineInfo,
     hasBtf,
     btfId: undefined, // populated by caller if needed
+    returnAnalysis: analyzeXlatedReturns(xlated),
     error,
   };
 }

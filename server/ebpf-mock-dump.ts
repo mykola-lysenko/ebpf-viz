@@ -10,6 +10,7 @@
  */
 
 import type { ProgDump, XlatedInsn } from "../shared/ebpf-types";
+import { analyzeXlatedReturns } from "./xlated-return-analysis";
 
 // ─── Instruction templates ────────────────────────────────────────────────────
 
@@ -365,6 +366,7 @@ export function buildMockProgDump(
     hasLineInfo: hasBtf,
     hasBtf,
     btfId: hasBtf ? progId + 40 : undefined,
+    returnAnalysis: analyzeXlatedReturns(xlated),
   };
 }
 

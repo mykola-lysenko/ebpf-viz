@@ -364,6 +364,43 @@ export interface JitedInsn {
   opcodes?: string;
 }
 
+export interface XlatedReturnExit {
+  /** Instruction index of the exit instruction. */
+  exitIndex: number;
+  /** Disassembly of the exit instruction. */
+  exitDisasm: string;
+  /** Instruction index of the direct constant assignment to r0/w0, when found. */
+  assignmentIndex?: number;
+  /** Disassembly of the direct constant assignment to r0/w0, when found. */
+  assignmentDisasm?: string;
+  /** Constant assigned to r0/w0 before exit. Absent when return is dynamic/unknown. */
+  value?: number;
+  /** Source statement associated with the return assignment or exit, when available. */
+  source?: string;
+  sourceFile?: string;
+  sourceLine?: number;
+  sourceColumn?: number;
+  /** Why the return value could not be resolved to a direct constant. */
+  reason?: "no-direct-assignment" | "dynamic-assignment";
+}
+
+export interface XlatedReturnConstantSummary {
+  value: number;
+  exitCount: number;
+}
+
+export interface XlatedReturnAnalysis {
+  /** Total number of BPF exit instructions observed. */
+  exitCount: number;
+  /** Exits where the immediately preceding instruction assigns a constant to r0/w0. */
+  constantExits: XlatedReturnExit[];
+  /** Exits where the return value is not resolved by the simple direct-assignment analyzer. */
+  unknownExits: XlatedReturnExit[];
+  /** Unique constant return values observed at simple exits. */
+  observedConstants: XlatedReturnConstantSummary[];
+  hasUnknownExits: boolean;
+}
+
 /** Full code dump for one BPF program */
 export interface ProgDump {
   progId: number;
@@ -380,6 +417,8 @@ export interface ProgDump {
   /** True when a BTF object is attached to this program */
   hasBtf: boolean;
   btfId?: number;
+  /** Simple return-value analysis over xlated bytecode. */
+  returnAnalysis?: XlatedReturnAnalysis;
   /** Non-null when bpftool failed — describes what went wrong */
   error?: string;
 }
