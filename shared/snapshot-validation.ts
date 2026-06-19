@@ -128,9 +128,13 @@ const programChainSchema = z.object({
     summary: z.string(),
     semantics: z.object({
       pass: z.array(z.string()),
+      passValues: z.array(finiteNumberSchema).optional(),
       drop: z.array(z.string()),
+      dropValues: z.array(finiteNumberSchema).optional(),
       redirect: z.array(z.string()),
+      redirectValues: z.array(finiteNumberSchema).optional(),
       other: z.array(z.string()),
+      otherValues: z.array(finiteNumberSchema).optional(),
     }).catchall(z.unknown()),
   }).catchall(z.unknown()).optional(),
 }).catchall(z.unknown());

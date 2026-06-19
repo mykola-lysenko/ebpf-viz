@@ -193,12 +193,16 @@ export type PacketHookFamily =
 export interface PacketActionSemantics {
   /** Return values that let packet/socket processing continue. */
   pass: string[];
+  passValues?: number[];
   /** Return values that drop/deny/abort packet/socket processing. */
   drop: string[];
+  dropValues?: number[];
   /** Return values that send the packet elsewhere instead of normal pass. */
   redirect: string[];
+  redirectValues?: number[];
   /** Other hook-specific return values worth explaining. */
   other: string[];
+  otherValues?: number[];
 }
 
 export interface PacketChainContext {
@@ -398,7 +402,16 @@ export interface XlatedReturnAnalysis {
   unknownExits: XlatedReturnExit[];
   /** Unique constant return values observed at simple exits. */
   observedConstants: XlatedReturnConstantSummary[];
+  /** Tail calls can transfer control to another program, so final verdict may be outside this dump. */
+  tailCallIndices: number[];
   hasUnknownExits: boolean;
+  hasTailCalls: boolean;
+}
+
+export interface ProgramReturnAnalysisResult {
+  progId: number;
+  returnAnalysis: XlatedReturnAnalysis | null;
+  error?: string;
 }
 
 /** Full code dump for one BPF program */

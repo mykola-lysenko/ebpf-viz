@@ -460,8 +460,11 @@ function buildTcPacketContext(direction: PacketDirection): PacketChainContext {
     summary: "TC classifier/action return values decide whether the packet continues, is dropped, or is redirected.",
     semantics: {
       pass: ["TC_ACT_OK (0)", "TC_ACT_UNSPEC (-1)"],
+      passValues: [0, -1],
       drop: ["TC_ACT_SHOT (2)"],
+      dropValues: [2],
       redirect: ["TC_ACT_REDIRECT (7)"],
+      redirectValues: [7],
       other: [
         "TC_ACT_RECLASSIFY (1)",
         "TC_ACT_PIPE (3)",
@@ -469,6 +472,7 @@ function buildTcPacketContext(direction: PacketDirection): PacketChainContext {
         "TC_ACT_QUEUED (5)",
         "TC_ACT_REPEAT (6)",
       ],
+      otherValues: [1, 3, 4, 5, 6],
     },
   };
 }
@@ -481,7 +485,9 @@ function buildCgroupPacketContext(attachType: string): PacketChainContext {
       summary: "cgroup_skb hooks use integer allow/drop verdicts for packet ingress or egress.",
       semantics: {
         pass: ["1 (allow/pass)"],
+        passValues: [1],
         drop: ["0 (drop/deny)"],
+        dropValues: [0],
         redirect: [],
         other: [],
       },
@@ -502,7 +508,9 @@ function buildCgroupPacketContext(attachType: string): PacketChainContext {
       summary: "cgroup socket-address hooks can allow or deny socket operations before packets are sent.",
       semantics: {
         pass: ["1 (allow)"],
+        passValues: [1],
         drop: ["0 (deny)"],
+        dropValues: [0],
         redirect: [],
         other: [],
       },

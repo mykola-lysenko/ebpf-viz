@@ -17,6 +17,7 @@ describe("analyzeXlatedReturns", () => {
     expect(result).toMatchObject({
       exitCount: 1,
       hasUnknownExits: false,
+      hasTailCalls: false,
       observedConstants: [{ value: 2, exitCount: 1 }],
     });
     expect(result.constantExits).toEqual([{
@@ -98,7 +99,20 @@ describe("analyzeXlatedReturns", () => {
       constantExits: [],
       unknownExits: [],
       observedConstants: [],
+      tailCallIndices: [],
       hasUnknownExits: false,
+      hasTailCalls: false,
     });
+  });
+
+  it("flags tail calls because final verdict may be in another program", () => {
+    const result = analyzeXlatedReturns([
+      insn(0, "(85) call bpf_tail_call#12"),
+      insn(1, "(b7) r0 = 0"),
+      insn(2, "(95) exit"),
+    ]);
+
+    expect(result.tailCallIndices).toEqual([0]);
+    expect(result.hasTailCalls).toBe(true);
   });
 });

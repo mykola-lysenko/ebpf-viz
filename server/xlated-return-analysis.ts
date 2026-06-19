@@ -23,6 +23,10 @@ function isR0Assignment(disasm: string): boolean {
   return /^\([0-9a-fA-F]+\)\s+[rw]0\s*=/.test(disasm.trim());
 }
 
+function isTailCallInsn(disasm: string): boolean {
+  return disasm.includes("tail_call");
+}
+
 function sourceEvidence(insn: XlatedInsn): Pick<XlatedReturnExit, "source" | "sourceFile" | "sourceLine" | "sourceColumn"> {
   const evidence: Pick<XlatedReturnExit, "source" | "sourceFile" | "sourceLine" | "sourceColumn"> = {};
   if (insn.source) evidence.source = insn.source;
@@ -47,6 +51,9 @@ export function analyzeXlatedReturns(insns: XlatedInsn[]): XlatedReturnAnalysis 
   const constantExits: XlatedReturnExit[] = [];
   const unknownExits: XlatedReturnExit[] = [];
   const constantCounts = new Map<number, number>();
+  const tailCallIndices = insns
+    .filter(insn => isTailCallInsn(insn.disasm))
+    .map(insn => insn.index);
 
   for (let i = 0; i < insns.length; i += 1) {
     const exitInsn = insns[i];
@@ -85,6 +92,8 @@ export function analyzeXlatedReturns(insns: XlatedInsn[]): XlatedReturnAnalysis 
     observedConstants: Array.from(constantCounts.entries())
       .map(([value, exitCount]) => ({ value, exitCount }))
       .sort((a, b) => a.value - b.value),
+    tailCallIndices,
     hasUnknownExits: unknownExits.length > 0,
+    hasTailCalls: tailCallIndices.length > 0,
   };
 }

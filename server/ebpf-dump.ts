@@ -9,7 +9,7 @@
 
 import { execFile } from "child_process";
 import { promisify } from "util";
-import type { ProgDump, XlatedInsn, JitedInsn } from "../shared/ebpf-types";
+import type { ProgDump, XlatedInsn, JitedInsn, ProgramReturnAnalysisResult } from "../shared/ebpf-types";
 import { getBpftoolPath, isSudoEnabled } from "./ebpf-poller";
 import { analyzeXlatedReturns } from "./xlated-return-analysis";
 
@@ -386,6 +386,37 @@ export async function fetchProgDump(progId: number, hasBtf: boolean, isJited: bo
     btfId: undefined, // populated by caller if needed
     returnAnalysis: analyzeXlatedReturns(xlated),
     error,
+  };
+}
+
+export async function fetchProgReturnAnalysis(progId: number, hasBtf: boolean): Promise<ProgramReturnAnalysisResult> {
+  let xlated: XlatedInsn[] = [];
+  let xlatedError = "";
+
+  if (hasBtf) {
+    const linumResult = await run(["-jp", "prog", "dump", "xlated", "id", String(progId), "linum"]);
+    if (!linumResult.failed && linumResult.stdout.trim()) {
+      xlated = parseXlatedJson(linumResult.stdout);
+    } else if (linumResult.failed) {
+      xlatedError = linumResult.stderr.trim();
+    }
+  }
+
+  if (xlated.length === 0) {
+    const xlatedResult = await run(["-jp", "prog", "dump", "xlated", "id", String(progId)]);
+    if (xlatedResult.failed) {
+      return {
+        progId,
+        returnAnalysis: null,
+        error: xlatedResult.stderr.trim() || xlatedError || "failed to dump xlated bytecode",
+      };
+    }
+    xlated = parseXlatedJson(xlatedResult.stdout);
+  }
+
+  return {
+    progId,
+    returnAnalysis: analyzeXlatedReturns(xlated),
   };
 }
 

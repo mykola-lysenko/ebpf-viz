@@ -4,7 +4,15 @@ import { ProgBadge } from "@/components/ProgBadge";
 import { Network, ChevronDown, ChevronRight, Wifi, Share2, AlertTriangle } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
-import type { NetworkInterface, ProgramChain, BpfProgram } from "../../../shared/ebpf-types";
+import { trpc } from "@/lib/trpc";
+import type {
+  BpfProgram,
+  NetworkInterface,
+  PacketActionSemantics,
+  ProgramChain,
+  ProgramReturnAnalysisResult,
+  XlatedReturnAnalysis,
+} from "../../../shared/ebpf-types";
 
 /** Classify live rate drop between consecutive chain programs */
 function classifyRateDrop(
@@ -39,6 +47,82 @@ function formatActions(actions: string[]): string {
   if (actions.length === 0) return "not modeled";
   const visible = actions.slice(0, 2).join(", ");
   return actions.length > 2 ? `${visible}, +${actions.length - 2}` : visible;
+}
+
+type VerdictTone = "pass" | "drop" | "redirect" | "unknown" | "other";
+
+interface VerdictBadgeModel {
+  label: string;
+  tone: VerdictTone;
+  title: string;
+}
+
+const VERDICT_TONE_CLASSES: Record<VerdictTone, string> = {
+  pass: "border-emerald-500/30 bg-emerald-500/10 text-emerald-300",
+  drop: "border-red-500/35 bg-red-500/10 text-red-300",
+  redirect: "border-cyan-500/35 bg-cyan-500/10 text-cyan-300",
+  unknown: "border-amber-500/35 bg-amber-500/10 text-amber-300",
+  other: "border-slate-500/35 bg-slate-500/10 text-slate-300",
+};
+
+const MAX_RETURN_ANALYSIS_PROGRAMS = 64;
+
+function valuesSet(values?: number[]): Set<number> {
+  return new Set(values ?? []);
+}
+
+function classifyConstant(value: number, semantics: PacketActionSemantics): VerdictTone {
+  if (valuesSet(semantics.dropValues).has(value)) return "drop";
+  if (valuesSet(semantics.redirectValues).has(value)) return "redirect";
+  if (valuesSet(semantics.passValues).has(value)) return "pass";
+  if (valuesSet(semantics.otherValues).has(value)) return "other";
+  return "unknown";
+}
+
+function summarizeVerdict(
+  analysis: XlatedReturnAnalysis | null | undefined,
+  semantics: PacketActionSemantics | undefined,
+): VerdictBadgeModel | null {
+  if (!analysis || !semantics || analysis.exitCount === 0) return null;
+
+  const outcomes = new Set<VerdictTone>();
+  for (const observed of analysis.observedConstants) {
+    outcomes.add(classifyConstant(observed.value, semantics));
+  }
+
+  const observedText = analysis.observedConstants.length > 0
+    ? analysis.observedConstants.map(v => `${v.value} (${v.exitCount} exit${v.exitCount === 1 ? "" : "s"})`).join(", ")
+    : "none";
+  const unknownText = analysis.hasUnknownExits
+    ? `${analysis.unknownExits.length} unknown exit${analysis.unknownExits.length === 1 ? "" : "s"}`
+    : "no unknown exits";
+  const tailCallText = analysis.hasTailCalls
+    ? `${analysis.tailCallIndices.length} tail call${analysis.tailCallIndices.length === 1 ? "" : "s"}`
+    : "no tail calls";
+  const title = `Observed return constants: ${observedText}; ${unknownText}; ${tailCallText}.`;
+
+  if (outcomes.has("drop")) {
+    return { label: "can drop", tone: "drop", title };
+  }
+  if (outcomes.has("redirect")) {
+    return { label: "can redirect", tone: "redirect", title };
+  }
+  if (outcomes.size === 1 && outcomes.has("pass") && !analysis.hasUnknownExits && !analysis.hasTailCalls) {
+    return { label: "all exits pass", tone: "pass", title };
+  }
+  if (analysis.hasUnknownExits || analysis.hasTailCalls) {
+    return { label: "unknown verdict", tone: "unknown", title };
+  }
+  if (outcomes.has("unknown")) {
+    return { label: "unknown verdict", tone: "unknown", title };
+  }
+  if (outcomes.has("other")) {
+    return { label: "other verdict", tone: "other", title };
+  }
+  if (outcomes.has("pass")) {
+    return { label: "may pass", tone: "pass", title };
+  }
+  return null;
 }
 
 const OSI_LAYERS = [
@@ -77,10 +161,12 @@ const NIC_LAYERS = OSI_LAYERS.filter(l => l.key === "L2" || l.key === "L3");
 // Layers shown for sockmap interfaces
 const SOCKMAP_LAYERS = OSI_LAYERS.filter(l => l.key === "L4" || l.key === "L7");
 
-function OsiLayerRow({ layerDef, programs, chains }: {
+function OsiLayerRow({ layerDef, programs, chains, returnAnalysisById, returnAnalysisLoading }: {
   layerDef: typeof OSI_LAYERS[0];
   programs: NetworkInterface["layers"]["L2"];
   chains?: ProgramChain[];
+  returnAnalysisById: Map<number, ProgramReturnAnalysisResult>;
+  returnAnalysisLoading: boolean;
 }) {
   const { historyMap } = useEbpf();
   const hasProgs = programs.length > 0;
@@ -209,6 +295,38 @@ function OsiLayerRow({ layerDef, programs, chains }: {
                             </span>
                           )}
                           <ProgBadge program={p} />
+                          {chain.packetContext && (() => {
+                            const result = returnAnalysisById.get(p.id);
+                            const verdict = summarizeVerdict(result?.returnAnalysis, chain.packetContext.semantics);
+                            if (verdict) {
+                              return (
+                                <span
+                                  className={cn("rounded border px-1.5 py-0.5 text-[9px] font-mono", VERDICT_TONE_CLASSES[verdict.tone])}
+                                  title={verdict.title}
+                                >
+                                  {verdict.label}
+                                </span>
+                              );
+                            }
+                            if (returnAnalysisLoading && !result) {
+                              return (
+                                <span className="rounded border border-border/60 px-1.5 py-0.5 text-[9px] font-mono text-muted-foreground/60">
+                                  analyzing
+                                </span>
+                              );
+                            }
+                            if (result?.error) {
+                              return (
+                                <span
+                                  className="rounded border border-amber-500/25 bg-amber-500/5 px-1.5 py-0.5 text-[9px] font-mono text-amber-300/80"
+                                  title={result.error}
+                                >
+                                  analysis unavailable
+                                </span>
+                              );
+                            }
+                            return null;
+                          })()}
                           <span className="text-[9px] font-mono text-muted-foreground/50 tabular-nums shrink-0">
                             {p.runCnt != null && `${formatRunCnt(p.runCnt)} total`}
                             {p.loadedAt > 0 && ` · loaded ${formatAge(p.loadedAt)}`}
@@ -244,7 +362,17 @@ function OsiLayerRow({ layerDef, programs, chains }: {
   );
 }
 
-function InterfaceCard({ iface, tcChains }: { iface: NetworkInterface; tcChains: ProgramChain[] }) {
+function InterfaceCard({
+  iface,
+  tcChains,
+  returnAnalysisById,
+  returnAnalysisLoading,
+}: {
+  iface: NetworkInterface;
+  tcChains: ProgramChain[];
+  returnAnalysisById: Map<number, ProgramReturnAnalysisResult>;
+  returnAnalysisLoading: boolean;
+}) {
   const [expanded, setExpanded] = useState(iface.allPrograms.length > 0);
   const totalProgs = iface.allPrograms.length;
   const isSockmap = iface.kind === "sockmap";
@@ -329,6 +457,8 @@ function InterfaceCard({ iface, tcChains }: { iface: NetworkInterface; tcChains:
                 layerDef={layerDef}
                 programs={iface.layers[layerDef.key]}
                 chains={layerDef.key === "L3" ? ifaceChains : undefined}
+                returnAnalysisById={returnAnalysisById}
+                returnAnalysisLoading={returnAnalysisLoading}
               />
             ))}
           </div>
@@ -347,9 +477,22 @@ interface SectionProps {
   emptyHint?: string;
   accentColor?: string;
   tcChains?: ProgramChain[];
+  returnAnalysisById: Map<number, ProgramReturnAnalysisResult>;
+  returnAnalysisLoading: boolean;
 }
 
-function InterfaceSection({ title, description, icon, interfaces, emptyMessage, emptyHint, accentColor, tcChains = [] }: SectionProps) {
+function InterfaceSection({
+  title,
+  description,
+  icon,
+  interfaces,
+  emptyMessage,
+  emptyHint,
+  accentColor,
+  tcChains = [],
+  returnAnalysisById,
+  returnAnalysisLoading,
+}: SectionProps) {
   return (
     <div className="space-y-3">
       {/* Section header */}
@@ -376,7 +519,13 @@ function InterfaceSection({ title, description, icon, interfaces, emptyMessage, 
       <div className="space-y-3 pl-11">
         {interfaces.length > 0 ? (
           interfaces.map(iface => (
-            <InterfaceCard key={iface.name} iface={iface} tcChains={tcChains} />
+            <InterfaceCard
+              key={iface.name}
+              iface={iface}
+              tcChains={tcChains}
+              returnAnalysisById={returnAnalysisById}
+              returnAnalysisLoading={returnAnalysisLoading}
+            />
           ))
         ) : (
           <div className="glass rounded-xl p-6 text-center">
@@ -392,12 +541,47 @@ function InterfaceSection({ title, description, icon, interfaces, emptyMessage, 
 }
 
 export default function NetworkView() {
-  const { snapshot, filteredPrograms, searchQuery } = useEbpf();
+  const { snapshot, filteredPrograms, searchQuery, appMode } = useEbpf();
 
   const tcChains = useMemo(() =>
     snapshot ? snapshot.programChains.filter(c => c.hookType === "tc") : [],
     [snapshot]
   );
+
+  const filteredProgramIds = useMemo(() => (
+    searchQuery ? new Set(filteredPrograms.map(program => program.id)) : null
+  ), [filteredPrograms, searchQuery]);
+
+  const returnAnalysisProgramIds = useMemo(() => {
+    const ids = new Set<number>();
+    for (const chain of tcChains) {
+      if (!chain.packetContext) continue;
+      for (const program of chain.programs) {
+        if (filteredProgramIds && !filteredProgramIds.has(program.id)) continue;
+        ids.add(program.id);
+      }
+    }
+    return Array.from(ids).slice(0, MAX_RETURN_ANALYSIS_PROGRAMS);
+  }, [filteredProgramIds, tcChains]);
+
+  const returnAnalysisQuery = trpc.ebpf.progReturnAnalysis.useQuery(
+    { ids: returnAnalysisProgramIds },
+    {
+      enabled: appMode !== "snapshot" && returnAnalysisProgramIds.length > 0,
+      retry: 1,
+      staleTime: 5 * 60_000,
+    },
+  );
+
+  const returnAnalysisById = useMemo(() => {
+    const map = new Map<number, ProgramReturnAnalysisResult>();
+    for (const result of returnAnalysisQuery.data ?? []) {
+      map.set(result.progId, result);
+    }
+    return map;
+  }, [returnAnalysisQuery.data]);
+
+  const returnAnalysisLoading = returnAnalysisQuery.isLoading || returnAnalysisQuery.isFetching;
 
   if (!snapshot) {
     return <div className="flex items-center justify-center h-full"><p className="text-muted-foreground">Loading…</p></div>;
@@ -463,6 +647,8 @@ export default function NetworkView() {
         interfaces={nicInterfaces}
         accentColor="#10b981"
         tcChains={tcChains}
+        returnAnalysisById={returnAnalysisById}
+        returnAnalysisLoading={returnAnalysisLoading}
         emptyMessage={searchQuery ? "No NIC interfaces match the current filter." : "No BPF programs attached to network interfaces."}
         emptyHint={!searchQuery ? "XDP, TC, and netfilter programs will appear here when attached to interfaces." : undefined}
       />
@@ -475,6 +661,8 @@ export default function NetworkView() {
           icon={<Share2 size={15} style={{ color: "oklch(0.65 0.18 290)" }} />}
           interfaces={sockmapInterfaces}
           accentColor="#8b5cf6"
+          returnAnalysisById={returnAnalysisById}
+          returnAnalysisLoading={returnAnalysisLoading}
           emptyMessage={searchQuery ? "No sockmap interfaces match the current filter." : "No sockmap programs loaded."}
           emptyHint={!searchQuery ? "sk_msg, sk_skb, sock_ops, and sk_lookup programs will appear here." : undefined}
         />

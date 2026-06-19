@@ -14,12 +14,12 @@ import {
   isDemoMode,
   isSudoEnabled,
 } from "./ebpf-poller";
-import { fetchProgDump } from "./ebpf-dump";
+import { fetchProgDump, fetchProgReturnAnalysis } from "./ebpf-dump";
 import { buildSnapshot } from "./ebpf-parser";
 import { parseMaps } from "./ebpf-map-parser";
 import { buildMockProgDump } from "./ebpf-mock-dump";
 import { dumpMapEntries, parseEntry, MAX_DUMP_ENTRIES } from "./ebpf-map-dump";
-import type { RawBpfMap, RawBpfProg, RawCgroupEntry, RawMapEntry, RawNetSnapshot, MapDumpResult } from "../shared/ebpf-types";
+import type { RawBpfMap, RawBpfProg, RawCgroupEntry, RawMapEntry, RawNetSnapshot, MapDumpResult, ProgramReturnAnalysisResult } from "../shared/ebpf-types";
 import { parseMapDumpsInputSchema, rawSnapshotInputSchema } from "../shared/snapshot-validation";
 import { buildMockMapDump } from "./ebpf-mock-map-dump";
 
@@ -179,6 +179,48 @@ export const appRouter = router({
           console.error("[progDump] failed for id", input.id, err);
           return null;
         }
+      }),
+
+    /**
+     * Lightweight return-value analysis for multiple programs.
+     * Dumps only xlated bytecode, not CFG/JIT, so the Network chain can show
+     * packet verdict hints without rendering full code inspectors.
+     */
+    progReturnAnalysis: expensiveProcedure
+      .input(z.object({ ids: z.array(z.number().int().nonnegative()).min(1).max(64) }))
+      .query(async ({ input }) => {
+        const snap = getLatestSnapshot();
+        if (!snap) return [];
+
+        const programsById = new Map(snap.programs.map(prog => [prog.id, prog]));
+        const ids = Array.from(new Set(input.ids));
+        const results: ProgramReturnAnalysisResult[] = [];
+
+        for (const id of ids) {
+          const prog = programsById.get(id);
+          if (!prog) {
+            results.push({ progId: id, returnAnalysis: null, error: "program not found" });
+            continue;
+          }
+
+          if (snap.demoMode) {
+            const dump = buildMockProgDump(id, prog.rawType, !!prog.btfId, prog.jited);
+            results.push({ progId: id, returnAnalysis: dump.returnAnalysis ?? null });
+            continue;
+          }
+
+          try {
+            results.push(await fetchProgReturnAnalysis(id, !!prog.btfId));
+          } catch (err) {
+            results.push({
+              progId: id,
+              returnAnalysis: null,
+              error: err instanceof Error ? err.message : String(err),
+            });
+          }
+        }
+
+        return results;
       }),
 
     // ── Snapshot parsing ───────────────────────────────────────────────────
