@@ -308,6 +308,27 @@ describe("parseMapDumpOutput", () => {
     expect(result.entries[0].perCpuValues![0].decimal).toBe("1");
     expect(result.entries[0].perCpuValues![1].decimal).toBe("2");
   });
+
+  it("parses prog_array entries so tail-call slots can be inspected", () => {
+    const raw = JSON.stringify([
+      { key: ["0x03", "0x00", "0x00", "0x00"], value: ["0x7b", "0x00", "0x00", "0x00"] },
+      { key: ["0x04", "0x00", "0x00", "0x00"], value: { prog_id: 456, name: "tail_target" } },
+    ]);
+
+    const result = parseMapDumpOutput(raw, "", 21, "prog_array", "tail_calls");
+
+    expect(result.unsupported).toBe(false);
+    expect(result.error).toBeNull();
+    expect(result.entries).toHaveLength(2);
+    expect(result.entries[0]).toMatchObject({
+      keyDecimal: "3",
+      valueDecimal: "123",
+    });
+    expect(result.entries[1]).toMatchObject({
+      keyDecimal: "4",
+      valueBtf: '{"prog_id":456,"name":"tail_target"}',
+    });
+  });
 });
 
 // ─── dumpMapEntries (unsupported types only — no child_process needed) ────────

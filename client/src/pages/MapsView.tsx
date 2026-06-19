@@ -43,7 +43,7 @@ const CATEGORY_LABELS: Record<string, string> = {
 // Map types that cannot be dumped (kernel-internal or write-only)
 const UNSUPPORTED_DUMP_TYPES = new Set([
   "perf_event_array", "ringbuf", "user_ringbuf", "cgroup_array",
-  "prog_array", "devmap", "devmap_hash", "cpumap", "xskmap",
+  "devmap", "devmap_hash", "cpumap", "xskmap",
   "sockmap", "sockhash", "reuseport_sockarray",
 ]);
 

@@ -22,7 +22,6 @@ const UNSUPPORTED_TYPES = new Set([
   "ringbuf",
   "user_ringbuf",
   "cgroup_array",
-  "prog_array",
   "devmap",
   "devmap_hash",
   "cpumap",

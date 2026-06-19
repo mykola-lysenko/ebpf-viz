@@ -365,10 +365,30 @@ function mockConfigMap(): MapEntry[] {
   );
 }
 
+/**
+ * Map 21: tail_calls — prog_array, key=slot index, value=target program id.
+ * Used by dispatcher-style programs to continue execution in another program.
+ */
+function mockTailCalls(): MapEntry[] {
+  const slots: Array<[number, number]> = [
+    [0, 3],
+    [1, 4],
+    [2, 19],
+    [3, 20],
+  ];
+
+  return slots.map(([slot, progId], i) =>
+    entry(i, u32leHex(slot), u32leHex(progId), {
+      keyDecimal: String(slot),
+      valueDecimal: String(progId),
+    }),
+  );
+}
+
 // ─── Unsupported map types ────────────────────────────────────────────────────
 
 const UNSUPPORTED_TYPES = new Set([
-  "perf_event_array", "ringbuf", "prog_array",
+  "perf_event_array", "ringbuf",
   "sockmap", "sockhash", "queue", "stack",
   "user_ringbuf", "bloom_filter",
 ]);
@@ -402,6 +422,7 @@ export function buildMockMapDump(
     case 18: entries = mockSyscallFilter();  break;
     case 19: entries = mockRttHistogram();   break;
     case 20: entries = mockSockRedirect();   break;
+    case 21: entries = mockTailCalls();      break;
     case 22: entries = mockConnTrack();      break;
     case 23: entries = mockConfigMap();      break;
     case 24: entries = mockKtimeMap();       break;
