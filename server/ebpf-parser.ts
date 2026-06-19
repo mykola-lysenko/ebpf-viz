@@ -8,6 +8,8 @@ import type {
   KernelZone,
   NetworkInterface,
   OsiLayer,
+  PacketChainContext,
+  PacketDirection,
   ProgramChain,
   RawBpfProg,
   RawCgroupEntry,
@@ -451,6 +453,75 @@ const CGROUP_SHORT_CIRCUIT_TYPES = new Set([
   "cgroup_getsockopt", "cgroup_setsockopt",
 ]);
 
+function buildTcPacketContext(direction: PacketDirection): PacketChainContext {
+  return {
+    family: "tc",
+    direction,
+    summary: "TC classifier/action return values decide whether the packet continues, is dropped, or is redirected.",
+    semantics: {
+      pass: ["TC_ACT_OK (0)", "TC_ACT_UNSPEC (-1)"],
+      drop: ["TC_ACT_SHOT (2)"],
+      redirect: ["TC_ACT_REDIRECT (7)"],
+      other: [
+        "TC_ACT_RECLASSIFY (1)",
+        "TC_ACT_PIPE (3)",
+        "TC_ACT_STOLEN (4)",
+        "TC_ACT_QUEUED (5)",
+        "TC_ACT_REPEAT (6)",
+      ],
+    },
+  };
+}
+
+function buildCgroupPacketContext(attachType: string): PacketChainContext {
+  if (attachType === "cgroup_inet_ingress" || attachType === "cgroup_inet_egress") {
+    return {
+      family: "cgroup_skb",
+      direction: attachType.endsWith("_ingress") ? "ingress" : "egress",
+      summary: "cgroup_skb hooks use integer allow/drop verdicts for packet ingress or egress.",
+      semantics: {
+        pass: ["1 (allow/pass)"],
+        drop: ["0 (drop/deny)"],
+        redirect: [],
+        other: [],
+      },
+    };
+  }
+
+  if (
+    attachType.includes("_connect") ||
+    attachType.includes("_bind") ||
+    attachType.includes("_sendmsg") ||
+    attachType.includes("_recvmsg") ||
+    attachType.includes("_getsockname") ||
+    attachType.includes("_getpeername")
+  ) {
+    return {
+      family: "cgroup_sock_addr",
+      direction: "unknown",
+      summary: "cgroup socket-address hooks can allow or deny socket operations before packets are sent.",
+      semantics: {
+        pass: ["1 (allow)"],
+        drop: ["0 (deny)"],
+        redirect: [],
+        other: [],
+      },
+    };
+  }
+
+  return {
+    family: attachType.includes("sock") ? "cgroup_sock" : "unknown",
+    direction: "unknown",
+    summary: "Return-value semantics for this hook are not modeled yet.",
+    semantics: {
+      pass: [],
+      drop: [],
+      redirect: [],
+      other: [],
+    },
+  };
+}
+
 export function buildProgramChains(
   progs: Map<number, BpfProgram>,
   rawNet: RawNetSnapshot[],
@@ -488,6 +559,7 @@ export function buildProgramChains(
           attachFlags: p.attachFlags,
         })),
         canShortCircuit: CGROUP_SHORT_CIRCUIT_TYPES.has(attachType),
+        packetContext: buildCgroupPacketContext(attachType),
       });
     }
   }
@@ -513,10 +585,13 @@ export function buildProgramChains(
   for (const [key, progList] of Array.from(tcByHook.entries())) {
     if (progList.length < 2) continue;
     const [devname, kind] = key.split(":");
-    const direction = kind.includes("ingress") ? "ingress" : kind.includes("egress") ? "egress" : kind;
+    const direction: PacketDirection =
+      kind.includes("ingress") ? "ingress" :
+      kind.includes("egress") ? "egress" :
+      "unknown";
     chains.push({
       hookId: `tc:${key}`,
-      hookLabel: `${devname} ${direction}`,
+      hookLabel: `${devname} ${direction === "unknown" ? kind : direction}`,
       hookType: "tc",
       attachPoint: devname,
       attachType: kind,
@@ -526,6 +601,7 @@ export function buildProgramChains(
         name: p.name,
       })),
       canShortCircuit: true, // TC programs can return TC_ACT_SHOT
+      packetContext: buildTcPacketContext(direction),
     });
   }
 

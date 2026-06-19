@@ -35,6 +35,12 @@ function formatAge(loadedAt: number): string {
   return `${Math.round(secs / 86400)}d ago`;
 }
 
+function formatActions(actions: string[]): string {
+  if (actions.length === 0) return "not modeled";
+  const visible = actions.slice(0, 2).join(", ");
+  return actions.length > 2 ? `${visible}, +${actions.length - 2}` : visible;
+}
+
 const OSI_LAYERS = [
   {
     key: "L2" as const,
@@ -147,6 +153,28 @@ function OsiLayerRow({ layerDef, programs, chains }: {
                     </span>
                   )}
                 </div>
+                {chain.packetContext && (
+                  <div
+                    className="mb-1 ml-1 flex flex-wrap items-center gap-1.5 text-[9px] font-mono text-muted-foreground/70"
+                    title={chain.packetContext.summary}
+                  >
+                    <span className="rounded border border-border/60 px-1 py-0.5 text-muted-foreground">
+                      {chain.packetContext.family}
+                      {chain.packetContext.direction !== "unknown" && `/${chain.packetContext.direction}`}
+                    </span>
+                    <span className="rounded border border-emerald-500/25 bg-emerald-500/5 px-1 py-0.5 text-emerald-400/80">
+                      pass: {formatActions(chain.packetContext.semantics.pass)}
+                    </span>
+                    <span className="rounded border border-red-500/25 bg-red-500/5 px-1 py-0.5 text-red-400/80">
+                      drop: {formatActions(chain.packetContext.semantics.drop)}
+                    </span>
+                    {chain.packetContext.semantics.redirect.length > 0 && (
+                      <span className="rounded border border-cyan-500/25 bg-cyan-500/5 px-1 py-0.5 text-cyan-400/80">
+                        redirect: {formatActions(chain.packetContext.semantics.redirect)}
+                      </span>
+                    )}
+                  </div>
+                )}
                 <div className="space-y-0.5 ml-1">
                   {progs.map((p, pIdx) => {
                     const pos = positionMap.get(p.id)?.position;

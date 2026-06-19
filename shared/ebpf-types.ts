@@ -179,6 +179,35 @@ export interface KernelAttachmentZone {
 
 // ─── Program chain (execution order at a hook point) ─────────────────────
 
+export type PacketDirection = "ingress" | "egress" | "bidirectional" | "unknown";
+
+export type PacketHookFamily =
+  | "xdp"
+  | "tc"
+  | "cgroup_skb"
+  | "cgroup_sock_addr"
+  | "cgroup_sock"
+  | "netfilter"
+  | "unknown";
+
+export interface PacketActionSemantics {
+  /** Return values that let packet/socket processing continue. */
+  pass: string[];
+  /** Return values that drop/deny/abort packet/socket processing. */
+  drop: string[];
+  /** Return values that send the packet elsewhere instead of normal pass. */
+  redirect: string[];
+  /** Other hook-specific return values worth explaining. */
+  other: string[];
+}
+
+export interface PacketChainContext {
+  family: PacketHookFamily;
+  direction: PacketDirection;
+  summary: string;
+  semantics: PacketActionSemantics;
+}
+
 /** A chain of BPF programs attached to the same hook point, in execution order.
  *  The kernel runs them sequentially — for networking hooks (TC, XDP, cgroup),
  *  an early program can return a verdict (e.g. DROP) that prevents later
@@ -204,6 +233,8 @@ export interface ProgramChain {
   /** Whether an early program can short-circuit (drop/reject) and prevent
    *  later programs from running. True for TC, cgroup networking hooks. */
   canShortCircuit: boolean;
+  /** Packet/socket context and return-value semantics for this hook. */
+  packetContext?: PacketChainContext;
 }
 
 // ─── Top-level snapshot ────────────────────────────────────────────────────

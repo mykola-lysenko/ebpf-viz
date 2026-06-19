@@ -6,6 +6,7 @@ import {
   buildNetworkInterfaces,
   buildCgroupTree,
   buildKernelZones,
+  buildProgramChains,
   buildSnapshot,
 } from "./ebpf-parser";
 import { BPF_PROGRAM_TYPE_COLORS } from "../shared/ebpf-constants";
@@ -417,6 +418,58 @@ describe("buildNetworkInterfaces", () => {
     expect(sm.layers.L7).toHaveLength(1);
     expect(sm.layers.L2).toHaveLength(0);
     expect(sm.layers.L3).toHaveLength(0);
+  });
+});
+
+// ─── buildProgramChains ───────────────────────────────────────────────────────
+
+describe("buildProgramChains", () => {
+  it("adds TC packet context and return semantics to chain metadata", () => {
+    const tcA: RawBpfProg = { ...xdpProg, id: 80, type: "sched_cls", name: "tc_a" };
+    const tcB: RawBpfProg = { ...xdpProg, id: 81, type: "sched_cls", name: "tc_b" };
+    const progs = parseProgList([tcA, tcB]);
+    const net: RawNetSnapshot[] = [{
+      tc: [
+        { devname: "eth0", ifindex: 2, id: 80, kind: "clsact/ingress" },
+        { devname: "eth0", ifindex: 2, id: 81, kind: "clsact/ingress" },
+      ],
+    }];
+
+    const chains = buildProgramChains(progs, net, []);
+    expect(chains).toHaveLength(1);
+    expect(chains[0].packetContext).toMatchObject({
+      family: "tc",
+      direction: "ingress",
+      semantics: {
+        pass: expect.arrayContaining(["TC_ACT_OK (0)"]),
+        drop: expect.arrayContaining(["TC_ACT_SHOT (2)"]),
+        redirect: expect.arrayContaining(["TC_ACT_REDIRECT (7)"]),
+      },
+    });
+  });
+
+  it("adds cgroup_skb packet context to ingress and egress chains", () => {
+    const ingressA: RawBpfProg = { ...cgroupSkbProg, id: 82, name: "ingress_a" };
+    const ingressB: RawBpfProg = { ...cgroupSkbProg, id: 83, name: "ingress_b" };
+    const progs = parseProgList([ingressA, ingressB]);
+    const cgroups: RawCgroupEntry[] = [{
+      cgroup: "/sys/fs/cgroup/test.slice",
+      programs: [
+        { id: 82, attach_type: "cgroup_inet_ingress", attach_flags: "multi" },
+        { id: 83, attach_type: "cgroup_inet_ingress", attach_flags: "multi" },
+      ],
+    }];
+
+    const chains = buildProgramChains(progs, [], cgroups);
+    expect(chains).toHaveLength(1);
+    expect(chains[0].packetContext).toMatchObject({
+      family: "cgroup_skb",
+      direction: "ingress",
+      semantics: {
+        pass: ["1 (allow/pass)"],
+        drop: ["0 (drop/deny)"],
+      },
+    });
   });
 });
 

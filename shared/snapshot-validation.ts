@@ -122,6 +122,17 @@ const programChainSchema = z.object({
     attachFlags: z.string().optional(),
   }).catchall(z.unknown())),
   canShortCircuit: z.boolean(),
+  packetContext: z.object({
+    family: z.enum(["xdp", "tc", "cgroup_skb", "cgroup_sock_addr", "cgroup_sock", "netfilter", "unknown"]),
+    direction: z.enum(["ingress", "egress", "bidirectional", "unknown"]),
+    summary: z.string(),
+    semantics: z.object({
+      pass: z.array(z.string()),
+      drop: z.array(z.string()),
+      redirect: z.array(z.string()),
+      other: z.array(z.string()),
+    }).catchall(z.unknown()),
+  }).catchall(z.unknown()).optional(),
 }).catchall(z.unknown());
 
 export const ebpfSnapshotSchema = z.object({
