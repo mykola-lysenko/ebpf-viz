@@ -478,8 +478,8 @@ function SourceTab({ insns, hasLineInfo }: { insns: XlatedInsn[]; hasLineInfo: b
       <div className="flex items-center gap-2 px-4 py-2 border-b border-white/5 shrink-0">
         <AlertTriangle size={12} className="text-amber-400 shrink-0" />
         <span className="text-xs text-slate-400">
-          Reconstructed from BPF bytecode annotations — not the original source file.
-          Fragments may be incomplete or reordered by the compiler.
+          Showing source annotations from BTF line info. Original source files are not loaded.
+          Snippets follow bytecode order and may be incomplete or reordered by the compiler.
         </span>
       </div>
       <div className="flex-1 overflow-auto font-mono text-sm leading-relaxed p-4">
