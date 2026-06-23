@@ -147,6 +147,25 @@ describe("analyzeXlatedReturns", () => {
     });
   });
 
+  it("recognizes self-xor register zeroing as constant zero", () => {
+    const result = analyzeXlatedReturns([
+      insn(0, "(ac) w0 ^= w0"),
+      insn(1, "(95) exit"),
+    ]);
+
+    expect(result).toMatchObject({
+      exitCount: 1,
+      hasUnknownExits: false,
+      observedConstants: [{ value: 0, exitCount: 1 }],
+    });
+    expect(result.constantExits[0]).toMatchObject({
+      exitIndex: 1,
+      assignmentIndex: 0,
+      assignmentDisasm: "(ac) w0 ^= w0",
+      value: 0,
+    });
+  });
+
   it("resolves return values through shared exit blocks", () => {
     const result = analyzeXlatedReturns([
       insn(0, "(b7) r0 = 0"),
@@ -231,7 +250,7 @@ describe("analyzeXlatedReturns", () => {
     ]);
   });
 
-  it("marks conflicting branch return values as unknown", () => {
+  it("preserves conflicting branch constants at shared exit blocks", () => {
     const result = analyzeXlatedReturns([
       insn(0, "(15) if r1 == 0x0 goto pc+2"),
       insn(1, "(b7) r0 = 0"),
@@ -241,17 +260,18 @@ describe("analyzeXlatedReturns", () => {
     ]);
 
     expect(result).toMatchObject({
-      exitCount: 1,
-      hasUnknownExits: true,
-      constantExits: [],
-      unknownExits: [
-        {
-          exitIndex: 4,
-          exitDisasm: "(95) exit",
-          reason: "conflicting-values",
-        },
+      exitCount: 2,
+      hasUnknownExits: false,
+      unknownExits: [],
+      observedConstants: [
+        { value: 0, exitCount: 1 },
+        { value: 2, exitCount: 1 },
       ],
     });
+    expect(result.constantExits.map(exit => [exit.exitIndex, exit.value])).toEqual([
+      [4, 0],
+      [4, 2],
+    ]);
   });
 
   it("does not attach branch evidence when control flow merges", () => {
@@ -263,7 +283,7 @@ describe("analyzeXlatedReturns", () => {
       insn(4, "(95) exit"),
     ]);
 
-    expect(result.unknownExits[0].branchEvidence).toBeUndefined();
+    expect(result.constantExits.every(exit => !exit.branchEvidence)).toBe(true);
   });
 
   it("handles programs with no exits", () => {

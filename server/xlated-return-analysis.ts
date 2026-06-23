@@ -27,6 +27,7 @@ type RegisterWrite =
 
 type ResolveResult =
   | { kind: "const"; value: number; assignmentInsn?: XlatedInsn }
+  | { kind: "const-set"; values: number[]; assignmentInsn?: XlatedInsn }
   | { kind: "map"; mapId: number; assignmentInsn?: XlatedInsn }
   | { kind: "unknown"; reason: UnknownReason; assignmentInsn?: XlatedInsn };
 
@@ -131,6 +132,17 @@ function parseRegisterWrites(insn: XlatedInsn): RegisterWrite[] {
     const source = normalizeRegister(copyMatch[2]);
     if (reg && source) {
       return [{ kind: "copy", reg, source, insn }];
+    }
+  }
+
+  const selfXorMatch = body.match(
+    /^([rw](?:10|[0-9]))\s*\^=\s*([rw](?:10|[0-9]))\b/
+  );
+  if (selfXorMatch) {
+    const reg = normalizeRegister(selfXorMatch[1]);
+    const source = normalizeRegister(selfXorMatch[2]);
+    if (reg && source && reg === source) {
+      return [{ kind: "const", reg, value: 0, insn }];
     }
   }
 
@@ -292,17 +304,20 @@ function mergeResults(results: ResolveResult[]): ResolveResult {
   if (unknown) return unknown;
 
   const constants = results.filter(
-    (result): result is Extract<ResolveResult, { kind: "const" }> =>
-      result.kind === "const"
+    (
+      result
+    ): result is Extract<ResolveResult, { kind: "const" | "const-set" }> =>
+      result.kind === "const" || result.kind === "const-set"
   );
   if (constants.length === results.length) {
-    const firstValue = constants[0]?.value;
-    if (
-      firstValue === undefined ||
-      constants.some(result => result.value !== firstValue)
-    ) {
-      return { kind: "unknown", reason: "conflicting-values" };
-    }
+    const values = Array.from(
+      new Set(
+        constants.flatMap(result =>
+          result.kind === "const" ? [result.value] : result.values
+        )
+      )
+    ).sort((a, b) => a - b);
+    if (values.length === 0) return { kind: "unknown", reason: "no-direct-assignment" };
 
     const firstAssignmentIndex = constants[0]?.assignmentInsn?.index;
     const assignmentInsn =
@@ -313,7 +328,9 @@ function mergeResults(results: ResolveResult[]): ResolveResult {
         ? constants[0]?.assignmentInsn
         : undefined;
 
-    return { kind: "const", value: firstValue, assignmentInsn };
+    return values.length === 1
+      ? { kind: "const", value: values[0], assignmentInsn }
+      : { kind: "const-set", values, assignmentInsn };
   }
 
   const maps = results.filter(
@@ -408,6 +425,12 @@ function createRegisterResolver(
       result =
         source.kind === "const"
           ? { kind: "const", value: source.value, assignmentInsn: write.insn }
+          : source.kind === "const-set"
+            ? {
+                kind: "const-set",
+                values: source.values,
+                assignmentInsn: write.insn,
+              }
           : source.kind === "map"
             ? { kind: "map", mapId: source.mapId, assignmentInsn: write.insn }
             : {
@@ -497,6 +520,26 @@ function toKnownExit(
   };
 }
 
+function toKnownExits(
+  exitInsn: XlatedInsn,
+  resolved: Extract<ResolveResult, { kind: "const" | "const-set" }>,
+  branchEvidence?: XlatedBranchEvidence[]
+): XlatedReturnExit[] {
+  if (resolved.kind === "const") {
+    return [toKnownExit(exitInsn, resolved, branchEvidence)];
+  }
+
+  return resolved.values.map(value => ({
+    exitIndex: exitInsn.index,
+    exitDisasm: exitInsn.disasm,
+    assignmentIndex: resolved.assignmentInsn?.index,
+    assignmentDisasm: resolved.assignmentInsn?.disasm,
+    value,
+    ...(branchEvidence ? { branchEvidence } : {}),
+    ...sourceEvidence(resolved.assignmentInsn ?? exitInsn),
+  }));
+}
+
 function toUnknownExit(
   exitInsn: XlatedInsn,
   resolved: Extract<ResolveResult, { kind: "unknown" }>,
@@ -548,14 +591,17 @@ export function analyzeXlatedReturns(
       predecessors,
       parsedInsn.pos
     );
-    if (resolved.kind === "const") {
-      constantExits.push(
-        toKnownExit(parsedInsn.insn, resolved, branchEvidence)
-      );
-      constantCounts.set(
-        resolved.value,
-        (constantCounts.get(resolved.value) ?? 0) + 1
-      );
+    if (resolved.kind === "const" || resolved.kind === "const-set") {
+      for (const exit of toKnownExits(
+        parsedInsn.insn,
+        resolved,
+        branchEvidence
+      )) {
+        constantExits.push(exit);
+        if (exit.value !== undefined) {
+          constantCounts.set(exit.value, (constantCounts.get(exit.value) ?? 0) + 1);
+        }
+      }
       continue;
     }
 
