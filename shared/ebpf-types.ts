@@ -274,6 +274,7 @@ export interface PacketProgramPrediction {
   definitelyTerminatesChain: boolean;
   hasUnknownBehavior: boolean;
   tailCallTargets: PacketTailCallTarget[];
+  tailCallContinuations: PacketTailCallContinuation[];
   hasSideEffects: boolean;
   sideEffectLabels: string[];
   sideEffectTitle?: string;
@@ -287,6 +288,27 @@ export interface PacketTailCallTarget {
   targetProgName?: string;
   targetProgType?: string;
   resolved: boolean;
+}
+
+export type PacketTailCallContinuationStatus =
+  | "analyzed"
+  | "analysis-unavailable"
+  | "cycle"
+  | "max-depth";
+
+export interface PacketTailCallContinuation {
+  target: PacketTailCallTarget;
+  depth: number;
+  status: PacketTailCallContinuationStatus;
+  verdicts: PacketVerdict[];
+  label: string;
+  tone: PacketVerdict;
+  summary: string;
+  confidence: PacketChainPredictionConfidence;
+  hasUnknownBehavior: boolean;
+  hasSideEffects: boolean;
+  sideEffectLabels: string[];
+  continuations: PacketTailCallContinuation[];
 }
 
 export interface PacketVerdictExplanation {

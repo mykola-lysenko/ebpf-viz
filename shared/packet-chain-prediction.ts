@@ -4,6 +4,7 @@ import type {
   PacketActionSemantics,
   PacketChainPrediction,
   PacketProgramPrediction,
+  PacketTailCallContinuation,
   PacketVerdict,
   PacketVerdictExplanation,
   ProgArrayTarget,
@@ -21,7 +22,10 @@ interface PredictionContext {
   maps?: BpfMap[];
   programs?: Array<{ id: number; name: string; rawType?: string }>;
   progArrayTargets?: ProgArrayTarget[];
+  maxTailCallDepth?: number;
 }
+
+const DEFAULT_MAX_TAIL_CALL_DEPTH = 8;
 
 const VERDICT_ORDER: PacketVerdict[] = [
   "drop",
@@ -216,10 +220,77 @@ function unknownExitExplanation(
   };
 }
 
+function tailCallsForAnalysis(
+  analysis: XlatedReturnAnalysis
+): XlatedTailCall[] {
+  return (
+    analysis.tailCalls ??
+    analysis.tailCallIndices.map(
+      (insnIndex): XlatedTailCall => ({
+        insnIndex,
+        disasm: "bpf_tail_call",
+      })
+    )
+  );
+}
+
+function tailCallTargetKey(target: PacketTailCallTarget): string {
+  return `${target.mapId}:${target.slot}`;
+}
+
+function resolveTailCallTarget(
+  tailCall: XlatedTailCall,
+  context: PredictionContext
+): PacketTailCallTarget | undefined {
+  if (tailCall.mapId === undefined || tailCall.slot === undefined) {
+    return undefined;
+  }
+
+  const map = (context.maps ?? []).find(map => map.id === tailCall.mapId);
+  const resolvedTarget = (context.progArrayTargets ?? []).find(
+    target => target.mapId === tailCall.mapId && target.slot === tailCall.slot
+  );
+  const targetProgram =
+    resolvedTarget !== undefined
+      ? (context.programs ?? []).find(
+          program => program.id === resolvedTarget.targetProgId
+        )
+      : undefined;
+
+  return {
+    mapId: tailCall.mapId,
+    mapName: map?.name,
+    slot: tailCall.slot,
+    targetProgId: resolvedTarget?.targetProgId,
+    targetProgName: targetProgram?.name,
+    targetProgType: targetProgram?.rawType,
+    resolved: resolvedTarget !== undefined,
+  };
+}
+
+function continuationByTargetKey(
+  continuations: PacketTailCallContinuation[]
+): Map<string, PacketTailCallContinuation> {
+  return new Map(
+    continuations.map(continuation => [
+      tailCallTargetKey(continuation.target),
+      continuation,
+    ])
+  );
+}
+
+function continuationExplanation(
+  continuation: PacketTailCallContinuation | undefined
+): string {
+  if (!continuation) return "";
+  return ` ${continuation.summary}`;
+}
+
 function buildVerdictExplanations(
   analysis: XlatedReturnAnalysis | null | undefined,
   semantics: PacketActionSemantics,
-  context: PredictionContext = {}
+  context: PredictionContext = {},
+  continuations: PacketTailCallContinuation[] = []
 ): PacketVerdictExplanation[] {
   if (!analysis) {
     return [
@@ -248,52 +319,19 @@ function buildVerdictExplanations(
   explanations.push(...analysis.unknownExits.map(unknownExitExplanation));
 
   if (analysis.hasTailCalls) {
-    const mapById = new Map((context.maps ?? []).map(map => [map.id, map]));
-    const progById = new Map(
-      (context.programs ?? []).map(program => [program.id, program])
-    );
-    const targetByMapAndSlot = new Map(
-      (context.progArrayTargets ?? []).map(target => [
-        `${target.mapId}:${target.slot}`,
-        target,
-      ])
-    );
-    const tailCalls =
-      analysis.tailCalls ??
-      analysis.tailCallIndices.map(
-        (insnIndex): XlatedTailCall => ({
-          insnIndex,
-          disasm: "bpf_tail_call",
-        })
-      );
+    const continuationsByTarget = continuationByTargetKey(continuations);
+    const tailCalls = tailCallsForAnalysis(analysis);
 
     for (const tailCall of tailCalls) {
-      const map =
-        tailCall.mapId !== undefined ? mapById.get(tailCall.mapId) : undefined;
-      const resolvedTarget =
-        tailCall.mapId !== undefined && tailCall.slot !== undefined
-          ? targetByMapAndSlot.get(`${tailCall.mapId}:${tailCall.slot}`)
-          : undefined;
-      const targetProgram =
-        resolvedTarget !== undefined
-          ? progById.get(resolvedTarget.targetProgId)
-          : undefined;
-      const tailCallTarget =
-        tailCall.mapId !== undefined && tailCall.slot !== undefined
-          ? ({
-              mapId: tailCall.mapId,
-              mapName: map?.name,
-              slot: tailCall.slot,
-              targetProgId: resolvedTarget?.targetProgId,
-              targetProgName: targetProgram?.name,
-              targetProgType: targetProgram?.rawType,
-              resolved: resolvedTarget !== undefined,
-            } satisfies PacketTailCallTarget)
+      const tailCallTarget = resolveTailCallTarget(tailCall, context);
+      const continuation =
+        tailCallTarget !== undefined
+          ? continuationsByTarget.get(tailCallTargetKey(tailCallTarget))
           : undefined;
       const mapText =
         tailCall.mapId !== undefined
-          ? map
-            ? `prog-array ${map.name} (#${tailCall.mapId})`
+          ? tailCallTarget?.mapName
+            ? `prog-array ${tailCallTarget.mapName} (#${tailCall.mapId})`
             : `prog-array map #${tailCall.mapId}`
           : "an unresolved prog-array map";
       const slotText =
@@ -301,16 +339,16 @@ function buildVerdictExplanations(
           ? ` slot ${tailCall.slot}`
           : " an unresolved slot";
       const resolvedTargetText =
-        resolvedTarget !== undefined
-          ? targetProgram
-            ? `program ${targetProgram.name} (#${resolvedTarget.targetProgId})`
-            : `program #${resolvedTarget.targetProgId}`
+        tailCallTarget?.targetProgId !== undefined
+          ? tailCallTarget.targetProgName
+            ? `program ${tailCallTarget.targetProgName} (#${tailCallTarget.targetProgId})`
+            : `program #${tailCallTarget.targetProgId}`
           : null;
 
       explanations.push({
-        verdict: "unknown",
+        verdict: continuation?.tone ?? "unknown",
         summary: resolvedTargetText
-          ? `Tail call at instruction ${tailCall.insnIndex} may continue in ${resolvedTargetText} via ${map?.name ?? `map #${tailCall.mapId}`}[${tailCall.slot}].`
+          ? `Tail call at instruction ${tailCall.insnIndex} may continue in ${resolvedTargetText} via ${tailCallTarget?.mapName ?? `map #${tailCall.mapId}`}[${tailCall.slot}].${continuationExplanation(continuation)}`
           : `Tail call at instruction ${tailCall.insnIndex} may continue in ${mapText}${slotText}; target program is not resolved from current snapshot.`,
         exitIndex: tailCall.insnIndex,
         source: tailCall.source,
@@ -329,53 +367,234 @@ function tailCallTargetsForAnalysis(
   analysis: XlatedReturnAnalysis | null | undefined,
   context: PredictionContext
 ): PacketTailCallTarget[] {
-  if (!analysis?.tailCalls) return [];
+  if (!analysis) return [];
 
-  const mapById = new Map((context.maps ?? []).map(map => [map.id, map]));
-  const progById = new Map(
-    (context.programs ?? []).map(program => [program.id, program])
-  );
-  const targetByMapAndSlot = new Map(
-    (context.progArrayTargets ?? []).map(target => [
-      `${target.mapId}:${target.slot}`,
-      target,
-    ])
-  );
-
-  return analysis.tailCalls.flatMap(tailCall => {
-    if (tailCall.mapId === undefined || tailCall.slot === undefined) return [];
-    const target = targetByMapAndSlot.get(`${tailCall.mapId}:${tailCall.slot}`);
-    const program =
-      target !== undefined ? progById.get(target.targetProgId) : undefined;
-    return [
-      {
-        mapId: tailCall.mapId,
-        mapName: mapById.get(tailCall.mapId)?.name,
-        slot: tailCall.slot,
-        targetProgId: target?.targetProgId,
-        targetProgName: program?.name,
-        targetProgType: program?.rawType,
-        resolved: target !== undefined,
-      },
-    ];
+  return tailCallsForAnalysis(analysis).flatMap(tailCall => {
+    const target = resolveTailCallTarget(tailCall, context);
+    return target ? [target] : [];
   });
 }
 
-function analyzeProgramVerdicts(
+interface ProgramBehavior {
+  verdicts: PacketVerdict[];
+  hasUnknownBehavior: boolean;
+  tailCallContinuations: PacketTailCallContinuation[];
+  sideEffectLabels: string[];
+}
+
+function programTargetLabel(target: PacketTailCallTarget): string {
+  return target.targetProgId !== undefined
+    ? `${target.targetProgName ?? "program"} (#${target.targetProgId})`
+    : "target program";
+}
+
+function confidenceFromBehavior(
+  verdicts: PacketVerdict[],
+  hasUnknownBehavior: boolean
+): PacketChainPrediction["confidence"] {
+  if (!hasUnknownBehavior) return "high";
+  return verdicts.some(verdict => verdict !== "unknown") ? "partial" : "unknown";
+}
+
+function summarizeContinuationBehavior(
+  target: PacketTailCallTarget,
+  verdicts: PacketVerdict[],
+  hasUnknownBehavior: boolean,
+  sideEffectLabels: string[]
+): string {
+  const targetText = programTargetLabel(target);
+  const sideEffectText =
+    sideEffectLabels.length > 0
+      ? ` Known side effects: ${sideEffectLabels.join(", ")}.`
+      : "";
+
+  if (verdicts.length === 1 && verdicts[0] === "pass" && !hasUnknownBehavior) {
+    return `${targetText}: all analyzed exits pass.${sideEffectText}`;
+  }
+
+  const actions: string[] = [];
+  if (verdicts.includes("pass")) actions.push("pass");
+  if (verdicts.includes("drop")) actions.push("drop");
+  if (verdicts.includes("redirect")) actions.push("redirect");
+  if (verdicts.includes("other"))
+    actions.push("take another hook-specific action");
+
+  if (actions.length > 0 && hasUnknownBehavior) {
+    return `${targetText}: may ${actions.join(", ")}; some paths remain unknown.${sideEffectText}`;
+  }
+  if (actions.length > 0) {
+    return `${targetText}: may ${actions.join(" or ")}.${sideEffectText}`;
+  }
+  return `${targetText}: packet outcome is unknown.${sideEffectText}`;
+}
+
+function unknownContinuation(
+  target: PacketTailCallTarget,
+  depth: number,
+  status: PacketTailCallContinuation["status"]
+): PacketTailCallContinuation {
+  const reason =
+    status === "cycle"
+      ? "tail-call cycle detected"
+      : status === "max-depth"
+        ? "tail-call analysis depth limit reached"
+        : "return analysis unavailable";
+  const summary = `${programTargetLabel(target)}: ${reason}; outcome is unknown.`;
+
+  return {
+    target,
+    depth,
+    status,
+    verdicts: ["unknown"],
+    label: "unknown verdict",
+    tone: "unknown",
+    summary,
+    confidence: "unknown",
+    hasUnknownBehavior: true,
+    hasSideEffects: false,
+    sideEffectLabels: [],
+    continuations: [],
+  };
+}
+
+function analyzeTailCallContinuations(
+  analysis: XlatedReturnAnalysis,
+  semantics: PacketActionSemantics,
+  getAnalysis: AnalysisLookup,
+  context: PredictionContext,
+  path: number[],
+  depth: number
+): {
+  continuations: PacketTailCallContinuation[];
+  hasUnresolvedTailCalls: boolean;
+} {
+  const continuations: PacketTailCallContinuation[] = [];
+  let hasUnresolvedTailCalls = false;
+  const maxDepth = context.maxTailCallDepth ?? DEFAULT_MAX_TAIL_CALL_DEPTH;
+
+  for (const tailCall of tailCallsForAnalysis(analysis)) {
+    const target = resolveTailCallTarget(tailCall, context);
+    if (!target?.resolved || target.targetProgId === undefined) {
+      hasUnresolvedTailCalls = true;
+      continue;
+    }
+
+    const nextDepth = depth + 1;
+    if (path.includes(target.targetProgId)) {
+      continuations.push(unknownContinuation(target, nextDepth, "cycle"));
+      continue;
+    }
+    if (nextDepth > maxDepth) {
+      continuations.push(unknownContinuation(target, nextDepth, "max-depth"));
+      continue;
+    }
+
+    const targetAnalysis = getAnalysis(target.targetProgId);
+    if (!targetAnalysis) {
+      continuations.push(
+        unknownContinuation(target, nextDepth, "analysis-unavailable")
+      );
+      continue;
+    }
+
+    const behavior = analyzeProgramBehavior(
+      target.targetProgId,
+      targetAnalysis,
+      semantics,
+      getAnalysis,
+      context,
+      [...path, target.targetProgId],
+      nextDepth
+    );
+
+    continuations.push({
+      target,
+      depth: nextDepth,
+      status: "analyzed",
+      verdicts: behavior.verdicts,
+      label: verdictLabel(behavior.verdicts, behavior.hasUnknownBehavior),
+      tone: verdictTone(behavior.verdicts, behavior.hasUnknownBehavior),
+      summary: summarizeContinuationBehavior(
+        target,
+        behavior.verdicts,
+        behavior.hasUnknownBehavior,
+        behavior.sideEffectLabels
+      ),
+      confidence: confidenceFromBehavior(
+        behavior.verdicts,
+        behavior.hasUnknownBehavior
+      ),
+      hasUnknownBehavior: behavior.hasUnknownBehavior,
+      hasSideEffects: behavior.sideEffectLabels.length > 0,
+      sideEffectLabels: behavior.sideEffectLabels,
+      continuations: behavior.tailCallContinuations,
+    });
+  }
+
+  return { continuations, hasUnresolvedTailCalls };
+}
+
+function analyzeProgramBehavior(
+  progId: number,
   analysis: XlatedReturnAnalysis | null | undefined,
-  semantics: PacketActionSemantics
-): { verdicts: PacketVerdict[]; hasUnknownBehavior: boolean } {
-  if (!analysis || analysis.exitCount === 0) {
-    return { verdicts: ["unknown"], hasUnknownBehavior: true };
+  semantics: PacketActionSemantics,
+  getAnalysis: AnalysisLookup,
+  context: PredictionContext,
+  path: number[] = [progId],
+  depth = 0
+): ProgramBehavior {
+  if (!analysis) {
+    return {
+      verdicts: ["unknown"],
+      hasUnknownBehavior: true,
+      tailCallContinuations: [],
+      sideEffectLabels: [],
+    };
   }
 
   const verdicts: PacketVerdict[] = analysis.observedConstants.map(observed =>
     classifyPacketReturnConstant(observed.value, semantics)
   );
-  const hasUnknownBehavior =
+  const sideEffectLabels = new Set(analysis.sideEffects.labels);
+  let hasUnknownBehavior =
+    analysis.exitCount === 0 ||
     analysis.hasUnknownExits ||
-    analysis.hasTailCalls ||
     verdicts.includes("unknown");
+
+  if (analysis.hasTailCalls) {
+    const { continuations, hasUnresolvedTailCalls } =
+      analyzeTailCallContinuations(
+        analysis,
+        semantics,
+        getAnalysis,
+        context,
+        path,
+        depth
+      );
+    if (hasUnresolvedTailCalls) {
+      hasUnknownBehavior = true;
+    }
+    for (const continuation of continuations) {
+      verdicts.push(...continuation.verdicts);
+      if (continuation.hasUnknownBehavior) {
+        hasUnknownBehavior = true;
+      }
+      for (const label of continuation.sideEffectLabels) {
+        sideEffectLabels.add(label);
+      }
+    }
+    if (hasUnknownBehavior) {
+      verdicts.push("unknown");
+    }
+    return {
+      verdicts: uniqueVerdicts(
+        verdicts.length > 0 ? verdicts : (["unknown"] as const)
+      ),
+      hasUnknownBehavior,
+      tailCallContinuations: continuations,
+      sideEffectLabels: Array.from(sideEffectLabels),
+    };
+  }
 
   if (hasUnknownBehavior) {
     verdicts.push("unknown");
@@ -386,6 +605,8 @@ function analyzeProgramVerdicts(
       verdicts.length > 0 ? verdicts : (["unknown"] as const)
     ),
     hasUnknownBehavior,
+    tailCallContinuations: [],
+    sideEffectLabels: Array.from(sideEffectLabels),
   };
 }
 
@@ -463,15 +684,21 @@ export function predictPacketChain(
 
   for (const program of chain.programs) {
     const analysis = getAnalysis(program.id);
-    const { verdicts, hasUnknownBehavior: programHasUnknown } =
-      analyzeProgramVerdicts(analysis, semantics);
+    const behavior = analyzeProgramBehavior(
+      program.id,
+      analysis,
+      semantics,
+      getAnalysis,
+      context
+    );
+    const { verdicts, hasUnknownBehavior: programHasUnknown } = behavior;
     const canTerminateChain =
       chain.canShortCircuit && stepCanTerminate(verdicts, programHasUnknown);
     const definitelyTerminatesChain =
       chain.canShortCircuit &&
       stepDefinitelyTerminates(verdicts, programHasUnknown);
     const terminalVerdicts = verdicts.filter(verdict => verdict !== "pass");
-    const sideEffectLabels = analysis?.sideEffects.labels ?? [];
+    const sideEffectLabels = behavior.sideEffectLabels;
     for (const label of sideEffectLabels) {
       chainSideEffectLabels.add(label);
     }
@@ -497,13 +724,15 @@ export function predictPacketChain(
       verdictExplanations: buildVerdictExplanations(
         analysis,
         semantics,
-        context
+        context,
+        behavior.tailCallContinuations
       ),
       reachability,
       canTerminateChain,
       definitelyTerminatesChain,
       hasUnknownBehavior: programHasUnknown,
       tailCallTargets: tailCallTargetsForAnalysis(analysis, context),
+      tailCallContinuations: behavior.tailCallContinuations,
       hasSideEffects: sideEffectLabels.length > 0,
       sideEffectLabels,
       sideEffectTitle: sideEffectTitle(analysis),

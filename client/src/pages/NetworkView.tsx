@@ -94,6 +94,7 @@ const VERDICT_TONE_CLASSES: Record<PacketVerdict, string> = {
 
 const MAX_RETURN_ANALYSIS_PROGRAMS = 64;
 const MAX_TAIL_CALL_MAP_DUMPS = 16;
+const MAX_TAIL_CALL_TARGET_ANALYSIS_PROGRAMS = 32;
 
 const OSI_LAYERS = [
   {
@@ -397,6 +398,27 @@ function OsiLayerRow({
                                   )}
                                 </span>
                               )}
+                              {predictionStep &&
+                                predictionStep.tailCallContinuations.length >
+                                  0 && (
+                                  <span
+                                    className="rounded border border-amber-500/25 bg-amber-500/5 px-1.5 py-0.5 text-[9px] font-mono text-amber-300/80"
+                                    title={predictionStep.tailCallContinuations
+                                      .map(
+                                        continuation => continuation.summary
+                                      )
+                                      .join("; ")}
+                                  >
+                                    tail call →{" "}
+                                    {formatActions(
+                                      predictionStep.tailCallContinuations.map(
+                                        continuation =>
+                                          continuation.target.targetProgName ??
+                                          `#${continuation.target.targetProgId ?? "unknown"}`
+                                      )
+                                    )}
+                                  </span>
+                                )}
                               {predictionStep?.reachability ===
                                 "conditional" && (
                                 <span
@@ -747,16 +769,13 @@ export default function NetworkView() {
     }
   );
 
-  const returnAnalysisById = useMemo(() => {
+  const baseReturnAnalysisById = useMemo(() => {
     const map = new Map<number, ProgramReturnAnalysisResult>();
     for (const result of returnAnalysisQuery.data ?? []) {
       map.set(result.progId, result);
     }
     return map;
   }, [returnAnalysisQuery.data]);
-
-  const returnAnalysisLoading =
-    returnAnalysisQuery.isLoading || returnAnalysisQuery.isFetching;
 
   const tailCallMapIds = useMemo(() => {
     const progArrayMapIds = new Set(
@@ -767,7 +786,7 @@ export default function NetworkView() {
         .map(map => map.id)
     );
     const ids = new Set<number>();
-    for (const result of Array.from(returnAnalysisById.values())) {
+    for (const result of Array.from(baseReturnAnalysisById.values())) {
       for (const tailCall of result.returnAnalysis?.tailCalls ?? []) {
         if (
           tailCall.mapId !== undefined &&
@@ -778,7 +797,7 @@ export default function NetworkView() {
       }
     }
     return Array.from(ids).slice(0, MAX_TAIL_CALL_MAP_DUMPS);
-  }, [maps, returnAnalysisById]);
+  }, [baseReturnAnalysisById, maps]);
 
   const progArrayDumpQueries = trpc.useQueries(t =>
     tailCallMapIds.map(mapId =>
@@ -803,6 +822,41 @@ export default function NetworkView() {
       query => query.data?.progArrayTargets ?? []
     );
   }, [appMode, progArrayDumpQueries, snapshotMapDumps, tailCallMapIds]);
+
+  const tailCallTargetProgramIds = useMemo(() => {
+    const baseIds = new Set(returnAnalysisProgramIds);
+    const ids = new Set<number>();
+    for (const target of progArrayTargets) {
+      if (!baseIds.has(target.targetProgId)) {
+        ids.add(target.targetProgId);
+      }
+    }
+    return Array.from(ids).slice(0, MAX_TAIL_CALL_TARGET_ANALYSIS_PROGRAMS);
+  }, [progArrayTargets, returnAnalysisProgramIds]);
+
+  const tailCallTargetAnalysisQuery = trpc.ebpf.progReturnAnalysis.useQuery(
+    { ids: tailCallTargetProgramIds },
+    {
+      enabled:
+        appMode !== "snapshot" && tailCallTargetProgramIds.length > 0,
+      retry: 1,
+      staleTime: 5 * 60_000,
+    }
+  );
+
+  const returnAnalysisById = useMemo(() => {
+    const map = new Map(baseReturnAnalysisById);
+    for (const result of tailCallTargetAnalysisQuery.data ?? []) {
+      map.set(result.progId, result);
+    }
+    return map;
+  }, [baseReturnAnalysisById, tailCallTargetAnalysisQuery.data]);
+
+  const returnAnalysisLoading =
+    returnAnalysisQuery.isLoading ||
+    returnAnalysisQuery.isFetching ||
+    tailCallTargetAnalysisQuery.isLoading ||
+    tailCallTargetAnalysisQuery.isFetching;
 
   if (!snapshot) {
     return (

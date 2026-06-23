@@ -289,12 +289,26 @@ describe("predictPacketChain", () => {
         resolved: true,
       },
     ]);
+    expect(prediction?.steps[0].tailCallContinuations).toEqual([
+      expect.objectContaining({
+        status: "analyzed",
+        verdicts: ["pass"],
+        label: "all exits pass",
+        hasUnknownBehavior: false,
+        summary: "middle (#2): all analyzed exits pass.",
+      }),
+    ]);
+    expect(prediction?.steps[0]).toMatchObject({
+      verdicts: ["pass"],
+      label: "all exits pass",
+      hasUnknownBehavior: false,
+    });
     expect(prediction?.steps[0].verdictExplanations).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
-          verdict: "unknown",
+          verdict: "pass",
           summary:
-            "Tail call at instruction 42 may continue in program middle (#2) via tail_calls[3].",
+            "Tail call at instruction 42 may continue in program middle (#2) via tail_calls[3]. middle (#2): all analyzed exits pass.",
           tailCallTarget: expect.objectContaining({
             targetProgId: 2,
             targetProgName: "middle",
@@ -303,6 +317,90 @@ describe("predictPacketChain", () => {
         }),
       ])
     );
+  });
+
+  it("inherits drop outcomes from resolved tail-call targets", () => {
+    const analysis = returnAnalysis([0], { tailCall: true });
+    analysis.tailCalls = [
+      {
+        insnIndex: 42,
+        disasm: "(85) call bpf_tail_call#12",
+        mapId: 21,
+        slot: 7,
+      },
+    ];
+    const analyses = new Map([
+      [1, analysis],
+      [2, returnAnalysis([0])],
+      [3, returnAnalysis([0])],
+      [99, returnAnalysis([2])],
+    ]);
+
+    const prediction = predictPacketChain(tcChain(), id => analyses.get(id), {
+      maps: [progArrayMap(21, "tail_calls")],
+      programs: [
+        { id: 99, name: "dropper", rawType: "sched_cls" },
+      ],
+      progArrayTargets: [
+        { mapId: 21, slot: 7, targetProgId: 99, entryIndex: 0 },
+      ],
+    });
+
+    expect(prediction?.possibleOutcomes).toEqual(["drop", "pass"]);
+    expect(prediction?.firstTerminalPrograms.map(program => program.progId)).toEqual([
+      1,
+    ]);
+    expect(prediction?.steps.map(step => [step.progId, step.label])).toEqual([
+      [1, "can drop"],
+      [2, "all exits pass"],
+      [3, "all exits pass"],
+    ]);
+    expect(prediction?.steps.map(step => step.reachability)).toEqual([
+      "always",
+      "conditional",
+      "conditional",
+    ]);
+    expect(prediction?.steps[0].tailCallContinuations[0]).toMatchObject({
+      status: "analyzed",
+      verdicts: ["drop"],
+      label: "can drop",
+      summary: "dropper (#99): may drop.",
+      hasUnknownBehavior: false,
+    });
+  });
+
+  it("keeps cyclic resolved tail calls unknown", () => {
+    const analysis = returnAnalysis([0], { tailCall: true });
+    analysis.tailCalls = [
+      {
+        insnIndex: 42,
+        disasm: "(85) call bpf_tail_call#12",
+        mapId: 21,
+        slot: 0,
+      },
+    ];
+    const analyses = new Map([[1, analysis]]);
+
+    const prediction = predictPacketChain(tcChain(), id => analyses.get(id), {
+      maps: [progArrayMap(21, "tail_calls")],
+      programs: [
+        { id: 1, name: "first", rawType: "sched_cls" },
+      ],
+      progArrayTargets: [
+        { mapId: 21, slot: 0, targetProgId: 1, entryIndex: 0 },
+      ],
+    });
+
+    expect(prediction?.steps[0]).toMatchObject({
+      verdicts: ["unknown", "pass"],
+      label: "unknown verdict",
+      hasUnknownBehavior: true,
+    });
+    expect(prediction?.steps[0].tailCallContinuations[0]).toMatchObject({
+      status: "cycle",
+      verdicts: ["unknown"],
+      summary: "first (#1): tail-call cycle detected; outcome is unknown.",
+    });
   });
 
   it("keeps all-pass verdict prediction while reporting known side effects", () => {

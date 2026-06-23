@@ -22,6 +22,7 @@ import type {
   BpfProgram,
   PacketChainPrediction,
   PacketProgramPrediction,
+  PacketTailCallContinuation,
   PacketTailCallTarget,
   PacketVerdictExplanation,
   PacketVerdict,
@@ -266,10 +267,12 @@ function TailCallEvidence({
   tailCalls,
   fallbackIndices,
   targets,
+  continuations,
 }: {
   tailCalls?: XlatedTailCall[];
   fallbackIndices: number[];
   targets: PacketTailCallTarget[];
+  continuations: PacketTailCallContinuation[];
 }) {
   const calls =
     tailCalls ??
@@ -288,6 +291,11 @@ function TailCallEvidence({
             candidate.mapId === tailCall.mapId &&
             candidate.slot === tailCall.slot
         );
+        const continuation = continuations.find(
+          candidate =>
+            candidate.target.mapId === tailCall.mapId &&
+            candidate.target.slot === tailCall.slot
+        );
         return (
           <div
             key={tailCall.insnIndex}
@@ -299,6 +307,26 @@ function TailCallEvidence({
                 ? `Resolved target: ${target.targetProgName ?? "program"} (#${target.targetProgId}).`
                 : "Final verdict may be in another program."}
             </div>
+            {continuation && (
+              <div className="mt-1 rounded border border-border/50 bg-background/30 px-1.5 py-1 text-[10px] text-muted-foreground">
+                <span
+                  className={cn(
+                    "mr-1 rounded border px-1 py-0.5 font-mono",
+                    VERDICT_TONE_CLASSES[continuation.tone]
+                  )}
+                >
+                  {continuation.label}
+                </span>
+                {continuation.summary}
+                {continuation.continuations.length > 0 && (
+                  <div className="mt-1 text-[10px] text-muted-foreground/70">
+                    Follows {continuation.continuations.length} nested tail-call
+                    continuation
+                    {continuation.continuations.length === 1 ? "" : "s"}.
+                  </div>
+                )}
+              </div>
+            )}
             <div className="mt-0.5 break-all font-mono text-[10px] text-amber-300/70">
               {tailCall.disasm}
             </div>
@@ -329,6 +357,15 @@ function StepDetails({
   analysisResult?: ProgramReturnAnalysisResult;
 }) {
   const analysis = analysisResult?.returnAnalysis;
+  const tailCallSummary =
+    step.tailCallContinuations.length > 0
+      ? step.tailCallContinuations
+          .map(
+            continuation =>
+              `${continuation.target.targetProgName ?? "program"}: ${continuation.label}`
+          )
+          .join("; ")
+      : undefined;
 
   return (
     <div className="rounded-xl border border-border/70 bg-card/50 p-3">
@@ -352,6 +389,14 @@ function StepDetails({
         {step.hasSideEffects && (
           <span className="rounded border border-cyan-500/25 bg-cyan-500/5 px-1.5 py-0.5 text-[10px] font-mono text-cyan-300/80">
             effects: {step.sideEffectLabels.join(", ")}
+          </span>
+        )}
+        {step.tailCallContinuations.length > 0 && (
+          <span
+            className="rounded border border-amber-500/25 bg-amber-500/5 px-1.5 py-0.5 text-[10px] font-mono text-amber-300/80"
+            title={tailCallSummary}
+          >
+            tail calls: {step.tailCallContinuations.length}
           </span>
         )}
       </div>
@@ -396,7 +441,7 @@ function StepDetails({
           {(analysis.unknownExits.length > 0 || analysis.hasTailCalls) && (
             <div>
               <div className="mb-1 text-[10px] font-semibold uppercase tracking-wider text-amber-300/80">
-                Uncertainty
+                Tail Calls & Uncertainty
               </div>
               <ReturnEvidence exits={analysis.unknownExits} label="unknown" />
               {analysis.hasTailCalls && (
@@ -404,6 +449,7 @@ function StepDetails({
                   tailCalls={analysis.tailCalls}
                   fallbackIndices={analysis.tailCallIndices}
                   targets={step.tailCallTargets}
+                  continuations={step.tailCallContinuations}
                 />
               )}
             </div>
