@@ -23,6 +23,12 @@ type RegisterWrite =
   | { kind: "const"; reg: RegisterName; value: number; insn: XlatedInsn }
   | { kind: "map"; reg: RegisterName; mapId: number; insn: XlatedInsn }
   | { kind: "copy"; reg: RegisterName; source: RegisterName; insn: XlatedInsn }
+  | {
+      kind: "local-call";
+      reg: "r0";
+      targetIndex: number;
+      insn: XlatedInsn;
+    }
   | { kind: "unknown"; reg: RegisterName; insn: XlatedInsn };
 
 type ResolveResult =
@@ -31,7 +37,7 @@ type ResolveResult =
   | { kind: "map"; mapId: number; assignmentInsn?: XlatedInsn }
   | { kind: "unknown"; reason: UnknownReason; assignmentInsn?: XlatedInsn };
 
-const RETURN_REGISTER: RegisterName = "r0";
+const RETURN_REGISTER = "r0" satisfies RegisterName;
 const CALL_CLOBBERED_REGS: RegisterName[] = [
   "r0",
   "r1",
@@ -77,6 +83,15 @@ function isTailCallInsn(disasm: string): boolean {
   return disasm.includes("tail_call");
 }
 
+function localCallTargetIndex(insn: XlatedInsn): number | undefined {
+  const body = insn.disasm.trim().replace(/^\([0-9a-fA-F]+\)\s+/, "");
+  const match = body.match(/^call\s+pc([+-]\d+)/);
+  if (!match) return undefined;
+
+  const targetIndex = insn.index + 1 + Number.parseInt(match[1], 10);
+  return Number.isFinite(targetIndex) ? targetIndex : undefined;
+}
+
 function sourceEvidence(
   insn: XlatedInsn
 ): Pick<
@@ -101,6 +116,16 @@ function parseRegisterWrites(insn: XlatedInsn): RegisterWrite[] {
   const body = trimmed.replace(/^\([0-9a-fA-F]+\)\s+/, "");
 
   if (/^call\b/.test(body)) {
+    const targetIndex = localCallTargetIndex(insn);
+    if (targetIndex !== undefined) {
+      return [
+        { kind: "local-call", reg: RETURN_REGISTER, targetIndex, insn },
+        ...CALL_CLOBBERED_REGS.filter(reg => reg !== RETURN_REGISTER).map(
+          reg => ({ kind: "unknown" as const, reg, insn })
+        ),
+      ];
+    }
+
     return CALL_CLOBBERED_REGS.map(reg => ({ kind: "unknown", reg, insn }));
   }
 
@@ -370,7 +395,8 @@ function writeForRegister(
 
 function createRegisterResolver(
   parsed: ParsedInsn[],
-  predecessors: number[][]
+  predecessors: number[][],
+  resolveLocalCall?: (targetIndex: number) => ResolveResult
 ): {
   resolveBefore: (pos: number, reg: RegisterName) => ResolveResult;
 } {
@@ -440,13 +466,47 @@ function createRegisterResolver(
                     ? "dynamic-assignment"
                     : source.reason,
                 assignmentInsn: write.insn,
-              };
+            };
     } else {
-      result = {
-        kind: "unknown",
-        reason: "dynamic-assignment",
-        assignmentInsn: write.insn,
-      };
+      if (write.kind === "local-call") {
+        const callResult = resolveLocalCall?.(write.targetIndex) ?? {
+          kind: "unknown",
+          reason: "dynamic-assignment",
+        };
+        result =
+          callResult.kind === "const"
+            ? {
+                kind: "const",
+                value: callResult.value,
+                assignmentInsn: write.insn,
+              }
+            : callResult.kind === "const-set"
+              ? {
+                  kind: "const-set",
+                  values: callResult.values,
+                  assignmentInsn: write.insn,
+                }
+              : callResult.kind === "map"
+                ? {
+                    kind: "map",
+                    mapId: callResult.mapId,
+                    assignmentInsn: write.insn,
+                  }
+                : {
+                    kind: "unknown",
+                    reason:
+                      callResult.reason === "no-direct-assignment"
+                        ? "dynamic-assignment"
+                        : callResult.reason,
+                    assignmentInsn: write.insn,
+                  };
+      } else {
+        result = {
+          kind: "unknown",
+          reason: "dynamic-assignment",
+          assignmentInsn: write.insn,
+        };
+      }
     }
 
     visiting.delete(key);
@@ -460,19 +520,26 @@ function createRegisterResolver(
 function resolveRegisterAtExit(
   parsed: ParsedInsn[],
   predecessors: number[][],
-  exitPos: number
+  exitPos: number,
+  resolveLocalCall?: (targetIndex: number) => ResolveResult
 ): ResolveResult {
-  return createRegisterResolver(parsed, predecessors).resolveBefore(
-    exitPos,
-    RETURN_REGISTER
-  );
+  return createRegisterResolver(
+    parsed,
+    predecessors,
+    resolveLocalCall
+  ).resolveBefore(exitPos, RETURN_REGISTER);
 }
 
 function extractTailCalls(
   parsed: ParsedInsn[],
-  predecessors: number[][]
+  predecessors: number[][],
+  resolveLocalCall?: (targetIndex: number) => ResolveResult
 ): XlatedTailCall[] {
-  const resolver = createRegisterResolver(parsed, predecessors);
+  const resolver = createRegisterResolver(
+    parsed,
+    predecessors,
+    resolveLocalCall
+  );
   const tailCalls: XlatedTailCall[] = [];
 
   for (const parsedInsn of parsed) {
@@ -502,6 +569,84 @@ function extractTailCalls(
   }
 
   return tailCalls;
+}
+
+function mergeFunctionExitResults(
+  parsed: ParsedInsn[],
+  predecessors: number[][],
+  reachable: Set<number>,
+  resolveLocalCall?: (targetIndex: number) => ResolveResult
+): ResolveResult {
+  const results: ResolveResult[] = [];
+
+  for (const parsedInsn of parsed) {
+    if (!parsedInsn.isExit) continue;
+    if (!reachable.has(parsedInsn.pos)) continue;
+    results.push(
+      resolveRegisterAtExit(
+        parsed,
+        predecessors,
+        parsedInsn.pos,
+        resolveLocalCall
+      )
+    );
+  }
+
+  return mergeResults(results);
+}
+
+function createLocalCallResolver(
+  insns: XlatedInsn[]
+): (targetIndex: number) => ResolveResult {
+  const indexToPos = new Map<number, number>();
+  insns.forEach((insn, pos) => indexToPos.set(insn.index, pos));
+
+  const targetIndices = new Set<number>();
+  for (const insn of insns) {
+    const targetIndex = localCallTargetIndex(insn);
+    if (targetIndex !== undefined && indexToPos.has(targetIndex)) {
+      targetIndices.add(targetIndex);
+    }
+  }
+
+  const targetPositions = Array.from(targetIndices)
+    .map(targetIndex => indexToPos.get(targetIndex))
+    .filter((pos): pos is number => pos !== undefined)
+    .sort((a, b) => a - b);
+  const memo = new Map<number, ResolveResult>();
+  const visiting = new Set<number>();
+
+  const resolve = (targetIndex: number): ResolveResult => {
+    if (!targetIndices.has(targetIndex)) {
+      return { kind: "unknown", reason: "dynamic-assignment" };
+    }
+    if (memo.has(targetIndex)) return memo.get(targetIndex)!;
+    if (visiting.has(targetIndex)) {
+      return { kind: "unknown", reason: "analysis-limit" };
+    }
+
+    const startPos = indexToPos.get(targetIndex);
+    if (startPos === undefined) {
+      return { kind: "unknown", reason: "dynamic-assignment" };
+    }
+
+    visiting.add(targetIndex);
+    const endPos =
+      targetPositions.find(candidate => candidate > startPos) ?? insns.length;
+    const parsed = parseInstructions(insns.slice(startPos, endPos));
+    const { predecessors, reachable } = buildControlFlow(parsed);
+    const result = mergeFunctionExitResults(
+      parsed,
+      predecessors,
+      reachable,
+      resolve
+    );
+    visiting.delete(targetIndex);
+    memo.set(targetIndex, result);
+    return result;
+  };
+
+  return resolve;
 }
 
 function toKnownExit(
@@ -560,9 +705,10 @@ function toUnknownExit(
  * Conservative return-value analyzer for xlated BPF bytecode.
  *
  * It builds a small CFG from branch offsets and resolves r0 at each exit by
- * walking backward through predecessors. The analysis intentionally understands
- * only constants, register copies, and simple control-flow merges; helpers,
- * memory loads, arithmetic, loops, and conflicting paths remain unknown.
+ * walking backward through predecessors. The analysis understands constants,
+ * register copies, simple control-flow merges, and local BPF subprogram calls;
+ * helpers, memory loads, arithmetic, loops, and conflicting paths remain
+ * unknown.
  */
 export function analyzeXlatedReturns(
   insns: XlatedInsn[]
@@ -575,7 +721,8 @@ export function analyzeXlatedReturns(
     .map(insn => insn.index);
   const parsed = parseInstructions(insns);
   const { predecessors, reachable } = buildControlFlow(parsed);
-  const tailCalls = extractTailCalls(parsed, predecessors);
+  const resolveLocalCall = createLocalCallResolver(insns);
+  const tailCalls = extractTailCalls(parsed, predecessors, resolveLocalCall);
 
   for (const parsedInsn of parsed) {
     if (!parsedInsn.isExit) continue;
@@ -584,7 +731,8 @@ export function analyzeXlatedReturns(
     const resolved = resolveRegisterAtExit(
       parsed,
       predecessors,
-      parsedInsn.pos
+      parsedInsn.pos,
+      resolveLocalCall
     );
     const branchEvidence = extractBranchEvidence(
       parsed,

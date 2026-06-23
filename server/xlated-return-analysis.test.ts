@@ -235,6 +235,66 @@ describe("analyzeXlatedReturns", () => {
     ]);
   });
 
+  it("resolves return values through local BPF subprogram calls", () => {
+    const result = analyzeXlatedReturns([
+      insn(0, "(85) call pc+2#bpf_prog_deadbeef_subprog"),
+      insn(1, "(95) exit"),
+      insn(2, "(b7) r1 = 0"),
+      insn(3, "(15) if r1 == 0x0 goto pc+2"),
+      insn(4, "(b7) r0 = -1"),
+      insn(5, "(95) exit"),
+      insn(6, "(b7) r0 = 2"),
+      insn(7, "(95) exit"),
+    ]);
+
+    expect(result).toMatchObject({
+      exitCount: 2,
+      hasUnknownExits: false,
+      observedConstants: [
+        { value: -1, exitCount: 1 },
+        { value: 2, exitCount: 1 },
+      ],
+    });
+    expect(result.constantExits.map(exit => [exit.exitIndex, exit.value])).toEqual([
+      [1, -1],
+      [1, 2],
+    ]);
+    expect(
+      result.constantExits.every(
+        exit =>
+          exit.assignmentIndex === 0 &&
+          exit.assignmentDisasm === "(85) call pc+2#bpf_prog_deadbeef_subprog"
+      )
+    ).toBe(true);
+  });
+
+  it("resolves nested local BPF subprogram calls", () => {
+    const result = analyzeXlatedReturns([
+      insn(0, "(85) call pc+3#bpf_prog_outer"),
+      insn(1, "(95) exit"),
+      insn(2, "(b7) r1 = 0"),
+      insn(3, "(b7) r1 = 0"),
+      insn(4, "(85) call pc+3#bpf_prog_inner"),
+      insn(5, "(95) exit"),
+      insn(6, "(b7) r1 = 0"),
+      insn(7, "(b7) r1 = 0"),
+      insn(8, "(b7) r0 = 7"),
+      insn(9, "(95) exit"),
+    ]);
+
+    expect(result).toMatchObject({
+      exitCount: 1,
+      hasUnknownExits: false,
+      observedConstants: [{ value: 7, exitCount: 1 }],
+    });
+    expect(result.constantExits[0]).toMatchObject({
+      exitIndex: 1,
+      assignmentIndex: 0,
+      assignmentDisasm: "(85) call pc+3#bpf_prog_outer",
+      value: 7,
+    });
+  });
+
   it("marks exits without any r0/w0 assignment as unknown", () => {
     const result = analyzeXlatedReturns([
       insn(0, "(b7) r1 = 0"),
