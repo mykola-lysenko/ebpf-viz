@@ -70,6 +70,36 @@ function tcChain(): ProgramChain {
   };
 }
 
+function cgroupConnectChain(): ProgramChain {
+  return {
+    hookId: "cgroup:/sys/fs/cgroup/test:cgroup_inet6_connect",
+    hookLabel: "inet6_connect",
+    hookType: "cgroup",
+    attachPoint: "/sys/fs/cgroup/test",
+    attachType: "cgroup_inet6_connect",
+    canShortCircuit: true,
+    packetContext: {
+      family: "cgroup_sock_addr",
+      direction: "unknown",
+      summary:
+        "cgroup socket-address hooks can allow or deny socket operations.",
+      semantics: {
+        pass: ["1 (allow)"],
+        passValues: [1],
+        drop: ["0 (deny)"],
+        dropValues: [0],
+        redirect: [],
+        other: [],
+      },
+    },
+    programs: [
+      { id: 11, position: 1, name: "guard_a" },
+      { id: 12, position: 2, name: "guard_b" },
+      { id: 13, position: 3, name: "guard_c" },
+    ],
+  };
+}
+
 function returnAnalysis(
   constants: number[],
   options: {
@@ -110,6 +140,35 @@ function returnAnalysis(
 }
 
 describe("predictPacketChain", () => {
+  it("models cgroup connect chains as allow or deny operations", () => {
+    const analyses = new Map([
+      [11, returnAnalysis([1])],
+      [12, returnAnalysis([0, 1])],
+      [13, returnAnalysis([1])],
+    ]);
+
+    const prediction = predictPacketChain(cgroupConnectChain(), id =>
+      analyses.get(id)
+    );
+
+    expect(prediction?.possibleOutcomes).toEqual(["drop", "pass"]);
+    expect(prediction?.summary).toContain("pass or drop");
+    expect(
+      prediction?.firstTerminalPrograms.map(program => program.progId)
+    ).toEqual([12]);
+    expect(
+      prediction?.steps.map(step => [
+        step.progId,
+        step.label,
+        step.reachability,
+      ])
+    ).toEqual([
+      [11, "all exits pass", "always"],
+      [12, "can drop", "always"],
+      [13, "all exits pass", "conditional"],
+    ]);
+  });
+
   it("marks a chain as always passing when every analyzed exit passes", () => {
     const analyses = new Map([
       [1, returnAnalysis([0])],
@@ -270,9 +329,7 @@ describe("predictPacketChain", () => {
 
     const prediction = predictPacketChain(tcChain(), id => analyses.get(id), {
       maps: [progArrayMap(21, "tail_calls")],
-      programs: [
-        { id: 2, name: "middle", rawType: "sched_cls" },
-      ],
+      programs: [{ id: 2, name: "middle", rawType: "sched_cls" }],
       progArrayTargets: [
         { mapId: 21, slot: 3, targetProgId: 2, entryIndex: 0 },
       ],
@@ -338,18 +395,16 @@ describe("predictPacketChain", () => {
 
     const prediction = predictPacketChain(tcChain(), id => analyses.get(id), {
       maps: [progArrayMap(21, "tail_calls")],
-      programs: [
-        { id: 99, name: "dropper", rawType: "sched_cls" },
-      ],
+      programs: [{ id: 99, name: "dropper", rawType: "sched_cls" }],
       progArrayTargets: [
         { mapId: 21, slot: 7, targetProgId: 99, entryIndex: 0 },
       ],
     });
 
     expect(prediction?.possibleOutcomes).toEqual(["drop", "pass"]);
-    expect(prediction?.firstTerminalPrograms.map(program => program.progId)).toEqual([
-      1,
-    ]);
+    expect(
+      prediction?.firstTerminalPrograms.map(program => program.progId)
+    ).toEqual([1]);
     expect(prediction?.steps.map(step => [step.progId, step.label])).toEqual([
       [1, "can drop"],
       [2, "all exits pass"],
@@ -383,9 +438,7 @@ describe("predictPacketChain", () => {
 
     const prediction = predictPacketChain(tcChain(), id => analyses.get(id), {
       maps: [progArrayMap(21, "tail_calls")],
-      programs: [
-        { id: 1, name: "first", rawType: "sched_cls" },
-      ],
+      programs: [{ id: 1, name: "first", rawType: "sched_cls" }],
       progArrayTargets: [
         { mapId: 21, slot: 0, targetProgId: 1, entryIndex: 0 },
       ],

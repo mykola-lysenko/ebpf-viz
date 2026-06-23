@@ -69,6 +69,7 @@ export type BpfProgType =
   | "perf_event"
   | "cgroup_skb"
   | "cgroup_sock"
+  | "cgroup_sock_addr"
   | "cgroup_device"
   | "cgroup_sysctl"
   | "cgroup_sockopt"

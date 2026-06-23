@@ -1,10 +1,32 @@
 import React, { useState, useMemo } from "react";
 import { useEbpf } from "@/contexts/EbpfContext";
+import { PacketChainDetailsSheet } from "@/components/PacketChainDetailsSheet";
 import { ProgBadge } from "@/components/ProgBadge";
-import { FolderTree, Folder, FolderOpen, ChevronDown, ChevronRight, AlertTriangle } from "lucide-react";
+import {
+  FolderTree,
+  Folder,
+  FolderOpen,
+  ChevronDown,
+  ChevronRight,
+  AlertTriangle,
+} from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
-import type { CgroupNode, ProgramChain, BpfProgram } from "../../../shared/ebpf-types";
+import { trpc } from "@/lib/trpc";
+import { predictPacketChain } from "../../../shared/packet-chain-prediction";
+import type {
+  BpfProgram,
+  CgroupNode,
+  PacketChainPrediction,
+  PacketVerdict,
+  ProgArrayTarget,
+  ProgramChain,
+  ProgramReturnAnalysisResult,
+} from "../../../shared/ebpf-types";
+
+const MAX_RETURN_ANALYSIS_PROGRAMS = 64;
+const MAX_TAIL_CALL_MAP_DUMPS = 16;
+const MAX_TAIL_CALL_TARGET_ANALYSIS_PROGRAMS = 32;
 
 /** Classify live rate drop between consecutive chain programs.
  *  Uses calls/sec (instantaneous rate) rather than cumulative run_cnt,
@@ -12,15 +34,34 @@ import type { CgroupNode, ProgramChain, BpfProgram } from "../../../shared/ebpf-
  *  different times, making raw count comparisons misleading. */
 function classifyRateDrop(
   prevRate: number | undefined,
-  currRate: number | undefined,
+  currRate: number | undefined
 ): { rate: number; label: string; color: string } | null {
   if (prevRate == null || currRate == null || prevRate <= 0) return null;
   const drop = 1 - currRate / prevRate;
-  if (drop < -0.05) return { rate: -drop, label: `~${Math.round(-drop * 100)}% MORE/s`, color: "#22d3ee" }; // Warning: logic anomaly
+  if (drop < -0.05)
+    return {
+      rate: -drop,
+      label: `~${Math.round(-drop * 100)}% MORE/s`,
+      color: "#22d3ee",
+    }; // Warning: logic anomaly
   if (drop < 0.05) return null; // negligible or noise
-  if (drop < 0.2) return { rate: drop, label: `~${Math.round(drop * 100)}% fewer/s`, color: "#f59e0b" };
-  if (drop < 0.5) return { rate: drop, label: `~${Math.round(drop * 100)}% fewer/s`, color: "#f97316" };
-  return { rate: drop, label: `~${Math.round(drop * 100)}% fewer/s`, color: "#ef4444" };
+  if (drop < 0.2)
+    return {
+      rate: drop,
+      label: `~${Math.round(drop * 100)}% fewer/s`,
+      color: "#f59e0b",
+    };
+  if (drop < 0.5)
+    return {
+      rate: drop,
+      label: `~${Math.round(drop * 100)}% fewer/s`,
+      color: "#f97316",
+    };
+  return {
+    rate: drop,
+    label: `~${Math.round(drop * 100)}% fewer/s`,
+    color: "#ef4444",
+  };
 }
 
 function formatRunCnt(n: number): string {
@@ -38,6 +79,31 @@ function formatAge(loadedAt: number): string {
   if (secs < 86400) return `${Math.round(secs / 3600)}h ago`;
   return `${Math.round(secs / 86400)}d ago`;
 }
+
+function formatActions(actions: string[]): string {
+  if (actions.length === 0) return "not modeled";
+  const visible = actions.slice(0, 2).join(", ");
+  return actions.length > 2 ? `${visible}, +${actions.length - 2}` : visible;
+}
+
+function chainTone(
+  outcomes: PacketVerdict[],
+  hasUnknownBehavior: boolean
+): PacketVerdict {
+  if (outcomes.includes("drop")) return "drop";
+  if (outcomes.includes("redirect")) return "redirect";
+  if (hasUnknownBehavior || outcomes.includes("unknown")) return "unknown";
+  if (outcomes.includes("other")) return "other";
+  return "pass";
+}
+
+const VERDICT_TONE_CLASSES: Record<PacketVerdict, string> = {
+  pass: "border-emerald-500/30 bg-emerald-500/10 text-emerald-300",
+  drop: "border-red-500/35 bg-red-500/10 text-red-300",
+  redirect: "border-cyan-500/35 bg-cyan-500/10 text-cyan-300",
+  unknown: "border-amber-500/35 bg-amber-500/10 text-amber-300",
+  other: "border-slate-500/35 bg-slate-500/10 text-slate-300",
+};
 
 // Palette of visually distinct colours for shared-tag dots
 const SHARED_TAG_PALETTE = [
@@ -100,16 +166,25 @@ function SharedTagDot({
               className="inline-block w-2 h-2 rounded-full shrink-0"
               style={{ background: color }}
             />
-            Same bytecode — tag <span className="font-mono">{tag.slice(0, 8)}…</span>
+            Same bytecode — tag{" "}
+            <span className="font-mono">{tag.slice(0, 8)}…</span>
           </div>
           <div className="text-muted-foreground mb-1.5">
-            {siblings.length} program{siblings.length !== 1 ? "s" : ""} share identical instructions:
+            {siblings.length} program{siblings.length !== 1 ? "s" : ""} share
+            identical instructions:
           </div>
           <div className="space-y-1 max-h-40 overflow-y-auto">
             {siblings.map(s => (
-              <div key={`${s.id}-${s.cgroupPath}`} className="flex items-center gap-1.5">
-                <span className="font-mono text-primary shrink-0">id={s.id}</span>
-                <span className="text-muted-foreground truncate">{s.cgroupPath.replace("/sys/fs/cgroup/", "")}</span>
+              <div
+                key={`${s.id}-${s.cgroupPath}`}
+                className="flex items-center gap-1.5"
+              >
+                <span className="font-mono text-primary shrink-0">
+                  id={s.id}
+                </span>
+                <span className="text-muted-foreground truncate">
+                  {s.cgroupPath.replace("/sys/fs/cgroup/", "")}
+                </span>
               </div>
             ))}
           </div>
@@ -120,26 +195,40 @@ function SharedTagDot({
 }
 
 const ATTACH_TYPE_COLORS: Record<string, string> = {
-  cgroup_inet_ingress:  "#3b82f6",
-  cgroup_inet_egress:   "#6d28d9",
-  cgroup_device:        "#1d4ed8",
-  cgroup_sock_create:   "#2563eb",
-  cgroup_sockops:       "#8b5cf6",
-  cgroup_sock_release:  "#a78bfa",
-  cgroup_bind4:         "#0ea5e9",
-  cgroup_bind6:         "#0284c7",
-  cgroup_connect4:      "#0369a1",
-  cgroup_connect6:      "#075985",
-  cgroup_sendmsg4:      "#7c3aed",
-  cgroup_sendmsg6:      "#6d28d9",
-  cgroup_recvmsg4:      "#5b21b6",
-  cgroup_recvmsg6:      "#4c1d95",
-  cgroup_sysctl:        "#f59e0b",
-  cgroup_getsockopt:    "#d97706",
-  cgroup_setsockopt:    "#b45309",
+  cgroup_inet_ingress: "#3b82f6",
+  cgroup_inet_egress: "#6d28d9",
+  cgroup_device: "#1d4ed8",
+  cgroup_sock_create: "#2563eb",
+  cgroup_sockops: "#8b5cf6",
+  cgroup_sock_release: "#a78bfa",
+  cgroup_inet4_bind: "#0ea5e9",
+  cgroup_inet6_bind: "#0284c7",
+  cgroup_inet4_connect: "#0369a1",
+  cgroup_inet6_connect: "#075985",
+  cgroup_udp4_sendmsg: "#7c3aed",
+  cgroup_udp6_sendmsg: "#6d28d9",
+  cgroup_udp4_recvmsg: "#5b21b6",
+  cgroup_udp6_recvmsg: "#4c1d95",
+  cgroup_bind4: "#0ea5e9",
+  cgroup_bind6: "#0284c7",
+  cgroup_connect4: "#0369a1",
+  cgroup_connect6: "#075985",
+  cgroup_sendmsg4: "#7c3aed",
+  cgroup_sendmsg6: "#6d28d9",
+  cgroup_recvmsg4: "#5b21b6",
+  cgroup_recvmsg6: "#4c1d95",
+  cgroup_sysctl: "#f59e0b",
+  cgroup_getsockopt: "#d97706",
+  cgroup_setsockopt: "#b45309",
 };
 
-function AttachTypeTag({ attachType, attachFlags }: { attachType: string; attachFlags?: string }) {
+function AttachTypeTag({
+  attachType,
+  attachFlags,
+}: {
+  attachType: string;
+  attachFlags?: string;
+}) {
   const color = ATTACH_TYPE_COLORS[attachType] ?? "#6b7280";
   return (
     <span
@@ -160,6 +249,10 @@ function CgroupNodeRow({
   sharedTagMap,
   tagColorMap,
   chainsByHook,
+  returnAnalysisById,
+  returnAnalysisLoading,
+  progArrayTargets,
+  onSelectChainDetails,
 }: {
   node: CgroupNode;
   depth: number;
@@ -168,14 +261,23 @@ function CgroupNodeRow({
   sharedTagMap: Map<string, Array<{ id: number; cgroupPath: string }>>;
   tagColorMap: Map<string, string>;
   chainsByHook: Map<string, ProgramChain>;
+  returnAnalysisById: Map<number, ProgramReturnAnalysisResult>;
+  returnAnalysisLoading: boolean;
+  progArrayTargets: ProgArrayTarget[];
+  onSelectChainDetails: (details: {
+    chain: ProgramChain;
+    prediction: PacketChainPrediction;
+    programs: BpfProgram[];
+  }) => void;
 }) {
-  const { historyMap } = useEbpf();
+  const { historyMap, maps, snapshot } = useEbpf();
   const hasMatchingProgs = node.programs.some(p => filteredIds.has(p.id));
   const hasMatchingChildren = (n: CgroupNode): boolean =>
     n.programs.some(p => filteredIds.has(p.id)) ||
     n.children.some(hasMatchingChildren);
 
-  const isVisible = !searchQuery || hasMatchingProgs || hasMatchingChildren(node);
+  const isVisible =
+    !searchQuery || hasMatchingProgs || hasMatchingChildren(node);
   const [expanded, setExpanded] = useState(depth < 2 || hasMatchingProgs);
 
   if (!isVisible) return null;
@@ -204,7 +306,11 @@ function CgroupNodeRow({
           disabled={!hasChildren}
         >
           {hasChildren ? (
-            expanded ? <ChevronDown size={13} /> : <ChevronRight size={13} />
+            expanded ? (
+              <ChevronDown size={13} />
+            ) : (
+              <ChevronRight size={13} />
+            )
           ) : (
             <span className="w-3 inline-block" />
           )}
@@ -212,127 +318,355 @@ function CgroupNodeRow({
 
         {/* Folder icon */}
         <div className="shrink-0 mt-0.5">
-          {expanded && hasChildren
-            ? <FolderOpen size={14} className="text-amber-400/70" />
-            : <Folder size={14} className={cn(
+          {expanded && hasChildren ? (
+            <FolderOpen size={14} className="text-amber-400/70" />
+          ) : (
+            <Folder
+              size={14}
+              className={cn(
                 "transition-colors",
-                visibleProgs.length > 0 ? "text-blue-400/70" : "text-muted-foreground/50"
-              )} />
-          }
+                visibleProgs.length > 0
+                  ? "text-blue-400/70"
+                  : "text-muted-foreground/50"
+              )}
+            />
+          )}
         </div>
 
         {/* Content */}
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2 flex-wrap">
-            <span className="text-xs font-mono text-foreground font-medium">{node.name}</span>
+            <span className="text-xs font-mono text-foreground font-medium">
+              {node.name}
+            </span>
             {visibleProgs.length > 0 && (
-              <Badge variant="outline" className="text-[10px] px-1.5 py-0 border-blue-500/40 text-blue-400">
+              <Badge
+                variant="outline"
+                className="text-[10px] px-1.5 py-0 border-blue-500/40 text-blue-400"
+              >
                 {visibleProgs.length} prog{visibleProgs.length !== 1 ? "s" : ""}
               </Badge>
             )}
           </div>
 
           {/* Programs — grouped by attach_type, showing execution order for chains */}
-          {visibleProgs.length > 0 && (() => {
-            // Group by attach_type preserving order
-            const groups: Array<{ attachType: string; attachFlags?: string; progs: typeof visibleProgs }> = [];
-            const seen = new Map<string, number>();
-            for (const p of visibleProgs) {
-              const cgroupAtt = p.attachments.find(a => a.cgroupPath === node.path);
-              const at = cgroupAtt?.detail.split(" ")[0] ?? "unknown";
-              const idx = seen.get(at);
-              if (idx !== undefined) {
-                groups[idx].progs.push(p);
-              } else {
-                seen.set(at, groups.length);
-                groups.push({ attachType: at, attachFlags: cgroupAtt?.attachFlags, progs: [p] });
+          {visibleProgs.length > 0 &&
+            (() => {
+              // Group by attach_type preserving order
+              const groups: Array<{
+                attachType: string;
+                attachFlags?: string;
+                progs: typeof visibleProgs;
+              }> = [];
+              const seen = new Map<string, number>();
+              for (const p of visibleProgs) {
+                const cgroupAtt = p.attachments.find(
+                  a => a.cgroupPath === node.path
+                );
+                const at = cgroupAtt?.detail.split(" ")[0] ?? "unknown";
+                const idx = seen.get(at);
+                if (idx !== undefined) {
+                  groups[idx].progs.push(p);
+                } else {
+                  seen.set(at, groups.length);
+                  groups.push({
+                    attachType: at,
+                    attachFlags: cgroupAtt?.attachFlags,
+                    progs: [p],
+                  });
+                }
               }
-            }
-            return (
-              <div className="mt-2 space-y-2">
-                {groups.map(g => {
-                  const chain = chainsByHook.get(`cgroup:${node.path}:${g.attachType}`);
-                  const isChain = chain && chain.programs.length >= 2;
-                  return (
-                    <div key={g.attachType}>
-                      {/* Attach type header with chain indicator */}
-                      <div className="flex items-center gap-1.5 mb-1">
-                        <AttachTypeTag attachType={g.attachType} attachFlags={g.attachFlags} />
-                        {isChain && (
-                          <span className="text-[9px] text-muted-foreground/60 flex items-center gap-0.5">
-                            chain of {chain.programs.length}
-                            {chain.canShortCircuit && (
-                              <span className="text-amber-400/70 flex items-center gap-0.5 ml-1">
-                                <AlertTriangle size={8} />
-                                can short-circuit
-                              </span>
-                            )}
-                          </span>
-                        )}
-                      </div>
-                      {/* Programs with optional position numbers and stats */}
-                      <div className="space-y-0.5 ml-1">
-                        {g.progs.map((p, pIdx) => {
-                          const position = isChain
-                            ? chain.programs.find(cp => cp.id === p.id)?.position
-                            : undefined;
-                          const sharedColor = tagColorMap.get(p.tag);
-                          const siblings = sharedTagMap.get(p.tag);
-                          // Drop indicator: compare live rates (calls/sec), not raw run_cnt
-                          const currRate = historyMap.get(p.id)?.latest?.callsPerSec;
-                          const prevRate = isChain && chain.canShortCircuit && pIdx > 0
-                            ? historyMap.get(g.progs[pIdx - 1].id)?.latest?.callsPerSec
-                            : undefined;
-                          const dropInfo = classifyRateDrop(prevRate, currRate);
-                          return (
-                            <React.Fragment key={p.id}>
-                              {dropInfo && (
-                                <div
-                                  className="flex items-center gap-1 ml-5 text-[9px] font-mono py-0.5"
-                                  style={{ color: dropInfo.color }}
-                                >
+              return (
+                <div className="mt-2 space-y-2">
+                  {groups.map(g => {
+                    const chain = chainsByHook.get(
+                      `cgroup:${node.path}:${g.attachType}`
+                    );
+                    const isChain = chain && chain.programs.length >= 2;
+                    const hasAnyAnalysis = chain?.programs.some(program =>
+                      returnAnalysisById.has(program.id)
+                    );
+                    const prediction =
+                      chain?.packetContext &&
+                      (hasAnyAnalysis || !returnAnalysisLoading)
+                        ? predictPacketChain(
+                            chain,
+                            progId =>
+                              returnAnalysisById.get(progId)?.returnAnalysis,
+                            {
+                              maps,
+                              programs: snapshot?.programs ?? [],
+                              progArrayTargets,
+                            }
+                          )
+                        : null;
+                    const predictionStepsById = new Map(
+                      prediction?.steps.map(step => [step.progId, step]) ?? []
+                    );
+                    const firstTerminal = prediction?.firstTerminalPrograms[0];
+
+                    return (
+                      <div key={g.attachType}>
+                        {/* Attach type header with chain indicator */}
+                        <div className="flex items-center gap-1.5 mb-1">
+                          <AttachTypeTag
+                            attachType={g.attachType}
+                            attachFlags={g.attachFlags}
+                          />
+                          {isChain && (
+                            <span className="text-[9px] text-muted-foreground/60 flex items-center gap-0.5">
+                              chain of {chain.programs.length}
+                              {chain.canShortCircuit && (
+                                <span className="text-amber-400/70 flex items-center gap-0.5 ml-1">
                                   <AlertTriangle size={8} />
-                                  {dropInfo.label} (live rate)
-                                </div>
+                                  can short-circuit
+                                </span>
                               )}
-                              <div className="flex items-center gap-1.5 flex-wrap">
-                                {position != null && (
-                                  <span
-                                    className="w-4 h-4 rounded-full flex items-center justify-center text-[9px] font-bold shrink-0"
-                                    style={{
-                                      background: `${p.color}20`,
-                                      border: `1.5px solid ${p.color}`,
-                                      color: p.color,
-                                    }}
-                                  >
-                                    {position}
+                            </span>
+                          )}
+                        </div>
+                        {isChain && chain.packetContext && (
+                          <div
+                            className="mb-1 ml-1 flex flex-wrap items-center gap-1.5 text-[9px] font-mono text-muted-foreground/70"
+                            title={chain.packetContext.summary}
+                          >
+                            <span className="rounded border border-border/60 px-1 py-0.5 text-muted-foreground">
+                              {chain.packetContext.family}
+                              {chain.packetContext.direction !== "unknown" &&
+                                `/${chain.packetContext.direction}`}
+                            </span>
+                            <span className="rounded border border-emerald-500/25 bg-emerald-500/5 px-1 py-0.5 text-emerald-400/80">
+                              allow:{" "}
+                              {formatActions(
+                                chain.packetContext.semantics.pass
+                              )}
+                            </span>
+                            <span className="rounded border border-red-500/25 bg-red-500/5 px-1 py-0.5 text-red-400/80">
+                              deny:{" "}
+                              {formatActions(
+                                chain.packetContext.semantics.drop
+                              )}
+                            </span>
+                          </div>
+                        )}
+                        {isChain && chain.packetContext && (
+                          <div className="mb-1.5 ml-1">
+                            {prediction ? (
+                              <button
+                                type="button"
+                                className={cn(
+                                  "w-full rounded border px-2 py-1 text-left text-[10px] leading-snug transition-colors hover:bg-accent/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50",
+                                  VERDICT_TONE_CLASSES[
+                                    chainTone(
+                                      prediction.possibleOutcomes,
+                                      prediction.hasUnknownBehavior
+                                    )
+                                  ]
+                                )}
+                                title={
+                                  firstTerminal
+                                    ? `First program that may alter normal chain flow: #${firstTerminal.position} ${firstTerminal.name}. Confidence: ${prediction.confidence}.`
+                                    : `Confidence: ${prediction.confidence}.`
+                                }
+                                onClick={() =>
+                                  onSelectChainDetails({
+                                    chain,
+                                    prediction,
+                                    programs: g.progs,
+                                  })
+                                }
+                              >
+                                <span className="font-medium">
+                                  {prediction.summary}
+                                </span>
+                                <span className="ml-1 opacity-75">
+                                  confidence: {prediction.confidence}
+                                </span>
+                                {firstTerminal && (
+                                  <span className="ml-1 opacity-75">
+                                    first possible stop: #
+                                    {firstTerminal.position}{" "}
+                                    {firstTerminal.name}
                                   </span>
                                 )}
-                                <ProgBadge program={p} />
-                                {isChain && (
-                                  <span className="text-[9px] font-mono text-muted-foreground/50 tabular-nums shrink-0">
-                                    {p.runCnt != null && `${formatRunCnt(p.runCnt)} total`}
-                                    {p.loadedAt > 0 && ` · loaded ${formatAge(p.loadedAt)}`}
-                                  </span>
-                                )}
-                                {sharedColor && siblings && siblings.length > 1 && (
-                                  <SharedTagDot
-                                    tag={p.tag}
-                                    color={sharedColor}
-                                    siblings={siblings}
-                                  />
-                                )}
+                                <span className="ml-1 opacity-60">
+                                  click for details
+                                </span>
+                              </button>
+                            ) : (
+                              <div className="rounded border border-border/60 px-2 py-1 text-[10px] text-muted-foreground/60">
+                                Analyzing cgroup verdicts…
                               </div>
-                            </React.Fragment>
-                          );
-                        })}
+                            )}
+                          </div>
+                        )}
+                        {/* Programs with optional position numbers and stats */}
+                        <div className="space-y-0.5 ml-1">
+                          {g.progs.map((p, pIdx) => {
+                            const position = isChain
+                              ? chain.programs.find(cp => cp.id === p.id)
+                                  ?.position
+                              : undefined;
+                            const predictionStep = predictionStepsById.get(
+                              p.id
+                            );
+                            const sharedColor = tagColorMap.get(p.tag);
+                            const siblings = sharedTagMap.get(p.tag);
+                            // Drop indicator: compare live rates (calls/sec), not raw run_cnt
+                            const currRate = historyMap.get(p.id)?.latest
+                              ?.callsPerSec;
+                            const prevRate =
+                              isChain && chain.canShortCircuit && pIdx > 0
+                                ? historyMap.get(g.progs[pIdx - 1].id)?.latest
+                                    ?.callsPerSec
+                                : undefined;
+                            const dropInfo = classifyRateDrop(
+                              prevRate,
+                              currRate
+                            );
+                            return (
+                              <React.Fragment key={p.id}>
+                                {dropInfo && (
+                                  <div
+                                    className="flex items-center gap-1 ml-5 text-[9px] font-mono py-0.5"
+                                    style={{ color: dropInfo.color }}
+                                  >
+                                    <AlertTriangle size={8} />
+                                    {dropInfo.label} (live rate)
+                                  </div>
+                                )}
+                                <div className="flex items-center gap-1.5 flex-wrap">
+                                  {position != null && (
+                                    <span
+                                      className="w-4 h-4 rounded-full flex items-center justify-center text-[9px] font-bold shrink-0"
+                                      style={{
+                                        background: `${p.color}20`,
+                                        border: `1.5px solid ${p.color}`,
+                                        color: p.color,
+                                      }}
+                                    >
+                                      {position}
+                                    </span>
+                                  )}
+                                  <ProgBadge program={p} />
+                                  {predictionStep && (
+                                    <span
+                                      className={cn(
+                                        "rounded border px-1.5 py-0.5 text-[9px] font-mono",
+                                        VERDICT_TONE_CLASSES[
+                                          predictionStep.tone
+                                        ]
+                                      )}
+                                      title={predictionStep.title}
+                                    >
+                                      {predictionStep.label}
+                                    </span>
+                                  )}
+                                  {predictionStep?.hasSideEffects && (
+                                    <span
+                                      className="rounded border border-cyan-500/25 bg-cyan-500/5 px-1.5 py-0.5 text-[9px] font-mono text-cyan-300/80"
+                                      title={predictionStep.sideEffectTitle}
+                                    >
+                                      effects:{" "}
+                                      {formatActions(
+                                        predictionStep.sideEffectLabels
+                                      )}
+                                    </span>
+                                  )}
+                                  {predictionStep &&
+                                    predictionStep.tailCallContinuations
+                                      .length > 0 && (
+                                      <span
+                                        className="rounded border border-amber-500/25 bg-amber-500/5 px-1.5 py-0.5 text-[9px] font-mono text-amber-300/80"
+                                        title={predictionStep.tailCallContinuations
+                                          .map(
+                                            continuation => continuation.summary
+                                          )
+                                          .join("; ")}
+                                      >
+                                        tail call →{" "}
+                                        {formatActions(
+                                          predictionStep.tailCallContinuations.map(
+                                            continuation =>
+                                              continuation.target
+                                                .targetProgName ??
+                                              `#${continuation.target.targetProgId ?? "unknown"}`
+                                          )
+                                        )}
+                                      </span>
+                                    )}
+                                  {predictionStep?.reachability ===
+                                    "conditional" && (
+                                    <span
+                                      className="rounded border border-amber-500/25 bg-amber-500/5 px-1.5 py-0.5 text-[9px] font-mono text-amber-300/80"
+                                      title="An earlier program may terminate socket or packet processing before this program runs."
+                                    >
+                                      conditional
+                                    </span>
+                                  )}
+                                  {predictionStep?.reachability ===
+                                    "not-reached" && (
+                                    <span
+                                      className="rounded border border-slate-500/25 bg-slate-500/5 px-1.5 py-0.5 text-[9px] font-mono text-slate-300/80"
+                                      title="An earlier analyzed program always terminates normal chain flow before this program."
+                                    >
+                                      not reached
+                                    </span>
+                                  )}
+                                  {isChain &&
+                                    chain.packetContext &&
+                                    !predictionStep &&
+                                    (() => {
+                                      const result = returnAnalysisById.get(
+                                        p.id
+                                      );
+                                      if (returnAnalysisLoading && !result) {
+                                        return (
+                                          <span className="rounded border border-border/60 px-1.5 py-0.5 text-[9px] font-mono text-muted-foreground/60">
+                                            analyzing
+                                          </span>
+                                        );
+                                      }
+                                      if (result?.error) {
+                                        return (
+                                          <span
+                                            className="rounded border border-amber-500/25 bg-amber-500/5 px-1.5 py-0.5 text-[9px] font-mono text-amber-300/80"
+                                            title={result.error}
+                                          >
+                                            analysis unavailable
+                                          </span>
+                                        );
+                                      }
+                                      return null;
+                                    })()}
+                                  {isChain && (
+                                    <span className="text-[9px] font-mono text-muted-foreground/50 tabular-nums shrink-0">
+                                      {p.runCnt != null &&
+                                        `${formatRunCnt(p.runCnt)} total`}
+                                      {p.loadedAt > 0 &&
+                                        ` · loaded ${formatAge(p.loadedAt)}`}
+                                    </span>
+                                  )}
+                                  {sharedColor &&
+                                    siblings &&
+                                    siblings.length > 1 && (
+                                      <SharedTagDot
+                                        tag={p.tag}
+                                        color={sharedColor}
+                                        siblings={siblings}
+                                      />
+                                    )}
+                                </div>
+                              </React.Fragment>
+                            );
+                          })}
+                        </div>
                       </div>
-                    </div>
-                  );
-                })}
-              </div>
-            );
-          })()}
+                    );
+                  })}
+                </div>
+              );
+            })()}
         </div>
       </div>
 
@@ -353,6 +687,10 @@ function CgroupNodeRow({
               sharedTagMap={sharedTagMap}
               tagColorMap={tagColorMap}
               chainsByHook={chainsByHook}
+              returnAnalysisById={returnAnalysisById}
+              returnAnalysisLoading={returnAnalysisLoading}
+              progArrayTargets={progArrayTargets}
+              onSelectChainDetails={onSelectChainDetails}
             />
           ))}
         </div>
@@ -362,20 +700,158 @@ function CgroupNodeRow({
 }
 
 export default function CgroupView() {
-  const { snapshot, filteredPrograms, searchQuery } = useEbpf();
+  const {
+    snapshot,
+    filteredPrograms,
+    searchQuery,
+    appMode,
+    maps,
+    snapshotMapDumps,
+  } = useEbpf();
+  const [selectedChainDetails, setSelectedChainDetails] = useState<{
+    chain: ProgramChain;
+    prediction: PacketChainPrediction;
+    programs: BpfProgram[];
+  } | null>(null);
+
+  const cgroupChains = useMemo(
+    () =>
+      snapshot
+        ? snapshot.programChains.filter(c => c.hookType === "cgroup")
+        : [],
+    [snapshot]
+  );
+
+  const filteredProgramIds = useMemo(
+    () =>
+      searchQuery ? new Set(filteredPrograms.map(program => program.id)) : null,
+    [filteredPrograms, searchQuery]
+  );
+
+  const returnAnalysisProgramIds = useMemo(() => {
+    const ids = new Set<number>();
+    for (const chain of cgroupChains) {
+      if (!chain.packetContext) continue;
+      for (const program of chain.programs) {
+        if (filteredProgramIds && !filteredProgramIds.has(program.id)) continue;
+        ids.add(program.id);
+      }
+    }
+    return Array.from(ids).slice(0, MAX_RETURN_ANALYSIS_PROGRAMS);
+  }, [cgroupChains, filteredProgramIds]);
+
+  const returnAnalysisQuery = trpc.ebpf.progReturnAnalysis.useQuery(
+    { ids: returnAnalysisProgramIds },
+    {
+      enabled: appMode !== "snapshot" && returnAnalysisProgramIds.length > 0,
+      retry: 1,
+      staleTime: 5 * 60_000,
+    }
+  );
+
+  const baseReturnAnalysisById = useMemo(() => {
+    const map = new Map<number, ProgramReturnAnalysisResult>();
+    for (const result of returnAnalysisQuery.data ?? []) {
+      map.set(result.progId, result);
+    }
+    return map;
+  }, [returnAnalysisQuery.data]);
+
+  const tailCallMapIds = useMemo(() => {
+    const progArrayMapIds = new Set(
+      maps
+        .filter(
+          map => map.rawType.toLowerCase().replace(/-/g, "_") === "prog_array"
+        )
+        .map(map => map.id)
+    );
+    const ids = new Set<number>();
+    for (const result of Array.from(baseReturnAnalysisById.values())) {
+      for (const tailCall of result.returnAnalysis?.tailCalls ?? []) {
+        if (
+          tailCall.mapId !== undefined &&
+          progArrayMapIds.has(tailCall.mapId)
+        ) {
+          ids.add(tailCall.mapId);
+        }
+      }
+    }
+    return Array.from(ids).slice(0, MAX_TAIL_CALL_MAP_DUMPS);
+  }, [baseReturnAnalysisById, maps]);
+
+  const progArrayDumpQueries = trpc.useQueries(t =>
+    tailCallMapIds.map(mapId =>
+      t.ebpf.mapDump(
+        { id: mapId },
+        {
+          enabled: appMode !== "snapshot",
+          retry: 1,
+          staleTime: 30_000,
+        }
+      )
+    )
+  );
+
+  const progArrayTargets = useMemo(() => {
+    if (appMode === "snapshot") {
+      return tailCallMapIds.flatMap(
+        mapId => snapshotMapDumps[mapId]?.progArrayTargets ?? []
+      );
+    }
+    return progArrayDumpQueries.flatMap(
+      query => query.data?.progArrayTargets ?? []
+    );
+  }, [appMode, progArrayDumpQueries, snapshotMapDumps, tailCallMapIds]);
+
+  const tailCallTargetProgramIds = useMemo(() => {
+    const baseIds = new Set(returnAnalysisProgramIds);
+    const ids = new Set<number>();
+    for (const target of progArrayTargets) {
+      if (!baseIds.has(target.targetProgId)) {
+        ids.add(target.targetProgId);
+      }
+    }
+    return Array.from(ids).slice(0, MAX_TAIL_CALL_TARGET_ANALYSIS_PROGRAMS);
+  }, [progArrayTargets, returnAnalysisProgramIds]);
+
+  const tailCallTargetAnalysisQuery = trpc.ebpf.progReturnAnalysis.useQuery(
+    { ids: tailCallTargetProgramIds },
+    {
+      enabled: appMode !== "snapshot" && tailCallTargetProgramIds.length > 0,
+      retry: 1,
+      staleTime: 5 * 60_000,
+    }
+  );
+
+  const returnAnalysisById = useMemo(() => {
+    const map = new Map(baseReturnAnalysisById);
+    for (const result of tailCallTargetAnalysisQuery.data ?? []) {
+      map.set(result.progId, result);
+    }
+    return map;
+  }, [baseReturnAnalysisById, tailCallTargetAnalysisQuery.data]);
+
+  const returnAnalysisLoading =
+    returnAnalysisQuery.isLoading ||
+    returnAnalysisQuery.isFetching ||
+    tailCallTargetAnalysisQuery.isLoading ||
+    tailCallTargetAnalysisQuery.isFetching;
 
   // Build chain lookup: hookId → ProgramChain for O(1) access in tree nodes
   const chainsByHook = useMemo(() => {
     if (!snapshot) return new Map<string, ProgramChain>();
-    return new Map(snapshot.programChains.map(c => [c.hookId, c]));
-  }, [snapshot]);
+    return new Map(cgroupChains.map(c => [c.hookId, c]));
+  }, [cgroupChains, snapshot]);
 
   // Build shared-tag maps: tags that appear on 2+ programs in the cgroup tree
   const { sharedTagMap, tagColorMap } = useMemo(() => {
     if (!snapshot) return { sharedTagMap: new Map(), tagColorMap: new Map() };
     const raw = new Map<string, Array<{ id: number; cgroupPath: string }>>();
     collectTagSiblings(snapshot.cgroupTree, raw);
-    const sharedTagMap = new Map<string, Array<{ id: number; cgroupPath: string }>>();
+    const sharedTagMap = new Map<
+      string,
+      Array<{ id: number; cgroupPath: string }>
+    >();
     Array.from(raw.entries()).forEach(([tag, entries]) => {
       if (entries.length > 1) sharedTagMap.set(tag, entries);
     });
@@ -389,12 +865,16 @@ export default function CgroupView() {
   }, [snapshot]);
 
   if (!snapshot) {
-    return <div className="flex items-center justify-center h-full"><p className="text-muted-foreground">Loading…</p></div>;
+    return (
+      <div className="flex items-center justify-center h-full">
+        <p className="text-muted-foreground">Loading…</p>
+      </div>
+    );
   }
 
   const filteredIds = new Set(filteredPrograms.map(p => p.id));
-  const cgroupProgs = snapshot.programs.filter(p =>
-    p.type.startsWith("cgroup") || p.type === "sock_ops"
+  const cgroupProgs = snapshot.programs.filter(
+    p => p.type.startsWith("cgroup") || p.type === "sock_ops"
   );
 
   return (
@@ -405,49 +885,73 @@ export default function CgroupView() {
           Cgroup Hierarchy
         </h1>
         <p className="text-sm text-muted-foreground mt-0.5">
-          {snapshot.cgroupTree.length} top-level cgroup{snapshot.cgroupTree.length !== 1 ? "s" : ""} · {cgroupProgs.length} BPF programs
+          {snapshot.cgroupTree.length} top-level cgroup
+          {snapshot.cgroupTree.length !== 1 ? "s" : ""} · {cgroupProgs.length}{" "}
+          BPF programs
         </p>
       </div>
 
       {/* Shared-bytecode legend */}
       {tagColorMap.size > 0 && (
         <div className="glass rounded-xl p-4">
-          <div className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2">Shared Bytecode</div>
+          <div className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2">
+            Shared Bytecode
+          </div>
           <p className="text-xs text-muted-foreground mb-3">
-            Programs with the same colour dot have identical compiled bytecode (same BPF tag). Hover a dot for details.
+            Programs with the same colour dot have identical compiled bytecode
+            (same BPF tag). Hover a dot for details.
           </p>
           <div className="flex flex-wrap gap-3">
-            {(Array.from(tagColorMap.entries()) as [string, string][]).map(([tag, color]) => {
-              const siblings = sharedTagMap.get(tag) ?? [];
-              return (
-                <div key={tag} className="flex items-center gap-1.5">
-                  <span
-                    className="inline-block w-2.5 h-2.5 rounded-full shrink-0"
-                    style={{ background: color, boxShadow: `0 0 5px ${color}80` }}
-                  />
-                  <span className="text-[10px] font-mono text-muted-foreground">{tag.slice(0, 8)}…</span>
-                  <span className="text-[10px] text-muted-foreground/60">×{siblings.length}</span>
-                </div>
-              );
-            })}
+            {(Array.from(tagColorMap.entries()) as [string, string][]).map(
+              ([tag, color]) => {
+                const siblings = sharedTagMap.get(tag) ?? [];
+                return (
+                  <div key={tag} className="flex items-center gap-1.5">
+                    <span
+                      className="inline-block w-2.5 h-2.5 rounded-full shrink-0"
+                      style={{
+                        background: color,
+                        boxShadow: `0 0 5px ${color}80`,
+                      }}
+                    />
+                    <span className="text-[10px] font-mono text-muted-foreground">
+                      {tag.slice(0, 8)}…
+                    </span>
+                    <span className="text-[10px] text-muted-foreground/60">
+                      ×{siblings.length}
+                    </span>
+                  </div>
+                );
+              }
+            )}
           </div>
         </div>
       )}
 
       {/* Attach type legend */}
       <div className="glass rounded-xl p-4">
-        <div className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-3">Attach Types</div>
+        <div className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-3">
+          Attach Types
+        </div>
         <div className="flex flex-wrap gap-2">
-          {Object.entries(ATTACH_TYPE_COLORS).slice(0, 10).map(([type, color]) => (
-            <span
-              key={type}
-              className="text-[10px] font-mono px-2 py-0.5 rounded border"
-              style={{ color, borderColor: `${color}40`, background: `${color}10` }}
-            >
-              {type.replace("cgroup_", "")}
-            </span>
-          ))}
-          <span className="text-[10px] text-muted-foreground px-2 py-0.5">+ more</span>
+          {Object.entries(ATTACH_TYPE_COLORS)
+            .slice(0, 10)
+            .map(([type, color]) => (
+              <span
+                key={type}
+                className="text-[10px] font-mono px-2 py-0.5 rounded border"
+                style={{
+                  color,
+                  borderColor: `${color}40`,
+                  background: `${color}10`,
+                }}
+              >
+                {type.replace("cgroup_", "")}
+              </span>
+            ))}
+          <span className="text-[10px] text-muted-foreground px-2 py-0.5">
+            + more
+          </span>
         </div>
       </div>
 
@@ -468,19 +972,38 @@ export default function CgroupView() {
                 sharedTagMap={sharedTagMap}
                 tagColorMap={tagColorMap}
                 chainsByHook={chainsByHook}
+                returnAnalysisById={returnAnalysisById}
+                returnAnalysisLoading={returnAnalysisLoading}
+                progArrayTargets={progArrayTargets}
+                onSelectChainDetails={setSelectedChainDetails}
               />
             ))}
           </div>
         ) : (
           <div className="text-center py-8">
-            <FolderTree size={32} className="text-muted-foreground mx-auto mb-3" />
-            <p className="text-sm text-muted-foreground">No cgroup BPF programs found.</p>
+            <FolderTree
+              size={32}
+              className="text-muted-foreground mx-auto mb-3"
+            />
+            <p className="text-sm text-muted-foreground">
+              No cgroup BPF programs found.
+            </p>
             <p className="text-xs text-muted-foreground/60 mt-1">
               cgroup_skb, cgroup_sock, and sock_ops programs will appear here.
             </p>
           </div>
         )}
       </div>
+      <PacketChainDetailsSheet
+        open={selectedChainDetails !== null}
+        onOpenChange={open => {
+          if (!open) setSelectedChainDetails(null);
+        }}
+        chain={selectedChainDetails?.chain ?? null}
+        prediction={selectedChainDetails?.prediction ?? null}
+        programs={selectedChainDetails?.programs ?? []}
+        returnAnalysisById={returnAnalysisById}
+      />
     </div>
   );
 }

@@ -114,3 +114,4 @@ standalone/
 
 ebpf-viz-standalone.tar.gz
 ebpf-viz-l3-*.tar.gz
+ebpf-viz-network-*.tar.gz

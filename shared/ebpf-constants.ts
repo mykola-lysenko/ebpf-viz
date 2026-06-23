@@ -9,6 +9,7 @@ export const BPF_PROGRAM_TYPE_COLORS: Record<string, string> = {
   perf_event:     "#f97316",
   cgroup_skb:     "#3b82f6",
   cgroup_sock:    "#2563eb",
+  cgroup_sock_addr: "#0ea5e9",
   cgroup_device:  "#1d4ed8",
   cgroup_sysctl:  "#1e40af",
   cgroup_sockopt: "#1e3a8a",

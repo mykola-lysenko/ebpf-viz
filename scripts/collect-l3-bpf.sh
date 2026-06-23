@@ -15,7 +15,7 @@ else
   SUDO_PREFIX=()
 fi
 
-mkdir -p "$OUT/prog" "$OUT/map" "$OUT/tc"
+mkdir -p "$OUT/prog" "$OUT/map" "$OUT/tc" "$OUT/cgroup"
 touch "$OUT/dumped-program-ids.txt" "$OUT/dumped-map-ids.txt"
 
 run_capture() {
@@ -58,6 +58,36 @@ import sys
 out = pathlib.Path(sys.argv[1])
 mode = sys.argv[2]
 L3_TYPES = {"sched_cls", "sched_act", "netfilter", "flow_dissector"}
+CGROUP_TYPES = {
+    "cgroup_skb",
+    "cgroup_sock",
+    "cgroup_sock_addr",
+    "cgroup_sockopt",
+    "sock_ops",
+}
+CGROUP_NETWORK_ATTACH_TYPES = {
+    "cgroup_inet_ingress",
+    "cgroup_inet_egress",
+    "cgroup_inet4_bind",
+    "cgroup_inet6_bind",
+    "cgroup_inet4_connect",
+    "cgroup_inet6_connect",
+    "cgroup_inet4_post_bind",
+    "cgroup_inet6_post_bind",
+    "cgroup_inet4_getpeername",
+    "cgroup_inet6_getpeername",
+    "cgroup_inet4_getsockname",
+    "cgroup_inet6_getsockname",
+    "cgroup_udp4_sendmsg",
+    "cgroup_udp6_sendmsg",
+    "cgroup_udp4_recvmsg",
+    "cgroup_udp6_recvmsg",
+    "cgroup_sock_create",
+    "cgroup_inet_sock_create",
+    "cgroup_sock_ops",
+    "cgroup_getsockopt",
+    "cgroup_setsockopt",
+}
 
 def load_json(path):
     try:
@@ -177,6 +207,7 @@ def parse_prog_array_entry(raw):
 
 progs = items_from_json(out / "prog-show.json", ["programs", "progs"])
 maps = items_from_json(out / "map-show.json", ["maps"])
+cgroups = items_from_json(out / "cgroup-tree.json", ["cgroups"])
 prog_by_id = {pid: prog for prog in progs if (pid := prog_id(prog)) is not None}
 map_by_id = {mid: map_obj for map_obj in maps if (mid := map_id(map_obj)) is not None}
 
@@ -185,8 +216,22 @@ seed_ids = {
     for pid, prog in prog_by_id.items()
     if str(prog.get("type", "")).replace("-", "_").lower() in L3_TYPES
 }
+cgroup_seed_ids = {
+    pid
+    for pid, prog in prog_by_id.items()
+    if str(prog.get("type", "")).replace("-", "_").lower() in CGROUP_TYPES
+}
+for cg in cgroups:
+    for attached in cg.get("programs") or []:
+        if not isinstance(attached, dict):
+            continue
+        attach_type = str(attached.get("attach_type", "")).replace("-", "_").lower()
+        pid = as_int(attached.get("id"))
+        if pid is not None and attach_type in CGROUP_NETWORK_ATTACH_TYPES:
+            cgroup_seed_ids.add(pid)
 previous_ids = read_ids("all-program-ids.txt")
-all_ids = set(previous_ids or seed_ids)
+initial_seed_ids = seed_ids | cgroup_seed_ids
+all_ids = set(previous_ids or initial_seed_ids)
 
 targets = []
 target_ids = set()
@@ -233,9 +278,20 @@ with (out / "seed-l3-programs.tsv").open("w") as handle:
     for pid in sorted(seed_ids):
         handle.write("\t".join(map(str, prog_row(pid, "l3-seed"))) + "\n")
 
+with (out / "seed-cgroup-programs.tsv").open("w") as handle:
+    for pid in sorted(cgroup_seed_ids):
+        handle.write("\t".join(map(str, prog_row(pid, "cgroup-seed"))) + "\n")
+
 with (out / "all-programs.tsv").open("w") as handle:
     for pid in sorted(all_ids):
-        relation = "l3-seed" if pid in seed_ids else "tail-call-target"
+        if pid in seed_ids and pid in cgroup_seed_ids:
+            relation = "l3+cgroup-seed"
+        elif pid in seed_ids:
+            relation = "l3-seed"
+        elif pid in cgroup_seed_ids:
+            relation = "cgroup-seed"
+        else:
+            relation = "tail-call-target"
         handle.write("\t".join(map(str, prog_row(pid, relation))) + "\n")
 
 with (out / "prog-array-maps.tsv").open("w") as handle:
@@ -263,11 +319,13 @@ if mode == "summary":
     summary = [
         f"Output directory: {out}",
         f"L3 seed programs: {len(seed_ids)}",
+        f"Cgroup networking seed programs: {len(cgroup_seed_ids)}",
         f"All collected programs: {len(all_ids)}",
         f"Prog-array maps: {len(prog_array_map_ids)}",
         f"Resolved tail-call entries: {len(targets)}",
         "",
         "L3 program types: sched_cls, sched_act, netfilter, flow_dissector",
+        "Cgroup attach types: inet ingress/egress, bind/connect, sendmsg/recvmsg, sockops, sockopt",
     ]
     (out / "collection-summary.txt").write_text("\n".join(summary) + "\n")
 PY
@@ -341,7 +399,7 @@ dump_tc_filters() {
     done
 }
 
-echo "Collecting eBPF L3 program data into $OUT"
+echo "Collecting eBPF L3/cgroup networking program data into $OUT"
 {
   date
   uname -srmo
@@ -356,6 +414,10 @@ run_capture "$OUT/map-show.json" "$OUT/map-show.err" \
   "${SUDO_PREFIX[@]}" "$BPFTOOL" -jp map show
 run_capture "$OUT/net-show.json" "$OUT/net-show.err" \
   "${SUDO_PREFIX[@]}" "$BPFTOOL" -jp net show
+run_capture "$OUT/cgroup-tree.json" "$OUT/cgroup-tree.err" \
+  "${SUDO_PREFIX[@]}" "$BPFTOOL" -jp cgroup tree
+run_capture "$OUT/cgroup-tree.txt" "$OUT/cgroup-tree.txt.err" \
+  "${SUDO_PREFIX[@]}" "$BPFTOOL" cgroup tree
 dump_tc_filters
 
 refresh_state init

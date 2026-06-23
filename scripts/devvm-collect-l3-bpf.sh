@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Upload the L3 BPF collector to a dev VM, run it there, and download results.
+# Upload the L3/cgroup networking BPF collector to a dev VM, run it there, and download results.
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -23,7 +23,8 @@ Usage:
   scripts/devvm-collect-l3-bpf.sh [options] user@devvm
 
 Uploads scripts/collect-l3-bpf.sh to the dev VM, executes it there, and
-downloads the resulting tarball locally.
+downloads the resulting tarball locally. The archive includes L3 programs,
+cgroup networking chains, prog-array maps, and followed tail-call targets.
 
 Options:
   --output PATH          Local tarball path (default: ./ebpf-viz-l3-latest.tar.gz)

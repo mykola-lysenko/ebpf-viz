@@ -10,7 +10,11 @@ import {
   buildSnapshot,
 } from "./ebpf-parser";
 import { BPF_PROGRAM_TYPE_COLORS } from "../shared/ebpf-constants";
-import type { RawBpfProg, RawNetSnapshot, RawCgroupEntry } from "../shared/ebpf-types";
+import type {
+  RawBpfProg,
+  RawNetSnapshot,
+  RawCgroupEntry,
+} from "../shared/ebpf-types";
 
 // ─── Fixtures ─────────────────────────────────────────────────────────────────
 
@@ -39,6 +43,19 @@ const cgroupSkbProg: RawBpfProg = {
   orphaned: false,
   bytes_xlated: 64,
   jited: false,
+  bytes_memlock: 4096,
+};
+
+const cgroupSockAddrProg: RawBpfProg = {
+  id: 5,
+  type: "cgroup_sock_addr",
+  name: "inet6_connect_guard",
+  tag: "0000000000000005",
+  gpl_compatible: true,
+  loaded_at: 1700000004,
+  orphaned: false,
+  bytes_xlated: 96,
+  jited: true,
   bytes_memlock: 4096,
 };
 
@@ -90,12 +107,14 @@ describe("parseProgList", () => {
   });
 
   it("marks programs as JITed when bpftool reports bytes_jited without a jited boolean", () => {
-    const map = parseProgList([{
-      ...xdpProg,
-      id: 99,
-      jited: undefined,
-      bytes_jited: 384,
-    }]);
+    const map = parseProgList([
+      {
+        ...xdpProg,
+        id: 99,
+        jited: undefined,
+        bytes_jited: 384,
+      },
+    ]);
 
     expect(map.get(99)!.jited).toBe(true);
   });
@@ -115,6 +134,13 @@ describe("parseProgList", () => {
     const map = parseProgList([cgroupSkbProg]);
     // cgroup_skb is classified as L4 (socket/transport layer hook)
     expect(map.get(2)!.osiLayer).toBe("L4");
+  });
+
+  it("recognizes cgroup_sock_addr programs used by connect/bind hooks", () => {
+    const map = parseProgList([cgroupSockAddrProg]);
+    const prog = map.get(5)!;
+    expect(prog.type).toBe("cgroup_sock_addr");
+    expect(prog.osiLayer).toBe("L4");
   });
 
   it("assigns correct OSI layer for kprobe", () => {
@@ -148,7 +174,12 @@ describe("parseProgList", () => {
   });
 
   it("handles multiple programs", () => {
-    const map = parseProgList([xdpProg, cgroupSkbProg, kprobeProg, orphanedProg]);
+    const map = parseProgList([
+      xdpProg,
+      cgroupSkbProg,
+      kprobeProg,
+      orphanedProg,
+    ]);
     expect(map.size).toBe(4);
   });
 });
@@ -158,9 +189,19 @@ describe("parseProgList", () => {
 describe("enrichWithNetAttachments", () => {
   it("attaches XDP program to correct interface", () => {
     const progs = parseProgList([xdpProg]);
-    const net: RawNetSnapshot[] = [{
-      xdp: [{ devname: "eth0", ifindex: 2, mode: "driver", id: 1, name: "my_xdp_prog" }],
-    }];
+    const net: RawNetSnapshot[] = [
+      {
+        xdp: [
+          {
+            devname: "eth0",
+            ifindex: 2,
+            mode: "driver",
+            id: 1,
+            name: "my_xdp_prog",
+          },
+        ],
+      },
+    ];
     enrichWithNetAttachments(progs, net);
     const prog = progs.get(1)!;
     expect(prog.attachments).toHaveLength(1);
@@ -170,11 +211,26 @@ describe("enrichWithNetAttachments", () => {
   });
 
   it("attaches TC program with correct kind", () => {
-    const tcProg: RawBpfProg = { ...xdpProg, id: 10, type: "sched_cls", name: "tc_prog" };
+    const tcProg: RawBpfProg = {
+      ...xdpProg,
+      id: 10,
+      type: "sched_cls",
+      name: "tc_prog",
+    };
     const progs = parseProgList([tcProg]);
-    const net: RawNetSnapshot[] = [{
-      tc: [{ devname: "eth0", ifindex: 2, id: 10, name: "tc_prog", kind: "filter" }],
-    }];
+    const net: RawNetSnapshot[] = [
+      {
+        tc: [
+          {
+            devname: "eth0",
+            ifindex: 2,
+            id: 10,
+            name: "tc_prog",
+            kind: "filter",
+          },
+        ],
+      },
+    ];
     enrichWithNetAttachments(progs, net);
     const prog = progs.get(10)!;
     expect(prog.attachments[0].kind).toBe("tc");
@@ -182,48 +238,105 @@ describe("enrichWithNetAttachments", () => {
   });
 
   it("sets direction=ingress for clsact/ingress TC attachment", () => {
-    const tcProg: RawBpfProg = { ...xdpProg, id: 11, type: "sched_cls", name: "cls_ingress" };
+    const tcProg: RawBpfProg = {
+      ...xdpProg,
+      id: 11,
+      type: "sched_cls",
+      name: "cls_ingress",
+    };
     const progs = parseProgList([tcProg]);
-    const net: RawNetSnapshot[] = [{
-      tc: [{ devname: "eth0", ifindex: 2, id: 11, name: "cls_ingress", kind: "clsact/ingress" }],
-    }];
+    const net: RawNetSnapshot[] = [
+      {
+        tc: [
+          {
+            devname: "eth0",
+            ifindex: 2,
+            id: 11,
+            name: "cls_ingress",
+            kind: "clsact/ingress",
+          },
+        ],
+      },
+    ];
     enrichWithNetAttachments(progs, net);
     const prog = progs.get(11)!;
     expect(prog.attachments[0].direction).toBe("ingress");
   });
 
   it("sets direction=egress for clsact/egress TC attachment", () => {
-    const tcProg: RawBpfProg = { ...xdpProg, id: 12, type: "sched_cls", name: "cls_egress" };
+    const tcProg: RawBpfProg = {
+      ...xdpProg,
+      id: 12,
+      type: "sched_cls",
+      name: "cls_egress",
+    };
     const progs = parseProgList([tcProg]);
-    const net: RawNetSnapshot[] = [{
-      tc: [{ devname: "eth0", ifindex: 2, id: 12, name: "cls_egress", kind: "clsact/egress" }],
-    }];
+    const net: RawNetSnapshot[] = [
+      {
+        tc: [
+          {
+            devname: "eth0",
+            ifindex: 2,
+            id: 12,
+            name: "cls_egress",
+            kind: "clsact/egress",
+          },
+        ],
+      },
+    ];
     enrichWithNetAttachments(progs, net);
     const prog = progs.get(12)!;
     expect(prog.attachments[0].direction).toBe("egress");
   });
 
   it("sets direction=undefined for TC attachment without ingress/egress in kind", () => {
-    const tcProg: RawBpfProg = { ...xdpProg, id: 13, type: "sched_cls", name: "tc_generic" };
+    const tcProg: RawBpfProg = {
+      ...xdpProg,
+      id: 13,
+      type: "sched_cls",
+      name: "tc_generic",
+    };
     const progs = parseProgList([tcProg]);
-    const net: RawNetSnapshot[] = [{
-      tc: [{ devname: "eth0", ifindex: 2, id: 13, name: "tc_generic", kind: "filter" }],
-    }];
+    const net: RawNetSnapshot[] = [
+      {
+        tc: [
+          {
+            devname: "eth0",
+            ifindex: 2,
+            id: 13,
+            name: "tc_generic",
+            kind: "filter",
+          },
+        ],
+      },
+    ];
     enrichWithNetAttachments(progs, net);
     const prog = progs.get(13)!;
     expect(prog.attachments[0].direction).toBeUndefined();
   });
 
   it("sets direction for TCx ingress/egress attachments", () => {
-    const tcxIngress: RawBpfProg = { ...xdpProg, id: 14, type: "sched_cls", name: "tcx_in" };
-    const tcxEgress: RawBpfProg  = { ...xdpProg, id: 15, type: "sched_cls", name: "tcx_out" };
+    const tcxIngress: RawBpfProg = {
+      ...xdpProg,
+      id: 14,
+      type: "sched_cls",
+      name: "tcx_in",
+    };
+    const tcxEgress: RawBpfProg = {
+      ...xdpProg,
+      id: 15,
+      type: "sched_cls",
+      name: "tcx_out",
+    };
     const progs = parseProgList([tcxIngress, tcxEgress]);
-    const net: RawNetSnapshot[] = [{
-      tcx: [
-        { devname: "eth0", ifindex: 2, id: 14, kind: "tcx/ingress" },
-        { devname: "eth0", ifindex: 2, id: 15, kind: "tcx/egress" },
-      ],
-    }];
+    const net: RawNetSnapshot[] = [
+      {
+        tcx: [
+          { devname: "eth0", ifindex: 2, id: 14, kind: "tcx/ingress" },
+          { devname: "eth0", ifindex: 2, id: 15, kind: "tcx/egress" },
+        ],
+      },
+    ];
     enrichWithNetAttachments(progs, net);
     expect(progs.get(14)!.attachments[0].direction).toBe("ingress");
     expect(progs.get(15)!.attachments[0].direction).toBe("egress");
@@ -231,9 +344,19 @@ describe("enrichWithNetAttachments", () => {
 
   it("ignores programs not in the prog map", () => {
     const progs = parseProgList([xdpProg]);
-    const net: RawNetSnapshot[] = [{
-      xdp: [{ devname: "eth0", ifindex: 2, mode: "driver", id: 999, name: "unknown" }],
-    }];
+    const net: RawNetSnapshot[] = [
+      {
+        xdp: [
+          {
+            devname: "eth0",
+            ifindex: 2,
+            mode: "driver",
+            id: 999,
+            name: "unknown",
+          },
+        ],
+      },
+    ];
     // Should not throw
     expect(() => enrichWithNetAttachments(progs, net)).not.toThrow();
     expect(progs.get(1)!.attachments).toHaveLength(0);
@@ -245,22 +368,28 @@ describe("enrichWithNetAttachments", () => {
 describe("enrichWithCgroupAttachments", () => {
   it("attaches cgroup program with correct path and attach type", () => {
     const progs = parseProgList([cgroupSkbProg]);
-    const cgroups: RawCgroupEntry[] = [{
-      cgroup: "/sys/fs/cgroup/system.slice/test.service",
-      programs: [{
-        id: 2,
-        attach_type: "cgroup_inet_ingress",
-        attach_flags: "multi",
-        name: "",
-        attach_btf_obj_id: 0,
-        attach_btf_id: 0,
-      }],
-    }];
+    const cgroups: RawCgroupEntry[] = [
+      {
+        cgroup: "/sys/fs/cgroup/system.slice/test.service",
+        programs: [
+          {
+            id: 2,
+            attach_type: "cgroup_inet_ingress",
+            attach_flags: "multi",
+            name: "",
+            attach_btf_obj_id: 0,
+            attach_btf_id: 0,
+          },
+        ],
+      },
+    ];
     enrichWithCgroupAttachments(progs, cgroups);
     const prog = progs.get(2)!;
     expect(prog.attachments).toHaveLength(1);
     expect(prog.attachments[0].kind).toBe("cgroup");
-    expect(prog.attachments[0].cgroupPath).toBe("/sys/fs/cgroup/system.slice/test.service");
+    expect(prog.attachments[0].cgroupPath).toBe(
+      "/sys/fs/cgroup/system.slice/test.service"
+    );
     expect(prog.attachments[0].attachFlags).toBe("multi");
   });
 });
@@ -270,9 +399,19 @@ describe("enrichWithCgroupAttachments", () => {
 describe("buildNetworkInterfaces", () => {
   it("creates interface entries for each unique interface", () => {
     const progs = parseProgList([xdpProg]);
-    const net: RawNetSnapshot[] = [{
-      xdp: [{ devname: "eth0", ifindex: 2, mode: "driver", id: 1, name: "my_xdp_prog" }],
-    }];
+    const net: RawNetSnapshot[] = [
+      {
+        xdp: [
+          {
+            devname: "eth0",
+            ifindex: 2,
+            mode: "driver",
+            id: 1,
+            name: "my_xdp_prog",
+          },
+        ],
+      },
+    ];
     enrichWithNetAttachments(progs, net);
     const interfaces = buildNetworkInterfaces(progs, net);
     expect(interfaces.length).toBeGreaterThanOrEqual(1);
@@ -284,9 +423,19 @@ describe("buildNetworkInterfaces", () => {
 
   it("places XDP programs in L2 layer", () => {
     const progs = parseProgList([xdpProg]);
-    const net: RawNetSnapshot[] = [{
-      xdp: [{ devname: "eth0", ifindex: 2, mode: "driver", id: 1, name: "my_xdp_prog" }],
-    }];
+    const net: RawNetSnapshot[] = [
+      {
+        xdp: [
+          {
+            devname: "eth0",
+            ifindex: 2,
+            mode: "driver",
+            id: 1,
+            name: "my_xdp_prog",
+          },
+        ],
+      },
+    ];
     enrichWithNetAttachments(progs, net);
     const interfaces = buildNetworkInterfaces(progs, net);
     const eth0 = interfaces.find(i => i.name === "eth0")!;
@@ -297,14 +446,23 @@ describe("buildNetworkInterfaces", () => {
 
   it("places netfilter programs in L3 layer", () => {
     const nfProg: RawBpfProg = {
-      id: 50, type: "netfilter", name: "nf_hook", tag: "aabbccdd00000050",
-      gpl_compatible: true, loaded_at: 1700000010, orphaned: false,
-      bytes_xlated: 128, jited: false, bytes_memlock: 4096,
+      id: 50,
+      type: "netfilter",
+      name: "nf_hook",
+      tag: "aabbccdd00000050",
+      gpl_compatible: true,
+      loaded_at: 1700000010,
+      orphaned: false,
+      bytes_xlated: 128,
+      jited: false,
+      bytes_memlock: 4096,
     };
     const progs = parseProgList([nfProg]);
-    const net: RawNetSnapshot[] = [{
-      netfilter: [{ devname: "eth0", ifindex: 2, id: 50 }],
-    }];
+    const net: RawNetSnapshot[] = [
+      {
+        netfilter: [{ devname: "eth0", ifindex: 2, id: 50 }],
+      },
+    ];
     enrichWithNetAttachments(progs, net);
     const interfaces = buildNetworkInterfaces(progs, net);
     const eth0 = interfaces.find(i => i.name === "eth0")!;
@@ -315,14 +473,23 @@ describe("buildNetworkInterfaces", () => {
 
   it("places flow_dissector programs in L3 layer (not L4)", () => {
     const fdProg: RawBpfProg = {
-      id: 51, type: "flow_dissector", name: "custom_dissector", tag: "aabbccdd00000051",
-      gpl_compatible: true, loaded_at: 1700000011, orphaned: false,
-      bytes_xlated: 192, jited: true, bytes_memlock: 4096,
+      id: 51,
+      type: "flow_dissector",
+      name: "custom_dissector",
+      tag: "aabbccdd00000051",
+      gpl_compatible: true,
+      loaded_at: 1700000011,
+      orphaned: false,
+      bytes_xlated: 192,
+      jited: true,
+      bytes_memlock: 4096,
     };
     const progs = parseProgList([fdProg]);
-    const net: RawNetSnapshot[] = [{
-      flow_dissector: [{ devname: "eth0", ifindex: 2, id: 51 }],
-    }];
+    const net: RawNetSnapshot[] = [
+      {
+        flow_dissector: [{ devname: "eth0", ifindex: 2, id: 51 }],
+      },
+    ];
     enrichWithNetAttachments(progs, net);
     const interfaces = buildNetworkInterfaces(progs, net);
     const eth0 = interfaces.find(i => i.name === "eth0")!;
@@ -333,75 +500,157 @@ describe("buildNetworkInterfaces", () => {
 
   it("places sk_skb and sk_lookup sockmap programs in L4 layer", () => {
     const skSkbProg: RawBpfProg = {
-      id: 52, type: "sk_skb", name: "sk_skb_verdict", tag: "aabbccdd00000052",
-      gpl_compatible: true, loaded_at: 1700000012, orphaned: false,
-      bytes_xlated: 256, jited: true, bytes_memlock: 4096,
+      id: 52,
+      type: "sk_skb",
+      name: "sk_skb_verdict",
+      tag: "aabbccdd00000052",
+      gpl_compatible: true,
+      loaded_at: 1700000012,
+      orphaned: false,
+      bytes_xlated: 256,
+      jited: true,
+      bytes_memlock: 4096,
     };
     const skLookupProg: RawBpfProg = {
-      id: 53, type: "sk_lookup", name: "sk_lookup_dispatch", tag: "aabbccdd00000053",
-      gpl_compatible: true, loaded_at: 1700000013, orphaned: false,
-      bytes_xlated: 192, jited: true, bytes_memlock: 4096,
+      id: 53,
+      type: "sk_lookup",
+      name: "sk_lookup_dispatch",
+      tag: "aabbccdd00000053",
+      gpl_compatible: true,
+      loaded_at: 1700000013,
+      orphaned: false,
+      bytes_xlated: 192,
+      jited: true,
+      bytes_memlock: 4096,
     };
     const progs = parseProgList([skSkbProg, skLookupProg]);
-    const net: RawNetSnapshot[] = [{
-      sockmap: [
-        { devname: "sockmap0", ifindex: 0, kind: "sk_skb", id: 52 },
-        { devname: "sockmap0", ifindex: 0, kind: "sk_lookup", id: 53 },
-      ],
-    }];
+    const net: RawNetSnapshot[] = [
+      {
+        sockmap: [
+          { devname: "sockmap0", ifindex: 0, kind: "sk_skb", id: 52 },
+          { devname: "sockmap0", ifindex: 0, kind: "sk_lookup", id: 53 },
+        ],
+      },
+    ];
     enrichWithNetAttachments(progs, net);
     const interfaces = buildNetworkInterfaces(progs, net);
     const sm = interfaces.find(i => i.name === "sockmap0")!;
     expect(sm).toBeDefined();
     expect(sm.kind).toBe("sockmap");
     expect(sm.layers.L4).toHaveLength(2);
-    expect(sm.layers.L4.map(p => p.id)).toEqual(expect.arrayContaining([52, 53]));
+    expect(sm.layers.L4.map(p => p.id)).toEqual(
+      expect.arrayContaining([52, 53])
+    );
     expect(sm.layers.L7).toHaveLength(0);
   });
 
   it("places sk_msg and sock_ops sockmap programs in L7 layer", () => {
     const skMsgProg: RawBpfProg = {
-      id: 54, type: "sk_msg", name: "sk_msg_redirect", tag: "aabbccdd00000054",
-      gpl_compatible: true, loaded_at: 1700000014, orphaned: false,
-      bytes_xlated: 320, jited: true, bytes_memlock: 4096,
+      id: 54,
+      type: "sk_msg",
+      name: "sk_msg_redirect",
+      tag: "aabbccdd00000054",
+      gpl_compatible: true,
+      loaded_at: 1700000014,
+      orphaned: false,
+      bytes_xlated: 320,
+      jited: true,
+      bytes_memlock: 4096,
     };
     const sockOpsProg: RawBpfProg = {
-      id: 55, type: "sock_ops", name: "sockops_rtt", tag: "aabbccdd00000055",
-      gpl_compatible: true, loaded_at: 1700000015, orphaned: false,
-      bytes_xlated: 448, jited: true, bytes_memlock: 4096,
+      id: 55,
+      type: "sock_ops",
+      name: "sockops_rtt",
+      tag: "aabbccdd00000055",
+      gpl_compatible: true,
+      loaded_at: 1700000015,
+      orphaned: false,
+      bytes_xlated: 448,
+      jited: true,
+      bytes_memlock: 4096,
     };
     const progs = parseProgList([skMsgProg, sockOpsProg]);
-    const net: RawNetSnapshot[] = [{
-      sockmap: [
-        { devname: "sockmap0", ifindex: 0, kind: "sk_msg", id: 54 },
-        { devname: "sockmap0", ifindex: 0, kind: "sockops", id: 55 },
-      ],
-    }];
+    const net: RawNetSnapshot[] = [
+      {
+        sockmap: [
+          { devname: "sockmap0", ifindex: 0, kind: "sk_msg", id: 54 },
+          { devname: "sockmap0", ifindex: 0, kind: "sockops", id: 55 },
+        ],
+      },
+    ];
     enrichWithNetAttachments(progs, net);
     const interfaces = buildNetworkInterfaces(progs, net);
     const sm = interfaces.find(i => i.name === "sockmap0")!;
     expect(sm).toBeDefined();
     expect(sm.kind).toBe("sockmap");
     expect(sm.layers.L7).toHaveLength(2);
-    expect(sm.layers.L7.map(p => p.id)).toEqual(expect.arrayContaining([54, 55]));
+    expect(sm.layers.L7.map(p => p.id)).toEqual(
+      expect.arrayContaining([54, 55])
+    );
     expect(sm.layers.L4).toHaveLength(0);
   });
 
   it("sockmap interface with all 4 layers populated validates full stack", () => {
     const progs = parseProgList([
-      { id: 60, type: "xdp",        name: "xdp_prog",   tag: "aa00000000000060", gpl_compatible: true, loaded_at: 1700000020, orphaned: false, bytes_xlated: 128, jited: true,  bytes_memlock: 4096 },
-      { id: 61, type: "sched_cls",  name: "tc_prog",    tag: "aa00000000000061", gpl_compatible: true, loaded_at: 1700000021, orphaned: false, bytes_xlated: 256, jited: true,  bytes_memlock: 4096 },
-      { id: 62, type: "sk_skb",     name: "sk_skb_prog", tag: "aa00000000000062", gpl_compatible: true, loaded_at: 1700000022, orphaned: false, bytes_xlated: 192, jited: true,  bytes_memlock: 4096 },
-      { id: 63, type: "sk_msg",     name: "sk_msg_prog", tag: "aa00000000000063", gpl_compatible: true, loaded_at: 1700000023, orphaned: false, bytes_xlated: 160, jited: true,  bytes_memlock: 4096 },
+      {
+        id: 60,
+        type: "xdp",
+        name: "xdp_prog",
+        tag: "aa00000000000060",
+        gpl_compatible: true,
+        loaded_at: 1700000020,
+        orphaned: false,
+        bytes_xlated: 128,
+        jited: true,
+        bytes_memlock: 4096,
+      },
+      {
+        id: 61,
+        type: "sched_cls",
+        name: "tc_prog",
+        tag: "aa00000000000061",
+        gpl_compatible: true,
+        loaded_at: 1700000021,
+        orphaned: false,
+        bytes_xlated: 256,
+        jited: true,
+        bytes_memlock: 4096,
+      },
+      {
+        id: 62,
+        type: "sk_skb",
+        name: "sk_skb_prog",
+        tag: "aa00000000000062",
+        gpl_compatible: true,
+        loaded_at: 1700000022,
+        orphaned: false,
+        bytes_xlated: 192,
+        jited: true,
+        bytes_memlock: 4096,
+      },
+      {
+        id: 63,
+        type: "sk_msg",
+        name: "sk_msg_prog",
+        tag: "aa00000000000063",
+        gpl_compatible: true,
+        loaded_at: 1700000023,
+        orphaned: false,
+        bytes_xlated: 160,
+        jited: true,
+        bytes_memlock: 4096,
+      },
     ]);
-    const net: RawNetSnapshot[] = [{
-      xdp:     [{ devname: "eth0",     ifindex: 2, id: 60 }],
-      tc:      [{ devname: "eth0",     ifindex: 2, id: 61 }],
-      sockmap: [
-        { devname: "sockmap0", ifindex: 0, kind: "sk_skb", id: 62 },
-        { devname: "sockmap0", ifindex: 0, kind: "sk_msg", id: 63 },
-      ],
-    }];
+    const net: RawNetSnapshot[] = [
+      {
+        xdp: [{ devname: "eth0", ifindex: 2, id: 60 }],
+        tc: [{ devname: "eth0", ifindex: 2, id: 61 }],
+        sockmap: [
+          { devname: "sockmap0", ifindex: 0, kind: "sk_skb", id: 62 },
+          { devname: "sockmap0", ifindex: 0, kind: "sk_msg", id: 63 },
+        ],
+      },
+    ];
     enrichWithNetAttachments(progs, net);
     const interfaces = buildNetworkInterfaces(progs, net);
     // eth0 has kind=nic, L2 (XDP) and L3 (TC)
@@ -425,15 +674,27 @@ describe("buildNetworkInterfaces", () => {
 
 describe("buildProgramChains", () => {
   it("adds TC packet context and return semantics to chain metadata", () => {
-    const tcA: RawBpfProg = { ...xdpProg, id: 80, type: "sched_cls", name: "tc_a" };
-    const tcB: RawBpfProg = { ...xdpProg, id: 81, type: "sched_cls", name: "tc_b" };
+    const tcA: RawBpfProg = {
+      ...xdpProg,
+      id: 80,
+      type: "sched_cls",
+      name: "tc_a",
+    };
+    const tcB: RawBpfProg = {
+      ...xdpProg,
+      id: 81,
+      type: "sched_cls",
+      name: "tc_b",
+    };
     const progs = parseProgList([tcA, tcB]);
-    const net: RawNetSnapshot[] = [{
-      tc: [
-        { devname: "eth0", ifindex: 2, id: 80, kind: "clsact/ingress" },
-        { devname: "eth0", ifindex: 2, id: 81, kind: "clsact/ingress" },
-      ],
-    }];
+    const net: RawNetSnapshot[] = [
+      {
+        tc: [
+          { devname: "eth0", ifindex: 2, id: 80, kind: "clsact/ingress" },
+          { devname: "eth0", ifindex: 2, id: 81, kind: "clsact/ingress" },
+        ],
+      },
+    ];
 
     const chains = buildProgramChains(progs, net, []);
     expect(chains).toHaveLength(1);
@@ -449,16 +710,26 @@ describe("buildProgramChains", () => {
   });
 
   it("adds cgroup_skb packet context to ingress and egress chains", () => {
-    const ingressA: RawBpfProg = { ...cgroupSkbProg, id: 82, name: "ingress_a" };
-    const ingressB: RawBpfProg = { ...cgroupSkbProg, id: 83, name: "ingress_b" };
+    const ingressA: RawBpfProg = {
+      ...cgroupSkbProg,
+      id: 82,
+      name: "ingress_a",
+    };
+    const ingressB: RawBpfProg = {
+      ...cgroupSkbProg,
+      id: 83,
+      name: "ingress_b",
+    };
     const progs = parseProgList([ingressA, ingressB]);
-    const cgroups: RawCgroupEntry[] = [{
-      cgroup: "/sys/fs/cgroup/test.slice",
-      programs: [
-        { id: 82, attach_type: "cgroup_inet_ingress", attach_flags: "multi" },
-        { id: 83, attach_type: "cgroup_inet_ingress", attach_flags: "multi" },
-      ],
-    }];
+    const cgroups: RawCgroupEntry[] = [
+      {
+        cgroup: "/sys/fs/cgroup/test.slice",
+        programs: [
+          { id: 82, attach_type: "cgroup_inet_ingress", attach_flags: "multi" },
+          { id: 83, attach_type: "cgroup_inet_ingress", attach_flags: "multi" },
+        ],
+      },
+    ];
 
     const chains = buildProgramChains(progs, [], cgroups);
     expect(chains).toHaveLength(1);
@@ -468,6 +739,47 @@ describe("buildProgramChains", () => {
       semantics: {
         pass: ["1 (allow/pass)"],
         drop: ["0 (drop/deny)"],
+      },
+    });
+  });
+
+  it("adds cgroup socket-address context to connect chains", () => {
+    const connectA: RawBpfProg = {
+      ...cgroupSockAddrProg,
+      id: 84,
+      name: "connect_a",
+    };
+    const connectB: RawBpfProg = {
+      ...cgroupSockAddrProg,
+      id: 85,
+      name: "connect_b",
+    };
+    const progs = parseProgList([connectA, connectB]);
+    const cgroups: RawCgroupEntry[] = [
+      {
+        cgroup: "/sys/fs/cgroup/test.slice",
+        programs: [
+          {
+            id: 84,
+            attach_type: "cgroup_inet6_connect",
+            attach_flags: "multi",
+          },
+          {
+            id: 85,
+            attach_type: "cgroup_inet6_connect",
+            attach_flags: "multi",
+          },
+        ],
+      },
+    ];
+
+    const chains = buildProgramChains(progs, [], cgroups);
+    expect(chains).toHaveLength(1);
+    expect(chains[0].packetContext).toMatchObject({
+      family: "cgroup_sock_addr",
+      semantics: {
+        pass: ["1 (allow)"],
+        drop: ["0 (deny)"],
       },
     });
   });
@@ -489,10 +801,19 @@ describe("buildCgroupTree", () => {
   // ── base cases ─────────────────────────────────────────────────────────────
   it("builds a flat tree from cgroup entries", () => {
     const progs = parseProgList([cgroupSkbProg]);
-    const cgroups: RawCgroupEntry[] = [{
-      cgroup: "/sys/fs/cgroup/system.slice/test.service",
-      programs: [{ id: 2, attach_type: "cgroup_inet_ingress", attach_flags: "multi", name: "" }],
-    }];
+    const cgroups: RawCgroupEntry[] = [
+      {
+        cgroup: "/sys/fs/cgroup/system.slice/test.service",
+        programs: [
+          {
+            id: 2,
+            attach_type: "cgroup_inet_ingress",
+            attach_flags: "multi",
+            name: "",
+          },
+        ],
+      },
+    ];
     enrichWithCgroupAttachments(progs, cgroups);
     const tree = buildCgroupTree(progs, cgroups);
     expect(tree.length).toBeGreaterThanOrEqual(1);
@@ -510,29 +831,69 @@ describe("buildCgroupTree", () => {
 
   // ── 4-level hierarchy ──────────────────────────────────────────────────────
   const cgroupIngress: RawBpfProg = {
-    id: 10, type: "cgroup_skb", name: "cg_ingress", tag: "aabb000000000001",
-    gpl_compatible: true, loaded_at: 0, uid: 0, orphaned: false,
-    bytes_xlated: 64, jited: false, bytes_memlock: 4096,
+    id: 10,
+    type: "cgroup_skb",
+    name: "cg_ingress",
+    tag: "aabb000000000001",
+    gpl_compatible: true,
+    loaded_at: 0,
+    uid: 0,
+    orphaned: false,
+    bytes_xlated: 64,
+    jited: false,
+    bytes_memlock: 4096,
   };
   const cgroupEgress: RawBpfProg = {
-    id: 11, type: "cgroup_skb", name: "cg_egress", tag: "aabb000000000002",
-    gpl_compatible: true, loaded_at: 0, uid: 0, orphaned: false,
-    bytes_xlated: 64, jited: false, bytes_memlock: 4096,
+    id: 11,
+    type: "cgroup_skb",
+    name: "cg_egress",
+    tag: "aabb000000000002",
+    gpl_compatible: true,
+    loaded_at: 0,
+    uid: 0,
+    orphaned: false,
+    bytes_xlated: 64,
+    jited: false,
+    bytes_memlock: 4096,
   };
   const cgroupDevice: RawBpfProg = {
-    id: 12, type: "cgroup_device", name: "cg_device", tag: "aabb000000000003",
-    gpl_compatible: true, loaded_at: 0, uid: 0, orphaned: false,
-    bytes_xlated: 128, jited: false, bytes_memlock: 4096,
+    id: 12,
+    type: "cgroup_device",
+    name: "cg_device",
+    tag: "aabb000000000003",
+    gpl_compatible: true,
+    loaded_at: 0,
+    uid: 0,
+    orphaned: false,
+    bytes_xlated: 128,
+    jited: false,
+    bytes_memlock: 4096,
   };
   const cgroupSockCreate: RawBpfProg = {
-    id: 13, type: "cgroup_sock", name: "cg_sock_create", tag: "aabb000000000004",
-    gpl_compatible: true, loaded_at: 0, uid: 0, orphaned: false,
-    bytes_xlated: 192, jited: false, bytes_memlock: 4096,
+    id: 13,
+    type: "cgroup_sock",
+    name: "cg_sock_create",
+    tag: "aabb000000000004",
+    gpl_compatible: true,
+    loaded_at: 0,
+    uid: 0,
+    orphaned: false,
+    bytes_xlated: 192,
+    jited: false,
+    bytes_memlock: 4096,
   };
   const cgroupSockops: RawBpfProg = {
-    id: 14, type: "sock_ops", name: "cg_sockops", tag: "aabb000000000005",
-    gpl_compatible: true, loaded_at: 0, uid: 0, orphaned: false,
-    bytes_xlated: 256, jited: true, bytes_memlock: 4096,
+    id: 14,
+    type: "sock_ops",
+    name: "cg_sockops",
+    tag: "aabb000000000005",
+    gpl_compatible: true,
+    loaded_at: 0,
+    uid: 0,
+    orphaned: false,
+    bytes_xlated: 256,
+    jited: true,
+    bytes_memlock: 4096,
   };
 
   const deepCgroups: RawCgroupEntry[] = [
@@ -541,7 +902,7 @@ describe("buildCgroupTree", () => {
       cgroup: "/sys/fs/cgroup",
       programs: [
         { id: 10, attach_type: "cgroup_inet_ingress", attach_flags: "multi" },
-        { id: 11, attach_type: "cgroup_inet_egress",  attach_flags: "multi" },
+        { id: 11, attach_type: "cgroup_inet_egress", attach_flags: "multi" },
       ],
     },
     // Level 1: system.slice — device policy for all services
@@ -558,10 +919,10 @@ describe("buildCgroupTree", () => {
       cgroup: "/sys/fs/cgroup/system.slice/kubelet.service",
       programs: [
         { id: 10, attach_type: "cgroup_inet_ingress", attach_flags: "multi" },
-        { id: 11, attach_type: "cgroup_inet_egress",  attach_flags: "multi" },
-        { id: 12, attach_type: "cgroup_device",       attach_flags: "multi" },
-        { id: 13, attach_type: "cgroup_sock_create",  attach_flags: "" },
-        { id: 14, attach_type: "cgroup_sockops",      attach_flags: "multi" },
+        { id: 11, attach_type: "cgroup_inet_egress", attach_flags: "multi" },
+        { id: 12, attach_type: "cgroup_device", attach_flags: "multi" },
+        { id: 13, attach_type: "cgroup_sock_create", attach_flags: "" },
+        { id: 14, attach_type: "cgroup_sockops", attach_flags: "multi" },
       ],
     },
     // Level 2: ssh.service — network + socket policy
@@ -569,18 +930,19 @@ describe("buildCgroupTree", () => {
       cgroup: "/sys/fs/cgroup/system.slice/ssh.service",
       programs: [
         { id: 10, attach_type: "cgroup_inet_ingress", attach_flags: "multi" },
-        { id: 11, attach_type: "cgroup_inet_egress",  attach_flags: "multi" },
-        { id: 13, attach_type: "cgroup_sock_create",  attach_flags: "" },
+        { id: 11, attach_type: "cgroup_inet_egress", attach_flags: "multi" },
+        { id: 13, attach_type: "cgroup_sock_create", attach_flags: "" },
       ],
     },
     // Level 2: user-1000.slice
     { cgroup: "/sys/fs/cgroup/user.slice/user-1000.slice", programs: [] },
     // Level 3: burstable pod QoS class
     {
-      cgroup: "/sys/fs/cgroup/system.slice/kubelet.service/kubepods-burstable.slice",
+      cgroup:
+        "/sys/fs/cgroup/system.slice/kubelet.service/kubepods-burstable.slice",
       programs: [
         { id: 10, attach_type: "cgroup_inet_ingress", attach_flags: "multi" },
-        { id: 11, attach_type: "cgroup_inet_egress",  attach_flags: "multi" },
+        { id: 11, attach_type: "cgroup_inet_egress", attach_flags: "multi" },
       ],
     },
     // Level 3: user session
@@ -588,24 +950,31 @@ describe("buildCgroupTree", () => {
       cgroup: "/sys/fs/cgroup/user.slice/user-1000.slice/session-1.scope",
       programs: [
         { id: 10, attach_type: "cgroup_inet_ingress", attach_flags: "multi" },
-        { id: 11, attach_type: "cgroup_inet_egress",  attach_flags: "multi" },
+        { id: 11, attach_type: "cgroup_inet_egress", attach_flags: "multi" },
       ],
     },
     // Level 4: individual pod
     {
-      cgroup: "/sys/fs/cgroup/system.slice/kubelet.service/kubepods-burstable.slice/pod-nginx.scope",
+      cgroup:
+        "/sys/fs/cgroup/system.slice/kubelet.service/kubepods-burstable.slice/pod-nginx.scope",
       programs: [
         { id: 10, attach_type: "cgroup_inet_ingress", attach_flags: "multi" },
-        { id: 11, attach_type: "cgroup_inet_egress",  attach_flags: "multi" },
-        { id: 12, attach_type: "cgroup_device",       attach_flags: "multi" },
-        { id: 13, attach_type: "cgroup_sock_create",  attach_flags: "" },
-        { id: 14, attach_type: "cgroup_sockops",      attach_flags: "multi" },
+        { id: 11, attach_type: "cgroup_inet_egress", attach_flags: "multi" },
+        { id: 12, attach_type: "cgroup_device", attach_flags: "multi" },
+        { id: 13, attach_type: "cgroup_sock_create", attach_flags: "" },
+        { id: 14, attach_type: "cgroup_sockops", attach_flags: "multi" },
       ],
     },
   ];
 
   it("builds a 4-level hierarchy with correct parent-child wiring", () => {
-    const progs = parseProgList([cgroupIngress, cgroupEgress, cgroupDevice, cgroupSockCreate, cgroupSockops]);
+    const progs = parseProgList([
+      cgroupIngress,
+      cgroupEgress,
+      cgroupDevice,
+      cgroupSockCreate,
+      cgroupSockops,
+    ]);
     enrichWithCgroupAttachments(progs, deepCgroups);
     const tree = buildCgroupTree(progs, deepCgroups);
 
@@ -622,18 +991,27 @@ describe("buildCgroupTree", () => {
     expect(systemSlice!.programs).toHaveLength(1); // device only
 
     // kubelet.service is a child of system.slice
-    const kubelet = findNode(tree, "/sys/fs/cgroup/system.slice/kubelet.service");
+    const kubelet = findNode(
+      tree,
+      "/sys/fs/cgroup/system.slice/kubelet.service"
+    );
     expect(kubelet).toBeDefined();
     expect(kubelet!.depth).toBe(2);
     expect(kubelet!.programs).toHaveLength(5);
 
     // burstable.slice is a child of kubelet.service
-    const burstable = findNode(tree, "/sys/fs/cgroup/system.slice/kubelet.service/kubepods-burstable.slice");
+    const burstable = findNode(
+      tree,
+      "/sys/fs/cgroup/system.slice/kubelet.service/kubepods-burstable.slice"
+    );
     expect(burstable).toBeDefined();
     expect(burstable!.depth).toBe(3);
 
     // pod-nginx.scope is a child of burstable.slice (depth 4)
-    const pod = findNode(tree, "/sys/fs/cgroup/system.slice/kubelet.service/kubepods-burstable.slice/pod-nginx.scope");
+    const pod = findNode(
+      tree,
+      "/sys/fs/cgroup/system.slice/kubelet.service/kubepods-burstable.slice/pod-nginx.scope"
+    );
     expect(pod).toBeDefined();
     expect(pod!.depth).toBe(4);
     expect(pod!.programs).toHaveLength(5);
@@ -649,13 +1027,22 @@ describe("buildCgroupTree", () => {
     expect(userSlice).toBeDefined();
     expect(userSlice!.programs).toHaveLength(0);
 
-    const user1000 = findNode(tree, "/sys/fs/cgroup/user.slice/user-1000.slice");
+    const user1000 = findNode(
+      tree,
+      "/sys/fs/cgroup/user.slice/user-1000.slice"
+    );
     expect(user1000).toBeDefined();
     expect(user1000!.programs).toHaveLength(0);
   });
 
   it("children are sorted alphabetically at every level", () => {
-    const progs = parseProgList([cgroupIngress, cgroupEgress, cgroupDevice, cgroupSockCreate, cgroupSockops]);
+    const progs = parseProgList([
+      cgroupIngress,
+      cgroupEgress,
+      cgroupDevice,
+      cgroupSockCreate,
+      cgroupSockops,
+    ]);
     enrichWithCgroupAttachments(progs, deepCgroups);
     const tree = buildCgroupTree(progs, deepCgroups);
 
@@ -670,7 +1057,10 @@ describe("buildCgroupTree", () => {
     enrichWithCgroupAttachments(progs, deepCgroups);
     const tree = buildCgroupTree(progs, deepCgroups);
 
-    const session = findNode(tree, "/sys/fs/cgroup/user.slice/user-1000.slice/session-1.scope");
+    const session = findNode(
+      tree,
+      "/sys/fs/cgroup/user.slice/user-1000.slice/session-1.scope"
+    );
     expect(session).toBeDefined();
     expect(session!.depth).toBe(3);
     expect(session!.name).toBe("session-1.scope");
@@ -678,7 +1068,13 @@ describe("buildCgroupTree", () => {
   });
 
   it("total node count matches number of unique paths in deepCgroups", () => {
-    const progs = parseProgList([cgroupIngress, cgroupEgress, cgroupDevice, cgroupSockCreate, cgroupSockops]);
+    const progs = parseProgList([
+      cgroupIngress,
+      cgroupEgress,
+      cgroupDevice,
+      cgroupSockCreate,
+      cgroupSockops,
+    ]);
     enrichWithCgroupAttachments(progs, deepCgroups);
     const tree = buildCgroupTree(progs, deepCgroups);
 
@@ -744,12 +1140,38 @@ describe("buildSnapshot", () => {
   it("builds a complete snapshot from raw data", () => {
     const snapshot = buildSnapshot(
       [xdpProg, cgroupSkbProg, kprobeProg],
-      [{ xdp: [{ devname: "eth0", ifindex: 2, mode: "driver", id: 1, name: "my_xdp_prog" }] }],
-      [{
-        cgroup: "/sys/fs/cgroup/system.slice/test.service",
-        programs: [{ id: 2, attach_type: "cgroup_inet_ingress", attach_flags: "multi", name: "" }],
-      }],
-      { hostname: "test-host", kernelVersion: "6.1.0", bpftoolVersion: "7.3.0", demoMode: false }
+      [
+        {
+          xdp: [
+            {
+              devname: "eth0",
+              ifindex: 2,
+              mode: "driver",
+              id: 1,
+              name: "my_xdp_prog",
+            },
+          ],
+        },
+      ],
+      [
+        {
+          cgroup: "/sys/fs/cgroup/system.slice/test.service",
+          programs: [
+            {
+              id: 2,
+              attach_type: "cgroup_inet_ingress",
+              attach_flags: "multi",
+              name: "",
+            },
+          ],
+        },
+      ],
+      {
+        hostname: "test-host",
+        kernelVersion: "6.1.0",
+        bpftoolVersion: "7.3.0",
+        demoMode: false,
+      }
     );
 
     expect(snapshot.hostname).toBe("test-host");
@@ -765,12 +1187,12 @@ describe("buildSnapshot", () => {
   });
 
   it("counts orphaned programs correctly", () => {
-    const snapshot = buildSnapshot(
-      [orphanedProg],
-      [{}],
-      [],
-      { hostname: "h", kernelVersion: "6.0", bpftoolVersion: "7.0", demoMode: false }
-    );
+    const snapshot = buildSnapshot([orphanedProg], [{}], [], {
+      hostname: "h",
+      kernelVersion: "6.0",
+      bpftoolVersion: "7.0",
+      demoMode: false,
+    });
     expect(snapshot.stats.orphaned).toBe(1);
   });
 
@@ -779,7 +1201,12 @@ describe("buildSnapshot", () => {
       [xdpProg, cgroupSkbProg, cgroupSkbProg],
       [{}],
       [],
-      { hostname: "h", kernelVersion: "6.0", bpftoolVersion: "7.0", demoMode: false }
+      {
+        hostname: "h",
+        kernelVersion: "6.0",
+        bpftoolVersion: "7.0",
+        demoMode: false,
+      }
     );
     // Note: duplicate IDs will be deduplicated by the Map
     expect(snapshot.stats.byType["xdp"]).toBe(1);
@@ -789,7 +1216,10 @@ describe("buildSnapshot", () => {
   it("sets timestamp as a recent unix timestamp (ms)", () => {
     const before = Date.now();
     const snapshot = buildSnapshot([], [{}], [], {
-      hostname: "h", kernelVersion: "6.0", bpftoolVersion: "7.0", demoMode: false
+      hostname: "h",
+      kernelVersion: "6.0",
+      bpftoolVersion: "7.0",
+      demoMode: false,
     });
     const after = Date.now();
     // timestamp is in milliseconds

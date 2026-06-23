@@ -31,6 +31,7 @@ const TYPE_MAP: Record<string, BpfProgType> = {
   perf_event: "perf_event",
   cgroup_skb: "cgroup_skb",
   cgroup_sock: "cgroup_sock",
+  cgroup_sock_addr: "cgroup_sock_addr",
   cgroup_device: "cgroup_device",
   cgroup_sysctl: "cgroup_sysctl",
   cgroup_sockopt: "cgroup_sockopt",
@@ -74,6 +75,7 @@ function getOsiLayer(type: BpfProgType): OsiLayer {
     case "sk_skb":
     case "sk_lookup":
     case "cgroup_skb":
+    case "cgroup_sock_addr":
       return "L4";
     case "sock_ops":
     case "sk_msg":
@@ -110,6 +112,7 @@ function getKernelZone(type: BpfProgType): KernelZone {
       return "perf_event";
     case "cgroup_skb":
     case "cgroup_sock":
+    case "cgroup_sock_addr":
     case "cgroup_device":
     case "cgroup_sysctl":
     case "cgroup_sockopt":
@@ -136,7 +139,7 @@ export function parseProgList(raw: RawBpfProg[]): Map<number, BpfProgram> {
       id: r.id,
       type,
       rawType: r.type,
-      name: (r.name && r.name.trim()) ? r.name.trim() : `${r.type}_${r.id}`,
+      name: r.name && r.name.trim() ? r.name.trim() : `${r.type}_${r.id}`,
       tag: r.tag || "0000000000000000",
       gplCompatible: r.gpl_compatible ?? false,
       loadedAt: r.loaded_at ?? 0,
@@ -180,13 +183,17 @@ export function enrichWithNetAttachments(
     const p = progs.get(entry.id);
     if (!p) continue;
     const kindStr = entry.kind ?? "";
-    const direction: "ingress" | "egress" | undefined =
-      kindStr.includes("ingress") ? "ingress" :
-      kindStr.includes("egress")  ? "egress"  :
-      undefined;
+    const direction: "ingress" | "egress" | undefined = kindStr.includes(
+      "ingress"
+    )
+      ? "ingress"
+      : kindStr.includes("egress")
+        ? "egress"
+        : undefined;
     p.attachments.push({
       kind: "tc",
-      detail: `${entry.devname} ${kindStr || "tc"} ${entry.name ? `[${entry.name}]` : ""}`.trim(),
+      detail:
+        `${entry.devname} ${kindStr || "tc"} ${entry.name ? `[${entry.name}]` : ""}`.trim(),
       ifname: entry.devname,
       direction,
     });
@@ -196,10 +203,13 @@ export function enrichWithNetAttachments(
     const p = progs.get(entry.id);
     if (!p) continue;
     const kindStr = entry.kind ?? "";
-    const direction: "ingress" | "egress" | undefined =
-      kindStr.includes("ingress") ? "ingress" :
-      kindStr.includes("egress")  ? "egress"  :
-      undefined;
+    const direction: "ingress" | "egress" | undefined = kindStr.includes(
+      "ingress"
+    )
+      ? "ingress"
+      : kindStr.includes("egress")
+        ? "egress"
+        : undefined;
     p.attachments.push({
       kind: "tcx",
       detail: `${entry.devname} tcx${kindStr ? ` ${kindStr}` : ""}`,
@@ -257,7 +267,11 @@ export function buildNetworkInterfaces(
   const snapshot = net[0] ?? {};
   const ifaceMap = new Map<string, NetworkInterface>();
 
-  const getOrCreate = (name: string, ifindex: number, kind: "nic" | "sockmap" = "nic"): NetworkInterface => {
+  const getOrCreate = (
+    name: string,
+    ifindex: number,
+    kind: "nic" | "sockmap" = "nic"
+  ): NetworkInterface => {
     if (!ifaceMap.has(name)) {
       ifaceMap.set(name, {
         name,
@@ -286,7 +300,10 @@ export function buildNetworkInterfaces(
     iface.allPrograms.push(p);
   }
 
-  for (const entry of [...(snapshot.netfilter ?? []), ...(snapshot.flow_dissector ?? [])]) {
+  for (const entry of [
+    ...(snapshot.netfilter ?? []),
+    ...(snapshot.flow_dissector ?? []),
+  ]) {
     const p = progs.get(entry.id);
     if (!p) continue;
     const iface = getOrCreate(entry.devname, entry.ifindex, "nic");
@@ -309,7 +326,7 @@ export function buildNetworkInterfaces(
     const p = progs.get(entry.id);
     if (!p) continue;
     const iface = getOrCreate(entry.devname, entry.ifindex, "sockmap");
-    const layer = (p.type === "sk_msg" || p.type === "sock_ops") ? "L7" : "L4";
+    const layer = p.type === "sk_msg" || p.type === "sock_ops" ? "L7" : "L4";
     iface.layers[layer].push(p);
     iface.allPrograms.push(p);
   }
@@ -328,7 +345,10 @@ export function buildCgroupTree(
 
   for (const cg of cgroups) {
     const path = cg.cgroup;
-    const parts = path.replace(/^\/sys\/fs\/cgroup/, "").split("/").filter(Boolean);
+    const parts = path
+      .replace(/^\/sys\/fs\/cgroup/, "")
+      .split("/")
+      .filter(Boolean);
     const name = parts[parts.length - 1] || "/";
     const depth = parts.length;
 
@@ -372,7 +392,9 @@ export function buildCgroupTree(
 
   // Sort children alphabetically
   const sortChildren = (node: CgroupNode) => {
-    node.children.sort((a: CgroupNode, b: CgroupNode) => a.name.localeCompare(b.name));
+    node.children.sort((a: CgroupNode, b: CgroupNode) =>
+      a.name.localeCompare(b.name)
+    );
     node.children.forEach(sortChildren);
   };
   roots.forEach(sortChildren);
@@ -384,21 +406,59 @@ export function buildCgroupTree(
 // ─── Build kernel zones ────────────────────────────────────────────────────
 
 const ZONE_META: Record<KernelZone, { label: string; description: string }> = {
-  xdp:            { label: "XDP",            description: "eXpress Data Path — earliest NIC driver hook" },
-  tc_ingress:     { label: "TC Ingress",      description: "Traffic Control ingress classifier/action" },
-  tc_egress:      { label: "TC Egress",       description: "Traffic Control egress classifier/action" },
-  socket_filter:  { label: "Socket Filter",   description: "sk_filter / sk_skb / sk_msg / sk_lookup" },
-  kprobe:         { label: "kprobe/fentry",   description: "Kernel function entry/exit probes" },
-  tracepoint:     { label: "Tracepoint",      description: "Static kernel tracepoints & raw tracepoints" },
-  perf_event:     { label: "Perf Event",      description: "Hardware/software performance counters" },
-  cgroup:         { label: "Cgroup Hooks",    description: "cgroup_skb, cgroup_sock, sock_ops, device" },
-  flow_dissector: { label: "Flow Dissector",  description: "Custom packet flow dissection" },
-  netfilter:      { label: "Netfilter",       description: "Netfilter / nftables BPF hooks" },
-  sk_ops:         { label: "Socket Ops",      description: "TCP socket operations callbacks" },
-  other:          { label: "Other",           description: "LSM, struct_ops, and other program types" },
+  xdp: {
+    label: "XDP",
+    description: "eXpress Data Path — earliest NIC driver hook",
+  },
+  tc_ingress: {
+    label: "TC Ingress",
+    description: "Traffic Control ingress classifier/action",
+  },
+  tc_egress: {
+    label: "TC Egress",
+    description: "Traffic Control egress classifier/action",
+  },
+  socket_filter: {
+    label: "Socket Filter",
+    description: "sk_filter / sk_skb / sk_msg / sk_lookup",
+  },
+  kprobe: {
+    label: "kprobe/fentry",
+    description: "Kernel function entry/exit probes",
+  },
+  tracepoint: {
+    label: "Tracepoint",
+    description: "Static kernel tracepoints & raw tracepoints",
+  },
+  perf_event: {
+    label: "Perf Event",
+    description: "Hardware/software performance counters",
+  },
+  cgroup: {
+    label: "Cgroup Hooks",
+    description: "cgroup_skb, cgroup_sock, sock_ops, device",
+  },
+  flow_dissector: {
+    label: "Flow Dissector",
+    description: "Custom packet flow dissection",
+  },
+  netfilter: {
+    label: "Netfilter",
+    description: "Netfilter / nftables BPF hooks",
+  },
+  sk_ops: {
+    label: "Socket Ops",
+    description: "TCP socket operations callbacks",
+  },
+  other: {
+    label: "Other",
+    description: "LSM, struct_ops, and other program types",
+  },
 };
 
-export function buildKernelZones(progs: Map<number, BpfProgram>): KernelAttachmentZone[] {
+export function buildKernelZones(
+  progs: Map<number, BpfProgram>
+): KernelAttachmentZone[] {
   const zoneMap = new Map<KernelZone, BpfProgram[]>();
 
   for (const p of Array.from(progs.values())) {
@@ -417,10 +477,17 @@ export function buildKernelZones(progs: Map<number, BpfProgram>): KernelAttachme
   }
 
   const orderedZones: KernelZone[] = [
-    "xdp", "tc_ingress", "tc_egress", "netfilter",
-    "socket_filter", "flow_dissector",
-    "cgroup", "sk_ops",
-    "kprobe", "tracepoint", "perf_event",
+    "xdp",
+    "tc_ingress",
+    "tc_egress",
+    "netfilter",
+    "socket_filter",
+    "flow_dissector",
+    "cgroup",
+    "sk_ops",
+    "kprobe",
+    "tracepoint",
+    "perf_event",
     "other",
   ];
 
@@ -431,7 +498,14 @@ export function buildKernelZones(progs: Map<number, BpfProgram>): KernelAttachme
       label: ZONE_META[z].label,
       description: ZONE_META[z].description,
       programs: zoneMap.get(z) ?? [],
-      osiLayer: z === "xdp" ? "L2" : z === "tc_ingress" || z === "tc_egress" || z === "netfilter" ? "L3" : z === "socket_filter" ? "L4" : "kernel",
+      osiLayer:
+        z === "xdp"
+          ? "L2"
+          : z === "tc_ingress" || z === "tc_egress" || z === "netfilter"
+            ? "L3"
+            : z === "socket_filter"
+              ? "L4"
+              : "kernel",
     }));
 }
 
@@ -440,24 +514,34 @@ export function buildKernelZones(progs: Map<number, BpfProgram>): KernelAttachme
 /** Cgroup attach types where an early program can return 0 (deny) and
  *  short-circuit subsequent programs. Networking and socket hooks. */
 const CGROUP_SHORT_CIRCUIT_TYPES = new Set([
-  "cgroup_inet_ingress", "cgroup_inet_egress",
-  "cgroup_inet4_bind", "cgroup_inet6_bind",
-  "cgroup_inet4_connect", "cgroup_inet6_connect",
-  "cgroup_inet4_post_bind", "cgroup_inet6_post_bind",
-  "cgroup_inet4_getpeername", "cgroup_inet6_getpeername",
-  "cgroup_inet4_getsockname", "cgroup_inet6_getsockname",
-  "cgroup_udp4_sendmsg", "cgroup_udp6_sendmsg",
-  "cgroup_udp4_recvmsg", "cgroup_udp6_recvmsg",
+  "cgroup_inet_ingress",
+  "cgroup_inet_egress",
+  "cgroup_inet4_bind",
+  "cgroup_inet6_bind",
+  "cgroup_inet4_connect",
+  "cgroup_inet6_connect",
+  "cgroup_inet4_post_bind",
+  "cgroup_inet6_post_bind",
+  "cgroup_inet4_getpeername",
+  "cgroup_inet6_getpeername",
+  "cgroup_inet4_getsockname",
+  "cgroup_inet6_getsockname",
+  "cgroup_udp4_sendmsg",
+  "cgroup_udp6_sendmsg",
+  "cgroup_udp4_recvmsg",
+  "cgroup_udp6_recvmsg",
   "cgroup_sock_ops",
   "cgroup_device",
-  "cgroup_getsockopt", "cgroup_setsockopt",
+  "cgroup_getsockopt",
+  "cgroup_setsockopt",
 ]);
 
 function buildTcPacketContext(direction: PacketDirection): PacketChainContext {
   return {
     family: "tc",
     direction,
-    summary: "TC classifier/action return values decide whether the packet continues, is dropped, or is redirected.",
+    summary:
+      "TC classifier/action return values decide whether the packet continues, is dropped, or is redirected.",
     semantics: {
       pass: ["TC_ACT_OK (0)", "TC_ACT_UNSPEC (-1)"],
       passValues: [0, -1],
@@ -478,11 +562,15 @@ function buildTcPacketContext(direction: PacketDirection): PacketChainContext {
 }
 
 function buildCgroupPacketContext(attachType: string): PacketChainContext {
-  if (attachType === "cgroup_inet_ingress" || attachType === "cgroup_inet_egress") {
+  if (
+    attachType === "cgroup_inet_ingress" ||
+    attachType === "cgroup_inet_egress"
+  ) {
     return {
       family: "cgroup_skb",
       direction: attachType.endsWith("_ingress") ? "ingress" : "egress",
-      summary: "cgroup_skb hooks use integer allow/drop verdicts for packet ingress or egress.",
+      summary:
+        "cgroup_skb hooks use integer allow/drop verdicts for packet ingress or egress.",
       semantics: {
         pass: ["1 (allow/pass)"],
         passValues: [1],
@@ -505,7 +593,8 @@ function buildCgroupPacketContext(attachType: string): PacketChainContext {
     return {
       family: "cgroup_sock_addr",
       direction: "unknown",
-      summary: "cgroup socket-address hooks can allow or deny socket operations before packets are sent.",
+      summary:
+        "cgroup socket-address hooks can allow or deny socket operations before packets are sent.",
       semantics: {
         pass: ["1 (allow)"],
         passValues: [1],
@@ -533,14 +622,17 @@ function buildCgroupPacketContext(attachType: string): PacketChainContext {
 export function buildProgramChains(
   progs: Map<number, BpfProgram>,
   rawNet: RawNetSnapshot[],
-  rawCgroups: RawCgroupEntry[],
+  rawCgroups: RawCgroupEntry[]
 ): ProgramChain[] {
   const chains: ProgramChain[] = [];
 
   // ── Cgroup chains ──────────────────────────────────────────────────────
   for (const cg of rawCgroups) {
     // Group programs by attach_type, preserving order
-    const byType = new Map<string, Array<{ id: number; name: string; attachFlags?: string }>>();
+    const byType = new Map<
+      string,
+      Array<{ id: number; name: string; attachFlags?: string }>
+    >();
     for (const cp of cg.programs ?? []) {
       if (!progs.has(cp.id)) continue;
       if (!byType.has(cp.attach_type)) byType.set(cp.attach_type, []);
@@ -560,12 +652,17 @@ export function buildProgramChains(
         hookType: "cgroup",
         attachPoint: cg.cgroup,
         attachType,
-        programs: progList.map((p: { id: number; name: string; attachFlags?: string }, i: number) => ({
-          id: p.id,
-          position: i + 1,
-          name: p.name,
-          attachFlags: p.attachFlags,
-        })),
+        programs: progList.map(
+          (
+            p: { id: number; name: string; attachFlags?: string },
+            i: number
+          ) => ({
+            id: p.id,
+            position: i + 1,
+            name: p.name,
+            attachFlags: p.attachFlags,
+          })
+        ),
         canShortCircuit: CGROUP_SHORT_CIRCUIT_TYPES.has(attachType),
         packetContext: buildCgroupPacketContext(attachType),
       });
@@ -593,10 +690,11 @@ export function buildProgramChains(
   for (const [key, progList] of Array.from(tcByHook.entries())) {
     if (progList.length < 2) continue;
     const [devname, kind] = key.split(":");
-    const direction: PacketDirection =
-      kind.includes("ingress") ? "ingress" :
-      kind.includes("egress") ? "egress" :
-      "unknown";
+    const direction: PacketDirection = kind.includes("ingress")
+      ? "ingress"
+      : kind.includes("egress")
+        ? "egress"
+        : "unknown";
     chains.push({
       hookId: `tc:${key}`,
       hookLabel: `${devname} ${direction === "unknown" ? kind : direction}`,
@@ -622,7 +720,12 @@ export function buildSnapshot(
   rawProgs: RawBpfProg[],
   rawNet: RawNetSnapshot[],
   rawCgroups: RawCgroupEntry[],
-  meta: { hostname: string; kernelVersion: string; bpftoolVersion: string; demoMode: boolean }
+  meta: {
+    hostname: string;
+    kernelVersion: string;
+    bpftoolVersion: string;
+    demoMode: boolean;
+  }
 ): EbpfSnapshot {
   const progMap = parseProgList(rawProgs);
   enrichWithNetAttachments(progMap, rawNet);
