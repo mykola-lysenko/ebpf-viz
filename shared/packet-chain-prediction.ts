@@ -26,6 +26,7 @@ interface PredictionContext {
 }
 
 const DEFAULT_MAX_TAIL_CALL_DEPTH = 8;
+const REDIRECT_RETURN_HELPERS = new Set(["redirect", "redirect_map"]);
 
 const VERDICT_ORDER: PacketVerdict[] = [
   "drop",
@@ -56,6 +57,32 @@ export function classifyPacketReturnConstant(
   if (valuesSet(semantics.passValues).has(value)) return "pass";
   if (valuesSet(semantics.otherValues).has(value)) return "other";
   return "unknown";
+}
+
+function callHelperName(disasm?: string): string | undefined {
+  const body = disasm?.trim().replace(/^\([0-9a-fA-F]+\)\s+/, "");
+  const match = body?.match(/^call\s+(\S+)/);
+  if (!match) return undefined;
+
+  const helper = match[1].split("#")[0].replace(/^bpf_/, "").toLowerCase();
+  return helper || undefined;
+}
+
+function helperReturnVerdict(
+  exit: XlatedReturnExit,
+  semantics: PacketActionSemantics
+): PacketVerdict | null {
+  const helper = callHelperName(exit.assignmentDisasm ?? exit.exitDisasm);
+  if (
+    helper &&
+    REDIRECT_RETURN_HELPERS.has(helper) &&
+    ((semantics.redirectValues?.length ?? 0) > 0 ||
+      semantics.redirect.length > 0)
+  ) {
+    return "redirect";
+  }
+
+  return null;
 }
 
 function verdictTone(
@@ -229,6 +256,31 @@ function unknownExitExplanation(
   };
 }
 
+function helperReturnExplanation(
+  exit: XlatedReturnExit,
+  semantics: PacketActionSemantics
+): PacketVerdictExplanation | null {
+  const verdict = helperReturnVerdict(exit, semantics);
+  if (!verdict) return null;
+
+  const source = sourceText(exit);
+  const location = source ? ` from ${source}` : "";
+  const helper = callHelperName(exit.assignmentDisasm ?? exit.exitDisasm);
+
+  return {
+    verdict,
+    summary: finishSentence(
+      `Can ${verdict} via ${helper ? `bpf_${helper}` : "helper"} return at exit ${exit.exitIndex}; exact numeric return is runtime-dependent${location}`
+    ),
+    exitIndex: exit.exitIndex,
+    source: exit.source,
+    sourceFile: exit.sourceFile,
+    sourceLine: exit.sourceLine,
+    sourceColumn: exit.sourceColumn,
+    branchEvidence: exit.branchEvidence,
+  };
+}
+
 function tailCallsForAnalysis(
   analysis: XlatedReturnAnalysis
 ): XlatedTailCall[] {
@@ -325,7 +377,12 @@ function buildVerdictExplanations(
         explanation !== null
     );
 
-  explanations.push(...analysis.unknownExits.map(unknownExitExplanation));
+  explanations.push(
+    ...analysis.unknownExits.map(
+      exit =>
+        helperReturnExplanation(exit, semantics) ?? unknownExitExplanation(exit)
+    )
+  );
 
   if (analysis.hasTailCalls) {
     const continuationsByTarget = continuationByTargetKey(continuations);
@@ -561,9 +618,14 @@ function analyzeProgramBehavior(
     };
   }
 
-  const verdicts: PacketVerdict[] = analysis.observedConstants.map(observed =>
-    classifyPacketReturnConstant(observed.value, semantics)
-  );
+  const verdicts: PacketVerdict[] = [
+    ...analysis.observedConstants.map(observed =>
+      classifyPacketReturnConstant(observed.value, semantics)
+    ),
+    ...analysis.unknownExits
+      .map(exit => helperReturnVerdict(exit, semantics))
+      .filter((verdict): verdict is PacketVerdict => verdict !== null),
+  ];
   const sideEffectLabels = new Set(analysis.sideEffects.labels);
   let hasUnknownBehavior =
     analysis.exitCount === 0 ||

@@ -87,7 +87,7 @@ function formatReachability(step: PacketProgramPrediction): string {
 
 function formatConfidence(prediction: PacketChainPrediction): string {
   if (prediction.confidence === "high") {
-    return "High: every analyzed exit resolved to modeled return values and no tail calls or unknown exits were found.";
+    return "High: every analyzed exit resolved to modeled return values or known helper outcomes, and no tail calls or unknown exits were found.";
   }
   if (prediction.confidence === "partial") {
     return "Partial: some behavior is modeled, but at least one exit, return path, or tail call remains unknown.";

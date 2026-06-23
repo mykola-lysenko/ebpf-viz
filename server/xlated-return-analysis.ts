@@ -465,7 +465,7 @@ function createRegisterResolver(
                   source.reason === "no-direct-assignment"
                     ? "dynamic-assignment"
                     : source.reason,
-                assignmentInsn: write.insn,
+                assignmentInsn: source.assignmentInsn ?? write.insn,
             };
     } else {
       if (write.kind === "local-call") {
@@ -498,7 +498,7 @@ function createRegisterResolver(
                       callResult.reason === "no-direct-assignment"
                         ? "dynamic-assignment"
                         : callResult.reason,
-                    assignmentInsn: write.insn,
+                    assignmentInsn: callResult.assignmentInsn ?? write.insn,
                   };
       } else {
         result = {

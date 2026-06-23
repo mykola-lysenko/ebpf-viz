@@ -295,6 +295,40 @@ describe("analyzeXlatedReturns", () => {
     });
   });
 
+  it("preserves unknown helper evidence from local BPF subprogram calls", () => {
+    const result = analyzeXlatedReturns([
+      insn(0, "(85) call pc+4#bpf_prog_redirector"),
+      insn(1, "(bc) w1 = w0"),
+      insn(2, "(bc) w0 = w1"),
+      insn(3, "(95) exit"),
+      insn(4, "(b7) r1 = 0"),
+      insn(5, "(b7) r1 = 1"),
+      insn(6, "(b7) r2 = 0"),
+      insn(7, "(85) call bpf_redirect#23", {
+        source: "return bpf_redirect(skb->ifindex, BPF_F_INGRESS);",
+        sourceFile: "prog.bpf.c",
+        sourceLine: 18,
+      }),
+      insn(8, "(95) exit"),
+    ]);
+
+    expect(result).toMatchObject({
+      exitCount: 1,
+      hasUnknownExits: true,
+      constantExits: [],
+      observedConstants: [],
+    });
+    expect(result.unknownExits[0]).toMatchObject({
+      exitIndex: 3,
+      assignmentIndex: 7,
+      assignmentDisasm: "(85) call bpf_redirect#23",
+      reason: "dynamic-assignment",
+      source: "return bpf_redirect(skb->ifindex, BPF_F_INGRESS);",
+      sourceFile: "prog.bpf.c",
+      sourceLine: 18,
+    });
+  });
+
   it("marks exits without any r0/w0 assignment as unknown", () => {
     const result = analyzeXlatedReturns([
       insn(0, "(b7) r1 = 0"),
