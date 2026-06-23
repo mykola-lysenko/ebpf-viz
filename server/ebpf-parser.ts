@@ -520,8 +520,6 @@ const CGROUP_SHORT_CIRCUIT_TYPES = new Set([
   "cgroup_inet6_bind",
   "cgroup_inet4_connect",
   "cgroup_inet6_connect",
-  "cgroup_inet4_post_bind",
-  "cgroup_inet6_post_bind",
   "cgroup_inet4_getpeername",
   "cgroup_inet6_getpeername",
   "cgroup_inet4_getsockname",
@@ -530,6 +528,41 @@ const CGROUP_SHORT_CIRCUIT_TYPES = new Set([
   "cgroup_udp6_sendmsg",
   "cgroup_udp4_recvmsg",
   "cgroup_udp6_recvmsg",
+]);
+
+const CGROUP_SOCK_ADDR_TYPES = new Set([
+  "cgroup_inet4_bind",
+  "cgroup_inet6_bind",
+  "cgroup_inet4_connect",
+  "cgroup_inet6_connect",
+  "cgroup_bind4",
+  "cgroup_bind6",
+  "cgroup_connect4",
+  "cgroup_connect6",
+  "cgroup_inet4_getpeername",
+  "cgroup_inet6_getpeername",
+  "cgroup_inet4_getsockname",
+  "cgroup_inet6_getsockname",
+  "cgroup_udp4_sendmsg",
+  "cgroup_udp6_sendmsg",
+  "cgroup_udp4_recvmsg",
+  "cgroup_udp6_recvmsg",
+  "cgroup_sendmsg4",
+  "cgroup_sendmsg6",
+  "cgroup_recvmsg4",
+  "cgroup_recvmsg6",
+]);
+
+const CGROUP_SOCK_TYPES = new Set([
+  "cgroup_inet4_post_bind",
+  "cgroup_inet6_post_bind",
+  "cgroup_sock_create",
+  "cgroup_inet_sock_create",
+  "cgroup_sock_ops",
+  "cgroup_sockops",
+  "cgroup_sock_release",
+  "cgroup_getsockopt",
+  "cgroup_setsockopt",
 ]);
 
 function buildTcPacketContext(direction: PacketDirection): PacketChainContext {
@@ -578,14 +611,7 @@ function buildCgroupPacketContext(attachType: string): PacketChainContext {
     };
   }
 
-  if (
-    attachType.includes("_connect") ||
-    attachType.includes("_bind") ||
-    attachType.includes("_sendmsg") ||
-    attachType.includes("_recvmsg") ||
-    attachType.includes("_getsockname") ||
-    attachType.includes("_getpeername")
-  ) {
+  if (CGROUP_SOCK_ADDR_TYPES.has(attachType)) {
     return {
       family: "cgroup_sock_addr",
       direction: "unknown",
@@ -603,7 +629,10 @@ function buildCgroupPacketContext(attachType: string): PacketChainContext {
   }
 
   return {
-    family: attachType.includes("sock") ? "cgroup_sock" : "unknown",
+    family:
+      CGROUP_SOCK_TYPES.has(attachType) || attachType.includes("sock")
+        ? "cgroup_sock"
+        : "unknown",
     direction: "unknown",
     summary: "Return-value semantics for this hook are not modeled yet.",
     semantics: {

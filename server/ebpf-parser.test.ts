@@ -59,13 +59,26 @@ const cgroupSockAddrProg: RawBpfProg = {
   bytes_memlock: 4096,
 };
 
-const cgroupSockoptProg: RawBpfProg = {
+const cgroupSockProg: RawBpfProg = {
   id: 6,
-  type: "cgroup_sockopt",
-  name: "sockopt_guard",
+  type: "cgroup_sock",
+  name: "post_bind_guard",
   tag: "0000000000000006",
   gpl_compatible: true,
   loaded_at: 1700000005,
+  orphaned: false,
+  bytes_xlated: 96,
+  jited: true,
+  bytes_memlock: 4096,
+};
+
+const cgroupSockoptProg: RawBpfProg = {
+  id: 7,
+  type: "cgroup_sockopt",
+  name: "sockopt_guard",
+  tag: "0000000000000007",
+  gpl_compatible: true,
+  loaded_at: 1700000006,
   orphaned: false,
   bytes_xlated: 96,
   jited: true,
@@ -798,15 +811,60 @@ describe("buildProgramChains", () => {
     });
   });
 
+  it("classifies cgroup post-bind chains as cgroup_sock, not socket-address hooks", () => {
+    const postBindA: RawBpfProg = {
+      ...cgroupSockProg,
+      id: 86,
+      name: "post_bind_a",
+    };
+    const postBindB: RawBpfProg = {
+      ...cgroupSockProg,
+      id: 87,
+      name: "post_bind_b",
+    };
+    const progs = parseProgList([postBindA, postBindB]);
+    const cgroups: RawCgroupEntry[] = [
+      {
+        cgroup: "/sys/fs/cgroup/test.slice",
+        programs: [
+          {
+            id: 86,
+            attach_type: "cgroup_inet6_post_bind",
+            attach_flags: "multi",
+          },
+          {
+            id: 87,
+            attach_type: "cgroup_inet6_post_bind",
+            attach_flags: "multi",
+          },
+        ],
+      },
+    ];
+
+    const chains = buildProgramChains(progs, [], cgroups);
+    expect(chains).toHaveLength(1);
+    expect(chains[0]).toMatchObject({
+      canShortCircuit: false,
+      packetContext: {
+        family: "cgroup_sock",
+        summary: "Return-value semantics for this hook are not modeled yet.",
+        semantics: {
+          pass: [],
+          drop: [],
+        },
+      },
+    });
+  });
+
   it("does not mark unmodeled cgroup sockopt chains as short-circuiting", () => {
     const sockoptA: RawBpfProg = {
       ...cgroupSockoptProg,
-      id: 86,
+      id: 88,
       name: "sockopt_a",
     };
     const sockoptB: RawBpfProg = {
       ...cgroupSockoptProg,
-      id: 87,
+      id: 89,
       name: "sockopt_b",
     };
     const progs = parseProgList([sockoptA, sockoptB]);
@@ -814,8 +872,8 @@ describe("buildProgramChains", () => {
       {
         cgroup: "/sys/fs/cgroup",
         programs: [
-          { id: 86, attach_type: "cgroup_setsockopt", attach_flags: "multi" },
-          { id: 87, attach_type: "cgroup_setsockopt", attach_flags: "multi" },
+          { id: 88, attach_type: "cgroup_setsockopt", attach_flags: "multi" },
+          { id: 89, attach_type: "cgroup_setsockopt", attach_flags: "multi" },
         ],
       },
     ];
