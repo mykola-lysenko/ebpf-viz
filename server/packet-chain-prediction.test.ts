@@ -100,6 +100,32 @@ function cgroupConnectChain(): ProgramChain {
   };
 }
 
+function unmodeledSockoptChain(): ProgramChain {
+  return {
+    hookId: "cgroup:/sys/fs/cgroup:cgroup_setsockopt",
+    hookLabel: "setsockopt",
+    hookType: "cgroup",
+    attachPoint: "/sys/fs/cgroup",
+    attachType: "cgroup_setsockopt",
+    canShortCircuit: true,
+    packetContext: {
+      family: "cgroup_sock",
+      direction: "unknown",
+      summary: "Return-value semantics for this hook are not modeled yet.",
+      semantics: {
+        pass: [],
+        drop: [],
+        redirect: [],
+        other: [],
+      },
+    },
+    programs: [
+      { id: 21, position: 1, name: "sockopt_a" },
+      { id: 22, position: 2, name: "sockopt_b" },
+    ],
+  };
+}
+
 function returnAnalysis(
   constants: number[],
   options: {
@@ -152,7 +178,7 @@ describe("predictPacketChain", () => {
     );
 
     expect(prediction?.possibleOutcomes).toEqual(["drop", "pass"]);
-    expect(prediction?.summary).toContain("pass or drop");
+    expect(prediction?.summary).toContain("be allowed or be denied");
     expect(
       prediction?.firstTerminalPrograms.map(program => program.progId)
     ).toEqual([12]);
@@ -166,6 +192,38 @@ describe("predictPacketChain", () => {
       [11, "all exits pass", "always"],
       [12, "can drop", "always"],
       [13, "all exits pass", "conditional"],
+    ]);
+  });
+
+  it("does not infer packet outcomes for cgroup hooks without modeled return semantics", () => {
+    const analyses = new Map([
+      [21, returnAnalysis([0, 1])],
+      [22, returnAnalysis([1])],
+    ]);
+
+    const prediction = predictPacketChain(unmodeledSockoptChain(), id =>
+      analyses.get(id)
+    );
+
+    expect(prediction).toMatchObject({
+      possibleOutcomes: ["unknown"],
+      alwaysPass: false,
+      hasUnknownBehavior: true,
+      confidence: "unknown",
+      summary:
+        "Return-value semantics for this cgroup_sock hook are not modeled yet.",
+      firstTerminalPrograms: [],
+    });
+    expect(
+      prediction?.steps.map(step => [
+        step.progId,
+        step.label,
+        step.reachability,
+        step.canTerminateChain,
+      ])
+    ).toEqual([
+      [21, "unknown verdict", "always", false],
+      [22, "unknown verdict", "always", false],
     ]);
   });
 

@@ -511,8 +511,8 @@ export function buildKernelZones(
 
 // ─── Build program chains (execution order at shared hook points) ────────
 
-/** Cgroup attach types where an early program can return 0 (deny) and
- *  short-circuit subsequent programs. Networking and socket hooks. */
+/** Cgroup attach types where eBPF Viz currently models an early terminal
+ *  allow/drop verdict well enough to explain downstream reachability. */
 const CGROUP_SHORT_CIRCUIT_TYPES = new Set([
   "cgroup_inet_ingress",
   "cgroup_inet_egress",
@@ -530,10 +530,6 @@ const CGROUP_SHORT_CIRCUIT_TYPES = new Set([
   "cgroup_udp6_sendmsg",
   "cgroup_udp4_recvmsg",
   "cgroup_udp6_recvmsg",
-  "cgroup_sock_ops",
-  "cgroup_device",
-  "cgroup_getsockopt",
-  "cgroup_setsockopt",
 ]);
 
 function buildTcPacketContext(direction: PacketDirection): PacketChainContext {

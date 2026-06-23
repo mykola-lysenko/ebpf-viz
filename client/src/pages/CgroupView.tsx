@@ -86,6 +86,17 @@ function formatActions(actions: string[]): string {
   return actions.length > 2 ? `${visible}, +${actions.length - 2}` : visible;
 }
 
+function hasModeledReturnSemantics(chain: ProgramChain): boolean {
+  const semantics = chain.packetContext?.semantics;
+  if (!semantics) return false;
+  return (
+    semantics.pass.length > 0 ||
+    semantics.drop.length > 0 ||
+    semantics.redirect.length > 0 ||
+    semantics.other.length > 0
+  );
+}
+
 function chainTone(
   outcomes: PacketVerdict[],
   hasUnknownBehavior: boolean
@@ -404,6 +415,8 @@ function CgroupNodeRow({
                       prediction?.steps.map(step => [step.progId, step]) ?? []
                     );
                     const firstTerminal = prediction?.firstTerminalPrograms[0];
+                    const hasModeledSemantics =
+                      chain !== undefined && hasModeledReturnSemantics(chain);
 
                     return (
                       <div key={g.attachType}>
@@ -435,18 +448,26 @@ function CgroupNodeRow({
                               {chain.packetContext.direction !== "unknown" &&
                                 `/${chain.packetContext.direction}`}
                             </span>
-                            <span className="rounded border border-emerald-500/25 bg-emerald-500/5 px-1 py-0.5 text-emerald-400/80">
-                              allow:{" "}
-                              {formatActions(
-                                chain.packetContext.semantics.pass
-                              )}
-                            </span>
-                            <span className="rounded border border-red-500/25 bg-red-500/5 px-1 py-0.5 text-red-400/80">
-                              deny:{" "}
-                              {formatActions(
-                                chain.packetContext.semantics.drop
-                              )}
-                            </span>
+                            {hasModeledSemantics ? (
+                              <>
+                                <span className="rounded border border-emerald-500/25 bg-emerald-500/5 px-1 py-0.5 text-emerald-400/80">
+                                  allow:{" "}
+                                  {formatActions(
+                                    chain.packetContext.semantics.pass
+                                  )}
+                                </span>
+                                <span className="rounded border border-red-500/25 bg-red-500/5 px-1 py-0.5 text-red-400/80">
+                                  deny:{" "}
+                                  {formatActions(
+                                    chain.packetContext.semantics.drop
+                                  )}
+                                </span>
+                              </>
+                            ) : (
+                              <span className="rounded border border-amber-500/25 bg-amber-500/5 px-1 py-0.5 text-amber-300/80">
+                                return semantics not modeled
+                              </span>
+                            )}
                           </div>
                         )}
                         {isChain && chain.packetContext && (

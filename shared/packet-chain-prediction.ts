@@ -83,6 +83,15 @@ function verdictLabel(
   return "unknown verdict";
 }
 
+function hasModeledActionSemantics(semantics: PacketActionSemantics): boolean {
+  return (
+    (semantics.passValues?.length ?? semantics.pass.length) > 0 ||
+    (semantics.dropValues?.length ?? semantics.drop.length) > 0 ||
+    (semantics.redirectValues?.length ?? semantics.redirect.length) > 0 ||
+    (semantics.otherValues?.length ?? semantics.other.length) > 0
+  );
+}
+
 function verdictTitle(
   analysis: XlatedReturnAnalysis | null | undefined
 ): string {
@@ -638,33 +647,53 @@ function stepDefinitelyTerminates(
 }
 
 function summarizeChain(
+  chain: ProgramChain,
   outcomes: PacketVerdict[],
   hasUnknownBehavior: boolean,
   sideEffectLabels: string[]
 ): string {
+  const semantics = chain.packetContext?.semantics;
   const sideEffectText =
     sideEffectLabels.length > 0
       ? ` Known side effects: ${sideEffectLabels.join(", ")}.`
       : "";
 
+  if (!semantics || !hasModeledActionSemantics(semantics)) {
+    const family = chain.packetContext?.family ?? chain.hookType;
+    return `Return-value semantics for this ${family} hook are not modeled yet.${sideEffectText}`;
+  }
+
+  const subject =
+    chain.packetContext?.family === "cgroup_sock_addr"
+      ? "Socket operations"
+      : "Packets";
+
   if (outcomes.length === 1 && outcomes[0] === "pass" && !hasUnknownBehavior) {
-    return `All analyzed exits pass; packets should continue through this chain.${sideEffectText}`;
+    return `All analyzed exits pass; ${subject.toLowerCase()} should continue through this chain.${sideEffectText}`;
   }
 
   const actions: string[] = [];
-  if (outcomes.includes("pass")) actions.push("pass");
-  if (outcomes.includes("drop")) actions.push("drop");
+  if (outcomes.includes("pass")) {
+    actions.push(
+      chain.packetContext?.family === "cgroup_sock_addr" ? "be allowed" : "pass"
+    );
+  }
+  if (outcomes.includes("drop")) {
+    actions.push(
+      chain.packetContext?.family === "cgroup_sock_addr" ? "be denied" : "drop"
+    );
+  }
   if (outcomes.includes("redirect")) actions.push("redirect");
   if (outcomes.includes("other"))
     actions.push("take another hook-specific action");
 
   if (actions.length > 0 && hasUnknownBehavior) {
-    return `Packets may ${actions.join(", ")}; some exits remain unknown.${sideEffectText}`;
+    return `${subject} may ${actions.join(", ")}; some exits remain unknown.${sideEffectText}`;
   }
   if (actions.length > 0) {
-    return `Packets may ${actions.join(" or ")} in this chain.${sideEffectText}`;
+    return `${subject} may ${actions.join(" or ")} in this chain.${sideEffectText}`;
   }
-  return `Packet outcome is unknown for this chain.${sideEffectText}`;
+  return `${subject} outcome is unknown for this chain.${sideEffectText}`;
 }
 
 export function predictPacketChain(
@@ -674,6 +703,7 @@ export function predictPacketChain(
 ): PacketChainPrediction | null {
   const semantics = chain.packetContext?.semantics;
   if (!semantics) return null;
+  const hasModeledSemantics = hasModeledActionSemantics(semantics);
 
   const steps: PacketProgramPrediction[] = [];
   let reachability: PacketProgramPrediction["reachability"] = "always";
@@ -693,8 +723,11 @@ export function predictPacketChain(
     );
     const { verdicts, hasUnknownBehavior: programHasUnknown } = behavior;
     const canTerminateChain =
-      chain.canShortCircuit && stepCanTerminate(verdicts, programHasUnknown);
+      hasModeledSemantics &&
+      chain.canShortCircuit &&
+      stepCanTerminate(verdicts, programHasUnknown);
     const definitelyTerminatesChain =
+      hasModeledSemantics &&
       chain.canShortCircuit &&
       stepDefinitelyTerminates(verdicts, programHasUnknown);
     const terminalVerdicts = verdicts.filter(verdict => verdict !== "pass");
@@ -746,8 +779,11 @@ export function predictPacketChain(
     }
   }
 
-  if (mayReachEnd) {
+  if (mayReachEnd && hasModeledSemantics) {
     possibleOutcomes.add("pass");
+  } else if (!hasModeledSemantics) {
+    possibleOutcomes.add("unknown");
+    hasUnknownBehavior = true;
   }
 
   const outcomes = uniqueVerdicts(Array.from(possibleOutcomes));
@@ -769,7 +805,12 @@ export function predictPacketChain(
 
   return {
     chainId: chain.hookId,
-    summary: summarizeChain(outcomes, hasUnknownBehavior, sideEffectLabels),
+    summary: summarizeChain(
+      chain,
+      outcomes,
+      hasUnknownBehavior,
+      sideEffectLabels
+    ),
     confidence,
     possibleOutcomes: outcomes,
     alwaysPass,

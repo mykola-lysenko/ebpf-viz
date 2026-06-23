@@ -59,6 +59,19 @@ const cgroupSockAddrProg: RawBpfProg = {
   bytes_memlock: 4096,
 };
 
+const cgroupSockoptProg: RawBpfProg = {
+  id: 6,
+  type: "cgroup_sockopt",
+  name: "sockopt_guard",
+  tag: "0000000000000006",
+  gpl_compatible: true,
+  loaded_at: 1700000005,
+  orphaned: false,
+  bytes_xlated: 96,
+  jited: true,
+  bytes_memlock: 4096,
+};
+
 const kprobeProg: RawBpfProg = {
   id: 3,
   type: "kprobe",
@@ -182,6 +195,7 @@ describe("parseProgList", () => {
     ]);
     expect(map.size).toBe(4);
   });
+
 });
 
 // ─── enrichWithNetAttachments ─────────────────────────────────────────────────
@@ -780,6 +794,43 @@ describe("buildProgramChains", () => {
       semantics: {
         pass: ["1 (allow)"],
         drop: ["0 (deny)"],
+      },
+    });
+  });
+
+  it("does not mark unmodeled cgroup sockopt chains as short-circuiting", () => {
+    const sockoptA: RawBpfProg = {
+      ...cgroupSockoptProg,
+      id: 86,
+      name: "sockopt_a",
+    };
+    const sockoptB: RawBpfProg = {
+      ...cgroupSockoptProg,
+      id: 87,
+      name: "sockopt_b",
+    };
+    const progs = parseProgList([sockoptA, sockoptB]);
+    const cgroups: RawCgroupEntry[] = [
+      {
+        cgroup: "/sys/fs/cgroup",
+        programs: [
+          { id: 86, attach_type: "cgroup_setsockopt", attach_flags: "multi" },
+          { id: 87, attach_type: "cgroup_setsockopt", attach_flags: "multi" },
+        ],
+      },
+    ];
+
+    const chains = buildProgramChains(progs, [], cgroups);
+    expect(chains).toHaveLength(1);
+    expect(chains[0]).toMatchObject({
+      canShortCircuit: false,
+      packetContext: {
+        family: "cgroup_sock",
+        summary: "Return-value semantics for this hook are not modeled yet.",
+        semantics: {
+          pass: [],
+          drop: [],
+        },
       },
     });
   });
