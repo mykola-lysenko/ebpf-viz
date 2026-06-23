@@ -17,6 +17,9 @@ export default defineConfig({
   build: {
     outDir: path.resolve(import.meta.dirname, "dist/public"),
     emptyOutDir: true,
+    // The Viz.js renderer is a lazy, opt-in CFG chunk. Keep the warning limit
+    // just above that known module while the app shell remains below 500 kB.
+    chunkSizeWarningLimit: 1500,
   },
   server: {
     host: true,

@@ -1,7 +1,7 @@
 /**
  * Sparkline.tsx
  *
- * A tiny reusable sparkline built on recharts AreaChart.
+ * A tiny reusable sparkline rendered as inline SVG.
  * Designed to be embedded inline inside badges, table cells, and detail panels.
  *
  * Props:
@@ -10,11 +10,10 @@
  *   width     – pixel width (default 80)
  *   color     – stroke/fill color (default cyan)
  *   variant   – "calls" | "latency" | "cpu"  controls color semantics
- *   showTooltip – show a recharts tooltip on hover (default false)
+ *   showTooltip – expose the latest value via a native SVG title
  */
 
-import { useMemo } from "react";
-import { AreaChart, Area, Tooltip, ResponsiveContainer } from "recharts";
+import { useId, useMemo } from "react";
 
 export type SparklineVariant = "calls" | "latency" | "cpu" | "custom";
 
@@ -48,11 +47,38 @@ export default function Sparkline({
   className,
 }: SparklineProps) {
   const stroke = color ?? VARIANT_COLORS[variant];
+  const gradientId = `sparkline-${useId().replace(/[^a-zA-Z0-9_-]/g, "")}-${variant}`;
+  const chartHeight = typeof height === "number" ? Math.max(height, 2) : 24;
+  const chart = useMemo(() => {
+    const values = data.map(value => (Number.isFinite(value) ? value : 0));
+    if (values.length < 2) return null;
 
-  const chartData = useMemo(
-    () => data.map((v, i) => ({ i, v })),
-    [data]
-  );
+    const min = Math.min(...values);
+    const max = Math.max(...values);
+    const range = max - min;
+    const padding = 1;
+    const drawableHeight = Math.max(1, chartHeight - padding * 2);
+    const points = values.map((value, index) => {
+      const x = (index / (values.length - 1)) * 100;
+      const y =
+        range === 0
+          ? chartHeight / 2
+          : padding + (1 - (value - min) / range) * drawableHeight;
+      return { x, y };
+    });
+    const linePath = points
+      .map((point, index) =>
+        `${index === 0 ? "M" : "L"} ${point.x.toFixed(3)} ${point.y.toFixed(3)}`
+      )
+      .join(" ");
+    const areaPath = `${linePath} L 100 ${chartHeight} L 0 ${chartHeight} Z`;
+
+    return {
+      areaPath,
+      linePath,
+      latestValue: values.at(-1) ?? 0,
+    };
+  }, [chartHeight, data]);
 
   if (data.length < 2) {
     // Not enough data — render a flat placeholder line
@@ -87,38 +113,40 @@ export default function Sparkline({
         minWidth: 40,
       }}
     >
-      <ResponsiveContainer width="100%" height="100%">
-        <AreaChart data={chartData} margin={{ top: 1, right: 0, bottom: 1, left: 0 }}>
+      {chart && (
+        <svg
+          aria-hidden={!showTooltip}
+          focusable="false"
+          height="100%"
+          preserveAspectRatio="none"
+          viewBox={`0 0 100 ${chartHeight}`}
+          width="100%"
+        >
+          {showTooltip && (
+            <title>
+              {formatValue
+                ? formatValue(chart.latestValue)
+                : chart.latestValue.toFixed(1)}
+            </title>
+          )}
           <defs>
-            <linearGradient id={`sg-${variant}-${stroke.replace("#", "")}`} x1="0" y1="0" x2="0" y2="1">
+            <linearGradient id={gradientId} x1="0" x2="0" y1="0" y2="1">
               <stop offset="5%" stopColor={stroke} stopOpacity={0.35} />
               <stop offset="95%" stopColor={stroke} stopOpacity={0.02} />
             </linearGradient>
           </defs>
-          {showTooltip && (
-            <Tooltip
-              content={({ active, payload }) => {
-                if (!active || !payload?.length) return null;
-                const val = payload[0]?.value as number;
-                return (
-                  <div className="bg-[#0f172a] border border-white/10 rounded px-2 py-1 text-xs text-white/80">
-                    {formatValue ? formatValue(val) : val.toFixed(1)}
-                  </div>
-                );
-              }}
-            />
-          )}
-          <Area
-            type="monotone"
-            dataKey="v"
+          <path d={chart.areaPath} fill={`url(#${gradientId})`} />
+          <path
+            d={chart.linePath}
+            fill="none"
             stroke={stroke}
-            strokeWidth={1.5}
-            fill={`url(#sg-${variant}-${stroke.replace("#", "")})`}
-            dot={false}
-            isAnimationActive={false}
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            strokeWidth="1.5"
+            vectorEffect="non-scaling-stroke"
           />
-        </AreaChart>
-      </ResponsiveContainer>
+        </svg>
+      )}
     </div>
   );
 }

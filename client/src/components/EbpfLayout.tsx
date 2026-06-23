@@ -1,4 +1,4 @@
-import { useState, useRef, useCallback } from "react";
+import { lazy, Suspense, useState, useRef, useCallback } from "react";
 import { Link, useLocation } from "wouter";
 import {
   Cpu, Network, FolderTree, List, Settings,
@@ -8,13 +8,18 @@ import {
 } from "lucide-react";
 import { EbpfProvider, useEbpf } from "@/contexts/EbpfContext";
 import type { StreamStatus } from "@/hooks/useEbpfStream";
-import { ProgramDetailPanel } from "./ProgramDetailPanel";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
+
+const ProgramDetailPanel = lazy(() =>
+  import("./ProgramDetailPanel").then(module => ({
+    default: module.ProgramDetailPanel,
+  }))
+);
 
 const NAV_ITEMS = [
   { path: "/",         icon: LayoutDashboard, label: "Dashboard",  },
@@ -443,11 +448,19 @@ function LayoutInner({ children }: { children: React.ReactNode }) {
         </main>
       </div>
       {selectedProgram && (
-        <ProgramDetailPanel
-          program={selectedProgram}
-          history={historyMap.get(selectedProgram.id) ?? null}
-          onClose={() => setSelectedProgram(null)}
-        />
+        <Suspense
+          fallback={
+            <div className="fixed right-0 top-0 z-50 flex h-screen w-full max-w-2xl items-center justify-center border-l border-border bg-card/95 text-sm text-muted-foreground shadow-2xl">
+              Loading program details...
+            </div>
+          }
+        >
+          <ProgramDetailPanel
+            program={selectedProgram}
+            history={historyMap.get(selectedProgram.id) ?? null}
+            onClose={() => setSelectedProgram(null)}
+          />
+        </Suspense>
       )}
     </div>
   );

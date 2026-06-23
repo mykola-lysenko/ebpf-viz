@@ -1,20 +1,20 @@
 import { Toaster } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
-import NotFound from "@/pages/NotFound";
 import { lazy, Suspense } from "react";
 import { Route, Switch } from "wouter";
 import ErrorBoundary from "./components/ErrorBoundary";
 import { ThemeProvider } from "./contexts/ThemeContext";
 import EbpfLayout from "./components/EbpfLayout";
-import Dashboard from "./pages/Dashboard";
-import KernelView from "./pages/KernelView";
-import NetworkView from "./pages/NetworkView";
-import CgroupView from "./pages/CgroupView";
-import ProgramsView from "./pages/ProgramsView";
-import SettingsView from "./pages/SettingsView";
 
+const Dashboard = lazy(() => import("./pages/Dashboard"));
+const KernelView = lazy(() => import("./pages/KernelView"));
+const NetworkView = lazy(() => import("./pages/NetworkView"));
+const CgroupView = lazy(() => import("./pages/CgroupView"));
+const ProgramsView = lazy(() => import("./pages/ProgramsView"));
+const SettingsView = lazy(() => import("./pages/SettingsView"));
 const OsMapView = lazy(() => import("./pages/OsMapView"));
 const MapsView = lazy(() => import("./pages/MapsView"));
+const NotFound = lazy(() => import("./pages/NotFound"));
 
 function RouteLoading() {
   return (
