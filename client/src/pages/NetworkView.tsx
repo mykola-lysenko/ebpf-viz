@@ -19,6 +19,7 @@ import type {
   NetworkInterface,
   PacketChainPrediction,
   PacketVerdict,
+  ProgArrayTarget,
   ProgramChain,
   ProgramReturnAnalysisResult,
 } from "../../../shared/ebpf-types";
@@ -92,6 +93,7 @@ const VERDICT_TONE_CLASSES: Record<PacketVerdict, string> = {
 };
 
 const MAX_RETURN_ANALYSIS_PROGRAMS = 64;
+const MAX_TAIL_CALL_MAP_DUMPS = 16;
 
 const OSI_LAYERS = [
   {
@@ -137,14 +139,16 @@ function OsiLayerRow({
   chains,
   returnAnalysisById,
   returnAnalysisLoading,
+  progArrayTargets,
 }: {
   layerDef: (typeof OSI_LAYERS)[0];
   programs: NetworkInterface["layers"]["L2"];
   chains?: ProgramChain[];
   returnAnalysisById: Map<number, ProgramReturnAnalysisResult>;
   returnAnalysisLoading: boolean;
+  progArrayTargets: ProgArrayTarget[];
 }) {
-  const { historyMap, maps } = useEbpf();
+  const { historyMap, maps, snapshot } = useEbpf();
   const hasProgs = programs.length > 0;
   const [selectedChainDetails, setSelectedChainDetails] = useState<{
     chain: ProgramChain;
@@ -227,7 +231,11 @@ function OsiLayerRow({
                         chain,
                         progId =>
                           returnAnalysisById.get(progId)?.returnAnalysis,
-                        { maps }
+                        {
+                          maps,
+                          programs: snapshot?.programs ?? [],
+                          progArrayTargets,
+                        }
                       )
                     : null;
                 const predictionStepsById = new Map(
@@ -490,11 +498,13 @@ function InterfaceCard({
   tcChains,
   returnAnalysisById,
   returnAnalysisLoading,
+  progArrayTargets,
 }: {
   iface: NetworkInterface;
   tcChains: ProgramChain[];
   returnAnalysisById: Map<number, ProgramReturnAnalysisResult>;
   returnAnalysisLoading: boolean;
+  progArrayTargets: ProgArrayTarget[];
 }) {
   const [expanded, setExpanded] = useState(iface.allPrograms.length > 0);
   const totalProgs = iface.allPrograms.length;
@@ -602,6 +612,7 @@ function InterfaceCard({
                 chains={layerDef.key === "L3" ? ifaceChains : undefined}
                 returnAnalysisById={returnAnalysisById}
                 returnAnalysisLoading={returnAnalysisLoading}
+                progArrayTargets={progArrayTargets}
               />
             ))}
           </div>
@@ -622,6 +633,7 @@ interface SectionProps {
   tcChains?: ProgramChain[];
   returnAnalysisById: Map<number, ProgramReturnAnalysisResult>;
   returnAnalysisLoading: boolean;
+  progArrayTargets: ProgArrayTarget[];
 }
 
 function InterfaceSection({
@@ -635,6 +647,7 @@ function InterfaceSection({
   tcChains = [],
   returnAnalysisById,
   returnAnalysisLoading,
+  progArrayTargets,
 }: SectionProps) {
   return (
     <div className="space-y-3">
@@ -673,6 +686,7 @@ function InterfaceSection({
               tcChains={tcChains}
               returnAnalysisById={returnAnalysisById}
               returnAnalysisLoading={returnAnalysisLoading}
+              progArrayTargets={progArrayTargets}
             />
           ))
         ) : (
@@ -691,7 +705,14 @@ function InterfaceSection({
 }
 
 export default function NetworkView() {
-  const { snapshot, filteredPrograms, searchQuery, appMode } = useEbpf();
+  const {
+    snapshot,
+    filteredPrograms,
+    searchQuery,
+    appMode,
+    maps,
+    snapshotMapDumps,
+  } = useEbpf();
 
   const tcChains = useMemo(
     () =>
@@ -736,6 +757,52 @@ export default function NetworkView() {
 
   const returnAnalysisLoading =
     returnAnalysisQuery.isLoading || returnAnalysisQuery.isFetching;
+
+  const tailCallMapIds = useMemo(() => {
+    const progArrayMapIds = new Set(
+      maps
+        .filter(
+          map => map.rawType.toLowerCase().replace(/-/g, "_") === "prog_array"
+        )
+        .map(map => map.id)
+    );
+    const ids = new Set<number>();
+    for (const result of Array.from(returnAnalysisById.values())) {
+      for (const tailCall of result.returnAnalysis?.tailCalls ?? []) {
+        if (
+          tailCall.mapId !== undefined &&
+          progArrayMapIds.has(tailCall.mapId)
+        ) {
+          ids.add(tailCall.mapId);
+        }
+      }
+    }
+    return Array.from(ids).slice(0, MAX_TAIL_CALL_MAP_DUMPS);
+  }, [maps, returnAnalysisById]);
+
+  const progArrayDumpQueries = trpc.useQueries(t =>
+    tailCallMapIds.map(mapId =>
+      t.ebpf.mapDump(
+        { id: mapId },
+        {
+          enabled: appMode !== "snapshot",
+          retry: 1,
+          staleTime: 30_000,
+        }
+      )
+    )
+  );
+
+  const progArrayTargets = useMemo(() => {
+    if (appMode === "snapshot") {
+      return tailCallMapIds.flatMap(
+        mapId => snapshotMapDumps[mapId]?.progArrayTargets ?? []
+      );
+    }
+    return progArrayDumpQueries.flatMap(
+      query => query.data?.progArrayTargets ?? []
+    );
+  }, [appMode, progArrayDumpQueries, snapshotMapDumps, tailCallMapIds]);
 
   if (!snapshot) {
     return (
@@ -834,6 +901,7 @@ export default function NetworkView() {
         tcChains={tcChains}
         returnAnalysisById={returnAnalysisById}
         returnAnalysisLoading={returnAnalysisLoading}
+        progArrayTargets={progArrayTargets}
         emptyMessage={
           searchQuery
             ? "No NIC interfaces match the current filter."
@@ -856,6 +924,7 @@ export default function NetworkView() {
           accentColor="#8b5cf6"
           returnAnalysisById={returnAnalysisById}
           returnAnalysisLoading={returnAnalysisLoading}
+          progArrayTargets={progArrayTargets}
           emptyMessage={
             searchQuery
               ? "No sockmap interfaces match the current filter."

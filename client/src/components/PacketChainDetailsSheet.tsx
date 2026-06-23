@@ -22,6 +22,7 @@ import type {
   BpfProgram,
   PacketChainPrediction,
   PacketProgramPrediction,
+  PacketTailCallTarget,
   PacketVerdictExplanation,
   PacketVerdict,
   ProgramChain,
@@ -264,9 +265,11 @@ function formatTailCall(tailCall: XlatedTailCall): string {
 function TailCallEvidence({
   tailCalls,
   fallbackIndices,
+  targets,
 }: {
   tailCalls?: XlatedTailCall[];
   fallbackIndices: number[];
+  targets: PacketTailCallTarget[];
 }) {
   const calls =
     tailCalls ??
@@ -279,29 +282,39 @@ function TailCallEvidence({
 
   return (
     <div className="mt-1 space-y-1">
-      {calls.map(tailCall => (
-        <div
-          key={tailCall.insnIndex}
-          className="rounded border border-amber-500/25 bg-amber-500/5 px-2 py-1 text-[11px] text-amber-300"
-        >
-          <div>
-            {formatTailCall(tailCall)}. Final verdict may be in another program.
-          </div>
-          <div className="mt-0.5 break-all font-mono text-[10px] text-amber-300/70">
-            {tailCall.disasm}
-          </div>
-          {tailCall.mapAssignmentDisasm && (
-            <div className="mt-0.5 break-all font-mono text-[10px] text-amber-300/60">
-              map: {tailCall.mapAssignmentDisasm}
+      {calls.map(tailCall => {
+        const target = targets.find(
+          candidate =>
+            candidate.mapId === tailCall.mapId &&
+            candidate.slot === tailCall.slot
+        );
+        return (
+          <div
+            key={tailCall.insnIndex}
+            className="rounded border border-amber-500/25 bg-amber-500/5 px-2 py-1 text-[11px] text-amber-300"
+          >
+            <div>
+              {formatTailCall(tailCall)}.{" "}
+              {target?.targetProgId !== undefined
+                ? `Resolved target: ${target.targetProgName ?? "program"} (#${target.targetProgId}).`
+                : "Final verdict may be in another program."}
             </div>
-          )}
-          {tailCall.slotAssignmentDisasm && (
-            <div className="mt-0.5 break-all font-mono text-[10px] text-amber-300/60">
-              slot: {tailCall.slotAssignmentDisasm}
+            <div className="mt-0.5 break-all font-mono text-[10px] text-amber-300/70">
+              {tailCall.disasm}
             </div>
-          )}
-        </div>
-      ))}
+            {tailCall.mapAssignmentDisasm && (
+              <div className="mt-0.5 break-all font-mono text-[10px] text-amber-300/60">
+                map: {tailCall.mapAssignmentDisasm}
+              </div>
+            )}
+            {tailCall.slotAssignmentDisasm && (
+              <div className="mt-0.5 break-all font-mono text-[10px] text-amber-300/60">
+                slot: {tailCall.slotAssignmentDisasm}
+              </div>
+            )}
+          </div>
+        );
+      })}
     </div>
   );
 }
@@ -390,6 +403,7 @@ function StepDetails({
                 <TailCallEvidence
                   tailCalls={analysis.tailCalls}
                   fallbackIndices={analysis.tailCallIndices}
+                  targets={step.tailCallTargets}
                 />
               )}
             </div>

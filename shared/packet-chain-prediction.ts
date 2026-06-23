@@ -1,10 +1,12 @@
 import type {
   BpfMap,
+  PacketTailCallTarget,
   PacketActionSemantics,
   PacketChainPrediction,
   PacketProgramPrediction,
   PacketVerdict,
   PacketVerdictExplanation,
+  ProgArrayTarget,
   ProgramChain,
   XlatedReturnAnalysis,
   XlatedReturnExit,
@@ -17,6 +19,8 @@ type AnalysisLookup = (
 
 interface PredictionContext {
   maps?: BpfMap[];
+  programs?: Array<{ id: number; name: string; rawType?: string }>;
+  progArrayTargets?: ProgArrayTarget[];
 }
 
 const VERDICT_ORDER: PacketVerdict[] = [
@@ -245,6 +249,15 @@ function buildVerdictExplanations(
 
   if (analysis.hasTailCalls) {
     const mapById = new Map((context.maps ?? []).map(map => [map.id, map]));
+    const progById = new Map(
+      (context.programs ?? []).map(program => [program.id, program])
+    );
+    const targetByMapAndSlot = new Map(
+      (context.progArrayTargets ?? []).map(target => [
+        `${target.mapId}:${target.slot}`,
+        target,
+      ])
+    );
     const tailCalls =
       analysis.tailCalls ??
       analysis.tailCallIndices.map(
@@ -257,6 +270,26 @@ function buildVerdictExplanations(
     for (const tailCall of tailCalls) {
       const map =
         tailCall.mapId !== undefined ? mapById.get(tailCall.mapId) : undefined;
+      const resolvedTarget =
+        tailCall.mapId !== undefined && tailCall.slot !== undefined
+          ? targetByMapAndSlot.get(`${tailCall.mapId}:${tailCall.slot}`)
+          : undefined;
+      const targetProgram =
+        resolvedTarget !== undefined
+          ? progById.get(resolvedTarget.targetProgId)
+          : undefined;
+      const tailCallTarget =
+        tailCall.mapId !== undefined && tailCall.slot !== undefined
+          ? ({
+              mapId: tailCall.mapId,
+              mapName: map?.name,
+              slot: tailCall.slot,
+              targetProgId: resolvedTarget?.targetProgId,
+              targetProgName: targetProgram?.name,
+              targetProgType: targetProgram?.rawType,
+              resolved: resolvedTarget !== undefined,
+            } satisfies PacketTailCallTarget)
+          : undefined;
       const mapText =
         tailCall.mapId !== undefined
           ? map
@@ -267,20 +300,65 @@ function buildVerdictExplanations(
         tailCall.slot !== undefined
           ? ` slot ${tailCall.slot}`
           : " an unresolved slot";
+      const resolvedTargetText =
+        resolvedTarget !== undefined
+          ? targetProgram
+            ? `program ${targetProgram.name} (#${resolvedTarget.targetProgId})`
+            : `program #${resolvedTarget.targetProgId}`
+          : null;
 
       explanations.push({
         verdict: "unknown",
-        summary: `Tail call at instruction ${tailCall.insnIndex} may continue in ${mapText}${slotText}; target program is not resolved from current snapshot.`,
+        summary: resolvedTargetText
+          ? `Tail call at instruction ${tailCall.insnIndex} may continue in ${resolvedTargetText} via ${map?.name ?? `map #${tailCall.mapId}`}[${tailCall.slot}].`
+          : `Tail call at instruction ${tailCall.insnIndex} may continue in ${mapText}${slotText}; target program is not resolved from current snapshot.`,
         exitIndex: tailCall.insnIndex,
         source: tailCall.source,
         sourceFile: tailCall.sourceFile,
         sourceLine: tailCall.sourceLine,
         sourceColumn: tailCall.sourceColumn,
+        tailCallTarget,
       });
     }
   }
 
   return explanations;
+}
+
+function tailCallTargetsForAnalysis(
+  analysis: XlatedReturnAnalysis | null | undefined,
+  context: PredictionContext
+): PacketTailCallTarget[] {
+  if (!analysis?.tailCalls) return [];
+
+  const mapById = new Map((context.maps ?? []).map(map => [map.id, map]));
+  const progById = new Map(
+    (context.programs ?? []).map(program => [program.id, program])
+  );
+  const targetByMapAndSlot = new Map(
+    (context.progArrayTargets ?? []).map(target => [
+      `${target.mapId}:${target.slot}`,
+      target,
+    ])
+  );
+
+  return analysis.tailCalls.flatMap(tailCall => {
+    if (tailCall.mapId === undefined || tailCall.slot === undefined) return [];
+    const target = targetByMapAndSlot.get(`${tailCall.mapId}:${tailCall.slot}`);
+    const program =
+      target !== undefined ? progById.get(target.targetProgId) : undefined;
+    return [
+      {
+        mapId: tailCall.mapId,
+        mapName: mapById.get(tailCall.mapId)?.name,
+        slot: tailCall.slot,
+        targetProgId: target?.targetProgId,
+        targetProgName: program?.name,
+        targetProgType: program?.rawType,
+        resolved: target !== undefined,
+      },
+    ];
+  });
 }
 
 function analyzeProgramVerdicts(
@@ -425,6 +503,7 @@ export function predictPacketChain(
       canTerminateChain,
       definitelyTerminatesChain,
       hasUnknownBehavior: programHasUnknown,
+      tailCallTargets: tailCallTargetsForAnalysis(analysis, context),
       hasSideEffects: sideEffectLabels.length > 0,
       sideEffectLabels,
       sideEffectTitle: sideEffectTitle(analysis),

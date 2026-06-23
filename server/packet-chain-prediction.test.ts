@@ -252,7 +252,7 @@ describe("predictPacketChain", () => {
     expect(prediction?.steps[2].reachability).toBe("conditional");
   });
 
-  it("explains tail calls with resolved prog-array map and slot", () => {
+  it("explains tail calls with resolved prog-array target programs", () => {
     const analysis = returnAnalysis([0], { tailCall: true });
     analysis.tailCalls = [
       {
@@ -270,14 +270,36 @@ describe("predictPacketChain", () => {
 
     const prediction = predictPacketChain(tcChain(), id => analyses.get(id), {
       maps: [progArrayMap(21, "tail_calls")],
+      programs: [
+        { id: 2, name: "middle", rawType: "sched_cls" },
+      ],
+      progArrayTargets: [
+        { mapId: 21, slot: 3, targetProgId: 2, entryIndex: 0 },
+      ],
     });
 
+    expect(prediction?.steps[0].tailCallTargets).toEqual([
+      {
+        mapId: 21,
+        mapName: "tail_calls",
+        slot: 3,
+        targetProgId: 2,
+        targetProgName: "middle",
+        targetProgType: "sched_cls",
+        resolved: true,
+      },
+    ]);
     expect(prediction?.steps[0].verdictExplanations).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
           verdict: "unknown",
           summary:
-            "Tail call at instruction 42 may continue in prog-array tail_calls (#21) slot 3; target program is not resolved from current snapshot.",
+            "Tail call at instruction 42 may continue in program middle (#2) via tail_calls[3].",
+          tailCallTarget: expect.objectContaining({
+            targetProgId: 2,
+            targetProgName: "middle",
+            resolved: true,
+          }),
         }),
       ])
     );

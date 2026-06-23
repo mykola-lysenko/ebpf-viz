@@ -273,9 +273,20 @@ export interface PacketProgramPrediction {
   canTerminateChain: boolean;
   definitelyTerminatesChain: boolean;
   hasUnknownBehavior: boolean;
+  tailCallTargets: PacketTailCallTarget[];
   hasSideEffects: boolean;
   sideEffectLabels: string[];
   sideEffectTitle?: string;
+}
+
+export interface PacketTailCallTarget {
+  mapId: number;
+  mapName?: string;
+  slot: number;
+  targetProgId?: number;
+  targetProgName?: string;
+  targetProgType?: string;
+  resolved: boolean;
 }
 
 export interface PacketVerdictExplanation {
@@ -288,6 +299,7 @@ export interface PacketVerdictExplanation {
   sourceLine?: number;
   sourceColumn?: number;
   branchEvidence?: XlatedBranchEvidence[];
+  tailCallTarget?: PacketTailCallTarget;
 }
 
 export interface PacketChainPrediction {
