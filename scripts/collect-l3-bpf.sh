@@ -1,0 +1,377 @@
+#!/usr/bin/env bash
+set -uo pipefail
+
+BPFTOOL="${BPFTOOL:-bpftool}"
+SUDO_CMD="${SUDO:-sudo}"
+TIMEOUT_SECONDS="${TIMEOUT_SECONDS:-45}"
+MAX_TAIL_CALL_DEPTH="${MAX_TAIL_CALL_DEPTH:-8}"
+TS="$(date +%Y%m%d-%H%M%S)"
+OUT="${OUT:-/tmp/ebpf-viz-l3-capture-${TS}}"
+ARCHIVE="${ARCHIVE:-/tmp/ebpf-viz-l3-latest.tar.gz}"
+
+if [ -n "$SUDO_CMD" ]; then
+  SUDO_PREFIX=("$SUDO_CMD")
+else
+  SUDO_PREFIX=()
+fi
+
+mkdir -p "$OUT/prog" "$OUT/map" "$OUT/tc"
+touch "$OUT/dumped-program-ids.txt" "$OUT/dumped-map-ids.txt"
+
+run_capture() {
+  local stdout="$1"
+  local stderr="$2"
+  shift 2
+
+  if command -v timeout >/dev/null 2>&1; then
+    timeout "$TIMEOUT_SECONDS" "$@" >"$stdout" 2>"$stderr" || true
+  else
+    "$@" >"$stdout" 2>"$stderr" || true
+  fi
+}
+
+safe_name() {
+  printf '%s' "${1:-unnamed}" | tr -c 'A-Za-z0-9_.-' '_'
+}
+
+already_dumped() {
+  local id="$1"
+  local file="$2"
+  grep -Fxq "$id" "$file" 2>/dev/null
+}
+
+record_dumped() {
+  local id="$1"
+  local file="$2"
+  if ! already_dumped "$id" "$file"; then
+    printf '%s\n' "$id" >> "$file"
+  fi
+}
+
+refresh_state() {
+  local mode="$1"
+  python3 - "$OUT" "$mode" <<'PY'
+import json
+import pathlib
+import sys
+
+out = pathlib.Path(sys.argv[1])
+mode = sys.argv[2]
+L3_TYPES = {"sched_cls", "sched_act", "netfilter", "flow_dissector"}
+
+def load_json(path):
+    try:
+        return json.loads(path.read_text())
+    except Exception:
+        return None
+
+def items_from_json(path, keys):
+    data = load_json(path)
+    if isinstance(data, list):
+        return [item for item in data if isinstance(item, dict)]
+    if isinstance(data, dict):
+        for key in keys:
+            value = data.get(key)
+            if isinstance(value, list):
+                return [item for item in value if isinstance(item, dict)]
+        result = data.get("result")
+        if isinstance(result, list):
+            return [item for item in result if isinstance(item, dict)]
+    return []
+
+def read_ids(name):
+    path = out / name
+    ids = set()
+    if not path.exists():
+        return ids
+    for line in path.read_text().splitlines():
+        line = line.strip()
+        if line.isdigit():
+            ids.add(int(line))
+    return ids
+
+def write_ids(name, ids):
+    (out / name).write_text("".join(f"{value}\n" for value in sorted(ids)))
+
+def as_int(value):
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int) and value >= 0:
+        return value
+    if isinstance(value, str) and value.isdigit():
+        return int(value)
+    return None
+
+def int_from_bytes(value):
+    if not isinstance(value, list):
+        return None
+    total = 0
+    for shift, item in enumerate(value):
+        if not isinstance(item, str):
+            return None
+        try:
+            byte = int(item.replace("0x", ""), 16)
+        except ValueError:
+            return None
+        total |= byte << (shift * 8)
+    return total
+
+def int_from_object(value, fields):
+    if not isinstance(value, dict):
+        return None
+    for field in fields:
+        parsed = as_int(value.get(field))
+        if parsed is not None:
+            return parsed
+    return None
+
+def first(*values):
+    for value in values:
+        if value is not None:
+            return value
+    return None
+
+def int_from_raw(value):
+    return first(int_from_bytes(value), as_int(value))
+
+def map_type(map_obj):
+    return str(map_obj.get("type", "")).replace("-", "_").lower()
+
+def prog_id(prog):
+    return as_int(prog.get("id"))
+
+def map_id(map_obj):
+    return as_int(map_obj.get("id"))
+
+def program_map_ids(prog):
+    values = prog.get("map_ids") or []
+    if not isinstance(values, list):
+        return []
+    result = []
+    for value in values:
+        parsed = as_int(value)
+        if parsed is not None:
+            result.append(parsed)
+    return result
+
+def parse_prog_array_entry(raw):
+    formatted = raw.get("formatted")
+    formatted_key = formatted.get("key") if isinstance(formatted, dict) else None
+    formatted_value = formatted.get("value") if isinstance(formatted, dict) else None
+    key = raw.get("key")
+    value = raw.get("value")
+
+    slot = first(
+        int_from_raw(formatted_key),
+        int_from_object(formatted_key, ["slot", "index", "key"]),
+        int_from_raw(key),
+        int_from_object(key, ["slot", "index", "key"]),
+    )
+    target = first(
+        int_from_raw(formatted_value),
+        int_from_object(formatted_value, ["prog_id", "progId", "program_id", "id"]),
+        int_from_raw(value),
+        int_from_object(value, ["prog_id", "progId", "program_id", "id"]),
+    )
+    return slot, target
+
+progs = items_from_json(out / "prog-show.json", ["programs", "progs"])
+maps = items_from_json(out / "map-show.json", ["maps"])
+prog_by_id = {pid: prog for prog in progs if (pid := prog_id(prog)) is not None}
+map_by_id = {mid: map_obj for map_obj in maps if (mid := map_id(map_obj)) is not None}
+
+seed_ids = {
+    pid
+    for pid, prog in prog_by_id.items()
+    if str(prog.get("type", "")).replace("-", "_").lower() in L3_TYPES
+}
+previous_ids = read_ids("all-program-ids.txt")
+all_ids = set(previous_ids or seed_ids)
+
+targets = []
+target_ids = set()
+for dump_path in sorted((out / "map").glob("*.dump.json")):
+    try:
+        current_map_id = int(dump_path.name.split("_", 1)[0])
+    except ValueError:
+        continue
+    entries = load_json(dump_path)
+    if not isinstance(entries, list):
+        continue
+    for entry_index, raw in enumerate(entries):
+        if not isinstance(raw, dict):
+            continue
+        slot, target_id = parse_prog_array_entry(raw)
+        if slot is None or target_id is None:
+            continue
+        targets.append((current_map_id, slot, target_id, entry_index))
+        target_ids.add(target_id)
+
+if mode in {"targets", "summary"}:
+    all_ids |= target_ids
+
+prog_array_map_ids = set()
+for pid in all_ids:
+    prog = prog_by_id.get(pid)
+    if not prog:
+        continue
+    for mid in program_map_ids(prog):
+        map_obj = map_by_id.get(mid)
+        if map_obj and map_type(map_obj) == "prog_array":
+            prog_array_map_ids.add(mid)
+
+def prog_row(pid, relation):
+    prog = prog_by_id.get(pid, {})
+    return (
+        pid,
+        str(prog.get("type", "unknown")),
+        str(prog.get("name", f"prog_{pid}") or f"prog_{pid}"),
+        relation,
+    )
+
+with (out / "seed-l3-programs.tsv").open("w") as handle:
+    for pid in sorted(seed_ids):
+        handle.write("\t".join(map(str, prog_row(pid, "l3-seed"))) + "\n")
+
+with (out / "all-programs.tsv").open("w") as handle:
+    for pid in sorted(all_ids):
+        relation = "l3-seed" if pid in seed_ids else "tail-call-target"
+        handle.write("\t".join(map(str, prog_row(pid, relation))) + "\n")
+
+with (out / "prog-array-maps.tsv").open("w") as handle:
+    for mid in sorted(prog_array_map_ids):
+        map_obj = map_by_id.get(mid, {})
+        handle.write(
+            f"{mid}\t{map_obj.get('type', 'unknown')}\t{map_obj.get('name', f'map_{mid}')}\n"
+        )
+
+with (out / "tail-call-targets.tsv").open("w") as handle:
+    for mid, slot, target_id, entry_index in sorted(targets):
+        prog = prog_by_id.get(target_id, {})
+        handle.write(
+            f"{mid}\t{slot}\t{target_id}\t{entry_index}\t"
+            f"{prog.get('type', 'unknown')}\t{prog.get('name', f'prog_{target_id}')}\n"
+        )
+
+write_ids("all-program-ids.txt", all_ids)
+write_ids("prog-array-map-ids.txt", prog_array_map_ids)
+
+changed = all_ids != previous_ids
+(out / "state-changed").write_text("1\n" if changed else "0\n")
+
+if mode == "summary":
+    summary = [
+        f"Output directory: {out}",
+        f"L3 seed programs: {len(seed_ids)}",
+        f"All collected programs: {len(all_ids)}",
+        f"Prog-array maps: {len(prog_array_map_ids)}",
+        f"Resolved tail-call entries: {len(targets)}",
+        "",
+        "L3 program types: sched_cls, sched_act, netfilter, flow_dissector",
+    ]
+    (out / "collection-summary.txt").write_text("\n".join(summary) + "\n")
+PY
+}
+
+dump_programs() {
+  while IFS=$'\t' read -r id type name relation; do
+    [ -n "${id:-}" ] || continue
+    if already_dumped "$id" "$OUT/dumped-program-ids.txt"; then
+      continue
+    fi
+
+    local safe
+    safe="$(safe_name "$name")"
+    local prefix="$OUT/prog/${id}_${type}_${safe}"
+    echo "Dumping program $id ($type $name, $relation)"
+
+    run_capture "$prefix.show.json" "$prefix.show.err" \
+      "${SUDO_PREFIX[@]}" "$BPFTOOL" -jp prog show id "$id"
+    run_capture "$prefix.xlated-linum.json" "$prefix.xlated-linum.err" \
+      "${SUDO_PREFIX[@]}" "$BPFTOOL" -jp prog dump xlated id "$id" linum
+    run_capture "$prefix.xlated.json" "$prefix.xlated.err" \
+      "${SUDO_PREFIX[@]}" "$BPFTOOL" -jp prog dump xlated id "$id"
+    run_capture "$prefix.xlated-linum.txt" "$prefix.xlated-linum.txt.err" \
+      "${SUDO_PREFIX[@]}" "$BPFTOOL" prog dump xlated id "$id" linum
+    run_capture "$prefix.jited.json" "$prefix.jited.err" \
+      "${SUDO_PREFIX[@]}" "$BPFTOOL" -jp prog dump jited id "$id"
+    run_capture "$prefix.jited.txt" "$prefix.jited.txt.err" \
+      "${SUDO_PREFIX[@]}" "$BPFTOOL" prog dump jited id "$id"
+
+    record_dumped "$id" "$OUT/dumped-program-ids.txt"
+  done < "$OUT/all-programs.tsv"
+}
+
+dump_prog_array_maps() {
+  while IFS=$'\t' read -r id type name; do
+    [ -n "${id:-}" ] || continue
+    if already_dumped "$id" "$OUT/dumped-map-ids.txt"; then
+      continue
+    fi
+
+    local safe
+    safe="$(safe_name "$name")"
+    local prefix="$OUT/map/${id}_${safe}"
+    echo "Dumping prog-array map $id ($name)"
+
+    run_capture "$prefix.show.json" "$prefix.show.err" \
+      "${SUDO_PREFIX[@]}" "$BPFTOOL" -jp map show id "$id"
+    run_capture "$prefix.dump.json" "$prefix.dump.err" \
+      "${SUDO_PREFIX[@]}" "$BPFTOOL" -jp map dump id "$id"
+
+    record_dumped "$id" "$OUT/dumped-map-ids.txt"
+  done < "$OUT/prog-array-maps.tsv"
+}
+
+dump_tc_filters() {
+  if ! command -v ip >/dev/null 2>&1 || ! command -v tc >/dev/null 2>&1; then
+    return
+  fi
+
+  ip -json link show >"$OUT/ip-link.json" 2>"$OUT/ip-link.err" || true
+  ip -o link show 2>/dev/null | awk -F': ' '{print $2}' | cut -d@ -f1 | sort -u |
+    while IFS= read -r dev; do
+      [ -n "$dev" ] || continue
+      local safe
+      safe="$(safe_name "$dev")"
+      run_capture "$OUT/tc/${safe}.ingress.json" "$OUT/tc/${safe}.ingress.err" \
+        "${SUDO_PREFIX[@]}" tc -s -d -j filter show dev "$dev" ingress
+      run_capture "$OUT/tc/${safe}.egress.json" "$OUT/tc/${safe}.egress.err" \
+        "${SUDO_PREFIX[@]}" tc -s -d -j filter show dev "$dev" egress
+    done
+}
+
+echo "Collecting eBPF L3 program data into $OUT"
+{
+  date
+  uname -srmo
+  "$BPFTOOL" version 2>/dev/null || true
+  ip -V 2>/dev/null || true
+  tc -V 2>/dev/null || true
+} >"$OUT/environment.txt" 2>"$OUT/environment.err"
+
+run_capture "$OUT/prog-show.json" "$OUT/prog-show.err" \
+  "${SUDO_PREFIX[@]}" "$BPFTOOL" -jp prog show
+run_capture "$OUT/map-show.json" "$OUT/map-show.err" \
+  "${SUDO_PREFIX[@]}" "$BPFTOOL" -jp map show
+run_capture "$OUT/net-show.json" "$OUT/net-show.err" \
+  "${SUDO_PREFIX[@]}" "$BPFTOOL" -jp net show
+dump_tc_filters
+
+refresh_state init
+for depth in $(seq 1 "$MAX_TAIL_CALL_DEPTH"); do
+  echo "Discovery pass $depth/$MAX_TAIL_CALL_DEPTH"
+  dump_programs
+  refresh_state maps
+  dump_prog_array_maps
+  refresh_state targets
+  if [ "$(cat "$OUT/state-changed" 2>/dev/null || echo 0)" = "0" ]; then
+    break
+  fi
+done
+dump_programs
+refresh_state summary
+
+tar -C "$(dirname "$OUT")" -czf "$ARCHIVE" "$(basename "$OUT")"
+echo "Created: $ARCHIVE"
+cat "$OUT/collection-summary.txt"
