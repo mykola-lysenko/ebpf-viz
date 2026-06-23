@@ -497,10 +497,13 @@ function CgroupNodeRow({
                                   })
                                 }
                               >
-                                <span className="font-medium">
-                                  {prediction.summary}
+                                <span className="block font-medium">
+                                  verdict: {prediction.verdictSummary}
                                 </span>
-                                <span className="ml-1 opacity-75">
+                                <span className="block opacity-80">
+                                  effects: {prediction.effectSummary}
+                                </span>
+                                <span className="opacity-75">
                                   confidence: {prediction.confidence}
                                 </span>
                                 {firstTerminal && (
@@ -580,7 +583,7 @@ function CgroupNodeRow({
                                       )}
                                       title={predictionStep.title}
                                     >
-                                      {predictionStep.label}
+                                      verdict: {predictionStep.label}
                                     </span>
                                   )}
                                   {predictionStep?.hasSideEffects && (

@@ -384,13 +384,19 @@ function StepDetails({
             VERDICT_TONE_CLASSES[step.tone]
           )}
         >
-          {step.label}
+          verdict: {step.label}
         </span>
-        {step.hasSideEffects && (
-          <span className="rounded border border-cyan-500/25 bg-cyan-500/5 px-1.5 py-0.5 text-[10px] font-mono text-cyan-300/80">
-            effects: {step.sideEffectLabels.join(", ")}
-          </span>
-        )}
+        <span
+          className={cn(
+            "rounded border px-1.5 py-0.5 text-[10px] font-mono",
+            step.hasSideEffects
+              ? "border-cyan-500/25 bg-cyan-500/5 text-cyan-300/80"
+              : "border-border/60 bg-muted/20 text-muted-foreground/70"
+          )}
+        >
+          effects:{" "}
+          {step.hasSideEffects ? step.sideEffectLabels.join(", ") : "none"}
+        </span>
         {step.tailCallContinuations.length > 0 && (
           <span
             className="rounded border border-amber-500/25 bg-amber-500/5 px-1.5 py-0.5 text-[10px] font-mono text-amber-300/80"
@@ -518,7 +524,10 @@ export function PacketChainDetailsSheet({
                   <Route className="mt-0.5 h-4 w-4 shrink-0 text-primary" />
                   <div className="min-w-0">
                     <div className="text-sm font-medium text-foreground">
-                      {prediction.summary}
+                      verdict: {prediction.verdictSummary}
+                    </div>
+                    <div className="mt-1 text-xs text-cyan-300/85">
+                      effects: {prediction.effectSummary}
                     </div>
                     <div className="mt-1 text-xs text-muted-foreground">
                       {formatConfidence(prediction)}

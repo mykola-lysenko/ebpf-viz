@@ -327,6 +327,11 @@ export interface PacketVerdictExplanation {
 
 export interface PacketChainPrediction {
   chainId: string;
+  /** Verdict-only summary; side effects are reported separately. */
+  verdictSummary: string;
+  /** Side-effect-only summary. */
+  effectSummary: string;
+  /** Backward-compatible alias for verdictSummary. */
   summary: string;
   confidence: PacketChainPredictionConfidence;
   possibleOutcomes: PacketVerdict[];

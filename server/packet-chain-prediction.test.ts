@@ -595,10 +595,12 @@ describe("predictPacketChain", () => {
       alwaysPass: true,
       hasSideEffects: true,
       sideEffectLabels: ["updates maps", "emits events"],
+      summary:
+        "All analyzed exits pass; packets should continue through this chain.",
+      verdictSummary:
+        "All analyzed exits pass; packets should continue through this chain.",
+      effectSummary: "updates maps, emits events",
     });
-    expect(prediction?.summary).toContain(
-      "Known side effects: updates maps, emits events."
-    );
     expect(prediction?.steps[0]).toMatchObject({
       hasSideEffects: true,
       sideEffectLabels: ["updates maps", "emits events"],

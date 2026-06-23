@@ -711,18 +711,13 @@ function stepDefinitelyTerminates(
 function summarizeChain(
   chain: ProgramChain,
   outcomes: PacketVerdict[],
-  hasUnknownBehavior: boolean,
-  sideEffectLabels: string[]
+  hasUnknownBehavior: boolean
 ): string {
   const semantics = chain.packetContext?.semantics;
-  const sideEffectText =
-    sideEffectLabels.length > 0
-      ? ` Known side effects: ${sideEffectLabels.join(", ")}.`
-      : "";
 
   if (!semantics || !hasModeledActionSemantics(semantics)) {
     const family = chain.packetContext?.family ?? chain.hookType;
-    return `Return-value semantics for this ${family} hook are not modeled yet.${sideEffectText}`;
+    return `Return-value semantics for this ${family} hook are not modeled yet.`;
   }
 
   const subject =
@@ -731,7 +726,7 @@ function summarizeChain(
       : "Packets";
 
   if (outcomes.length === 1 && outcomes[0] === "pass" && !hasUnknownBehavior) {
-    return `All analyzed exits pass; ${subject.toLowerCase()} should continue through this chain.${sideEffectText}`;
+    return `All analyzed exits pass; ${subject.toLowerCase()} should continue through this chain.`;
   }
 
   const actions: string[] = [];
@@ -750,12 +745,18 @@ function summarizeChain(
     actions.push("take another hook-specific action");
 
   if (actions.length > 0 && hasUnknownBehavior) {
-    return `${subject} may ${actions.join(", ")}; some exits remain unknown.${sideEffectText}`;
+    return `${subject} may ${actions.join(", ")}; some exits remain unknown.`;
   }
   if (actions.length > 0) {
-    return `${subject} may ${actions.join(" or ")} in this chain.${sideEffectText}`;
+    return `${subject} may ${actions.join(" or ")} in this chain.`;
   }
-  return `${subject} outcome is unknown for this chain.${sideEffectText}`;
+  return `${subject} outcome is unknown for this chain.`;
+}
+
+function summarizeChainEffects(sideEffectLabels: string[]): string {
+  return sideEffectLabels.length > 0
+    ? sideEffectLabels.join(", ")
+    : "none detected";
 }
 
 export function predictPacketChain(
@@ -864,15 +865,18 @@ export function predictPacketChain(
       ? "unknown"
       : "partial"
     : "high";
+  const verdictSummary = summarizeChain(
+    chain,
+    outcomes,
+    hasUnknownBehavior
+  );
+  const effectSummary = summarizeChainEffects(sideEffectLabels);
 
   return {
     chainId: chain.hookId,
-    summary: summarizeChain(
-      chain,
-      outcomes,
-      hasUnknownBehavior,
-      sideEffectLabels
-    ),
+    verdictSummary,
+    effectSummary,
+    summary: verdictSummary,
     confidence,
     possibleOutcomes: outcomes,
     alwaysPass,
