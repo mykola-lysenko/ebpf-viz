@@ -144,9 +144,9 @@ for tool in ssh scp; do
 done
 
 setup_ssh_mux() {
-  local safe_remote
-  safe_remote="$(printf "%s" "$REMOTE" | tr -c 'A-Za-z0-9_.-' '_')"
-  SSH_CONTROL_PATH="${TMPDIR:-/tmp}/ebpf-viz-${safe_remote}-$$.ssh"
+  # OpenSSH Unix-domain socket paths have a small platform-dependent limit.
+  # macOS TMPDIR is often under /var/folders/... and can exceed that limit.
+  SSH_CONTROL_PATH="/tmp/ebpf-viz-standalone-$$.ssh"
   SSH_COMMON_ARGS=(
     -o ControlMaster=auto
     -o ControlPath="$SSH_CONTROL_PATH"
