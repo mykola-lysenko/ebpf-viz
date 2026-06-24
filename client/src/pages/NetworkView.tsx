@@ -70,6 +70,81 @@ const NIC_LAYERS = OSI_LAYERS.filter(l => l.key === "L2" || l.key === "L3");
 // Layers shown for sockmap interfaces
 const SOCKMAP_LAYERS = OSI_LAYERS.filter(l => l.key === "L4" || l.key === "L7");
 
+type ChainProgram = ProgramChain["programs"][number];
+
+function formatTcStats(stats: NonNullable<ChainProgram["tc"]>["stats"]): string {
+  if (!stats) return "";
+  const parts: string[] = [];
+  if (stats.packets != null) parts.push(`${formatRunCnt(stats.packets)} pkts`);
+  if (stats.bytes != null) parts.push(`${formatRunCnt(stats.bytes)} bytes`);
+  if (stats.drops != null && stats.drops > 0) {
+    parts.push(`${formatRunCnt(stats.drops)} drops`);
+  }
+  return parts.join(", ");
+}
+
+function TcFilterMetadata({ tc }: { tc?: ChainProgram["tc"] }) {
+  if (!tc) return null;
+  const statsText = formatTcStats(tc.stats);
+  const title = [
+    "Detailed TC filter metadata from tc -s -d -j filter show.",
+    tc.priority != null ? `priority/pref: ${tc.priority}` : null,
+    tc.chain != null ? `chain: ${tc.chain}` : null,
+    tc.handle ? `handle: ${tc.handle}` : null,
+    tc.protocol ? `protocol: ${tc.protocol}` : null,
+    tc.directAction != null ? `direct-action: ${tc.directAction}` : null,
+    tc.actionCount != null ? `actions: ${tc.actionCount}` : null,
+    statsText ? `action stats: ${statsText}` : null,
+  ]
+    .filter(Boolean)
+    .join("\n");
+
+  return (
+    <>
+      {tc.priority != null && (
+        <span
+          className="rounded border border-violet-500/25 bg-violet-500/5 px-1.5 py-0.5 text-[9px] font-mono text-violet-300/80"
+          title={title}
+        >
+          pref {tc.priority}
+        </span>
+      )}
+      {tc.handle && (
+        <span
+          className="rounded border border-violet-500/20 bg-violet-500/5 px-1.5 py-0.5 text-[9px] font-mono text-violet-300/70"
+          title={title}
+        >
+          handle {tc.handle}
+        </span>
+      )}
+      {tc.directAction && (
+        <span
+          className="rounded border border-sky-500/25 bg-sky-500/5 px-1.5 py-0.5 text-[9px] font-mono text-sky-300/80"
+          title={title}
+        >
+          direct-action
+        </span>
+      )}
+      {tc.actionCount != null && tc.actionCount > 0 && (
+        <span
+          className="rounded border border-slate-500/25 bg-slate-500/5 px-1.5 py-0.5 text-[9px] font-mono text-slate-300/80"
+          title={title}
+        >
+          actions {tc.actionCount}
+        </span>
+      )}
+      {tc.stats?.drops != null && tc.stats.drops > 0 && (
+        <span
+          className="rounded border border-red-500/25 bg-red-500/5 px-1.5 py-0.5 text-[9px] font-mono text-red-300/80"
+          title={title}
+        >
+          tc drops {formatRunCnt(tc.stats.drops)}
+        </span>
+      )}
+    </>
+  );
+}
+
 function OsiLayerRow({
   layerDef,
   programs,
@@ -303,6 +378,7 @@ function OsiLayerRow({
                                 </span>
                               )}
                               <ProgBadge program={p} />
+                              <TcFilterMetadata tc={row.chainProgram.tc} />
                               {predictionStep && (
                                 <span
                                   className={cn(
