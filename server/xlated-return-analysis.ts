@@ -24,6 +24,12 @@ type RegisterWrite =
   | { kind: "map"; reg: RegisterName; mapId: number; insn: XlatedInsn }
   | { kind: "copy"; reg: RegisterName; source: RegisterName; insn: XlatedInsn }
   | {
+      kind: "helper-return";
+      reg: "r0";
+      helper: string;
+      insn: XlatedInsn;
+    }
+  | {
       kind: "local-call";
       reg: "r0";
       targetIndex: number;
@@ -34,8 +40,20 @@ type RegisterWrite =
 type ResolveResult =
   | { kind: "const"; value: number; assignmentInsn?: XlatedInsn }
   | { kind: "const-set"; values: number[]; assignmentInsn?: XlatedInsn }
+  | { kind: "helper-return"; helper: string; assignmentInsn?: XlatedInsn }
+  | {
+      kind: "const-helper-set";
+      values: number[];
+      helperReturns: HelperReturnResult[];
+      assignmentInsn?: XlatedInsn;
+    }
   | { kind: "map"; mapId: number; assignmentInsn?: XlatedInsn }
   | { kind: "unknown"; reason: UnknownReason; assignmentInsn?: XlatedInsn };
+
+interface HelperReturnResult {
+  helper: string;
+  assignmentInsn?: XlatedInsn;
+}
 
 const RETURN_REGISTER = "r0" satisfies RegisterName;
 const CALL_CLOBBERED_REGS: RegisterName[] = [
@@ -49,6 +67,7 @@ const CALL_CLOBBERED_REGS: RegisterName[] = [
 const MAX_RESOLUTION_STEPS = 10_000;
 const MAX_BRANCH_EVIDENCE = 4;
 const MAX_BRANCH_WALK_STEPS = 32;
+const MODELED_HELPER_RETURNS = new Set(["redirect", "redirect_map"]);
 
 function isExitInsn(disasm: string): boolean {
   return /^\(95\)\s+exit\b/.test(disasm.trim());
@@ -92,6 +111,20 @@ function localCallTargetIndex(insn: XlatedInsn): number | undefined {
   return Number.isFinite(targetIndex) ? targetIndex : undefined;
 }
 
+function callHelperName(insn: XlatedInsn): string | undefined {
+  const body = insn.disasm.trim().replace(/^\([0-9a-fA-F]+\)\s+/, "");
+  const match = body.match(/^call\s+(\S+)/);
+  if (!match) return undefined;
+
+  const helper = match[1].split("#")[0].replace(/^bpf_/, "").toLowerCase();
+  return helper || undefined;
+}
+
+function modeledHelperReturnName(insn: XlatedInsn): string | undefined {
+  const helper = callHelperName(insn);
+  return helper && MODELED_HELPER_RETURNS.has(helper) ? helper : undefined;
+}
+
 function sourceEvidence(
   insn: XlatedInsn
 ): Pick<
@@ -120,6 +153,16 @@ function parseRegisterWrites(insn: XlatedInsn): RegisterWrite[] {
     if (targetIndex !== undefined) {
       return [
         { kind: "local-call", reg: RETURN_REGISTER, targetIndex, insn },
+        ...CALL_CLOBBERED_REGS.filter(reg => reg !== RETURN_REGISTER).map(
+          reg => ({ kind: "unknown" as const, reg, insn })
+        ),
+      ];
+    }
+
+    const helper = modeledHelperReturnName(insn);
+    if (helper) {
+      return [
+        { kind: "helper-return", reg: RETURN_REGISTER, helper, insn },
         ...CALL_CLOBBERED_REGS.filter(reg => reg !== RETURN_REGISTER).map(
           reg => ({ kind: "unknown" as const, reg, insn })
         ),
@@ -317,6 +360,66 @@ function extractBranchEvidence(
   return evidence.length > 0 ? evidence.reverse() : undefined;
 }
 
+function constantResults(
+  result: ResolveResult
+): Array<{ value: number; assignmentInsn?: XlatedInsn }> {
+  if (result.kind === "const") {
+    return [{ value: result.value, assignmentInsn: result.assignmentInsn }];
+  }
+  if (result.kind === "const-set") {
+    return result.values.map(value => ({
+      value,
+      assignmentInsn: result.assignmentInsn,
+    }));
+  }
+  if (result.kind === "const-helper-set") {
+    return result.values.map(value => ({
+      value,
+      assignmentInsn: result.assignmentInsn,
+    }));
+  }
+  return [];
+}
+
+function helperReturnResults(result: ResolveResult): HelperReturnResult[] {
+  if (result.kind === "helper-return") {
+    return [{ helper: result.helper, assignmentInsn: result.assignmentInsn }];
+  }
+  if (result.kind === "const-helper-set") {
+    return result.helperReturns;
+  }
+  return [];
+}
+
+function commonAssignmentInsn(
+  assignments: Array<{ assignmentInsn?: XlatedInsn }>
+): XlatedInsn | undefined {
+  const firstAssignmentIndex = assignments[0]?.assignmentInsn?.index;
+  if (
+    firstAssignmentIndex === undefined ||
+    assignments.some(
+      result => result.assignmentInsn?.index !== firstAssignmentIndex
+    )
+  ) {
+    return undefined;
+  }
+  return assignments[0]?.assignmentInsn;
+}
+
+function uniqueHelperReturns(
+  helperReturns: HelperReturnResult[]
+): HelperReturnResult[] {
+  const seen = new Set<string>();
+  const unique: HelperReturnResult[] = [];
+  for (const helperReturn of helperReturns) {
+    const key = `${helperReturn.helper}:${helperReturn.assignmentInsn?.index ?? ""}:${helperReturn.assignmentInsn?.disasm ?? ""}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    unique.push(helperReturn);
+  }
+  return unique;
+}
+
 function mergeResults(results: ResolveResult[]): ResolveResult {
   if (results.length === 0) {
     return { kind: "unknown", reason: "no-direct-assignment" };
@@ -328,40 +431,55 @@ function mergeResults(results: ResolveResult[]): ResolveResult {
   );
   if (unknown) return unknown;
 
-  const constants = results.filter(
-    (
-      result
-    ): result is Extract<ResolveResult, { kind: "const" | "const-set" }> =>
-      result.kind === "const" || result.kind === "const-set"
+  const constants = results.flatMap(constantResults);
+  const helperReturns = uniqueHelperReturns(
+    results.flatMap(helperReturnResults)
   );
-  if (constants.length === results.length) {
-    const values = Array.from(
-      new Set(
-        constants.flatMap(result =>
-          result.kind === "const" ? [result.value] : result.values
-        )
-      )
-    ).sort((a, b) => a - b);
-    if (values.length === 0) return { kind: "unknown", reason: "no-direct-assignment" };
+  const maps = results.filter(
+    (result): result is Extract<ResolveResult, { kind: "map" }> =>
+      result.kind === "map"
+  );
 
-    const firstAssignmentIndex = constants[0]?.assignmentInsn?.index;
-    const assignmentInsn =
-      firstAssignmentIndex !== undefined &&
-      constants.every(
-        result => result.assignmentInsn?.index === firstAssignmentIndex
-      )
-        ? constants[0]?.assignmentInsn
-        : undefined;
+  if (maps.length > 0 && maps.length !== results.length) {
+    return { kind: "unknown", reason: "conflicting-values" };
+  }
+
+  if (helperReturns.length > 0) {
+    const values = Array.from(
+      new Set(constants.map(result => result.value))
+    ).sort((a, b) => a - b);
+    const assignmentInsn = commonAssignmentInsn(constants);
+
+    if (values.length === 0 && helperReturns.length === 1) {
+      return {
+        kind: "helper-return",
+        helper: helperReturns[0].helper,
+        assignmentInsn: helperReturns[0].assignmentInsn,
+      };
+    }
+
+    return { kind: "const-helper-set", values, helperReturns, assignmentInsn };
+  }
+
+  if (
+    results.every(
+      result => result.kind === "const" || result.kind === "const-set"
+    )
+  ) {
+    const values = Array.from(
+      new Set(constants.map(result => result.value))
+    ).sort((a, b) => a - b);
+    if (values.length === 0) {
+      return { kind: "unknown", reason: "no-direct-assignment" };
+    }
+
+    const assignmentInsn = commonAssignmentInsn(constants);
 
     return values.length === 1
       ? { kind: "const", value: values[0], assignmentInsn }
       : { kind: "const-set", values, assignmentInsn };
   }
 
-  const maps = results.filter(
-    (result): result is Extract<ResolveResult, { kind: "map" }> =>
-      result.kind === "map"
-  );
   if (maps.length === results.length) {
     const firstMapId = maps[0]?.mapId;
     if (
@@ -384,6 +502,52 @@ function mergeResults(results: ResolveResult[]): ResolveResult {
   }
 
   return { kind: "unknown", reason: "conflicting-values" };
+}
+
+function propagateResolvedAssignment(
+  source: ResolveResult,
+  assignmentInsn: XlatedInsn
+): ResolveResult {
+  if (source.kind === "const") {
+    return {
+      kind: "const",
+      value: source.value,
+      assignmentInsn,
+    };
+  }
+  if (source.kind === "const-set") {
+    return {
+      kind: "const-set",
+      values: source.values,
+      assignmentInsn,
+    };
+  }
+  if (source.kind === "helper-return") {
+    return {
+      kind: "helper-return",
+      helper: source.helper,
+      assignmentInsn: source.assignmentInsn ?? assignmentInsn,
+    };
+  }
+  if (source.kind === "const-helper-set") {
+    return {
+      kind: "const-helper-set",
+      values: source.values,
+      helperReturns: source.helperReturns,
+      assignmentInsn,
+    };
+  }
+  if (source.kind === "map") {
+    return { kind: "map", mapId: source.mapId, assignmentInsn };
+  }
+  return {
+    kind: "unknown",
+    reason:
+      source.reason === "no-direct-assignment"
+        ? "dynamic-assignment"
+        : source.reason,
+    assignmentInsn: source.assignmentInsn ?? assignmentInsn,
+  };
 }
 
 function writeForRegister(
@@ -448,58 +612,20 @@ function createRegisterResolver(
       };
     } else if (write.kind === "copy") {
       const source = resolveBefore(pos, write.source);
-      result =
-        source.kind === "const"
-          ? { kind: "const", value: source.value, assignmentInsn: write.insn }
-          : source.kind === "const-set"
-            ? {
-                kind: "const-set",
-                values: source.values,
-                assignmentInsn: write.insn,
-              }
-          : source.kind === "map"
-            ? { kind: "map", mapId: source.mapId, assignmentInsn: write.insn }
-            : {
-                kind: "unknown",
-                reason:
-                  source.reason === "no-direct-assignment"
-                    ? "dynamic-assignment"
-                    : source.reason,
-                assignmentInsn: source.assignmentInsn ?? write.insn,
-            };
+      result = propagateResolvedAssignment(source, write.insn);
+    } else if (write.kind === "helper-return") {
+      result = {
+        kind: "helper-return",
+        helper: write.helper,
+        assignmentInsn: write.insn,
+      };
     } else {
       if (write.kind === "local-call") {
         const callResult = resolveLocalCall?.(write.targetIndex) ?? {
           kind: "unknown",
           reason: "dynamic-assignment",
         };
-        result =
-          callResult.kind === "const"
-            ? {
-                kind: "const",
-                value: callResult.value,
-                assignmentInsn: write.insn,
-              }
-            : callResult.kind === "const-set"
-              ? {
-                  kind: "const-set",
-                  values: callResult.values,
-                  assignmentInsn: write.insn,
-                }
-              : callResult.kind === "map"
-                ? {
-                    kind: "map",
-                    mapId: callResult.mapId,
-                    assignmentInsn: write.insn,
-                  }
-                : {
-                    kind: "unknown",
-                    reason:
-                      callResult.reason === "no-direct-assignment"
-                        ? "dynamic-assignment"
-                        : callResult.reason,
-                    assignmentInsn: callResult.assignmentInsn ?? write.insn,
-                  };
+        result = propagateResolvedAssignment(callResult, write.insn);
       } else {
         result = {
           kind: "unknown",
@@ -667,7 +793,10 @@ function toKnownExit(
 
 function toKnownExits(
   exitInsn: XlatedInsn,
-  resolved: Extract<ResolveResult, { kind: "const" | "const-set" }>,
+  resolved: Extract<
+    ResolveResult,
+    { kind: "const" | "const-set" | "const-helper-set" }
+  >,
   branchEvidence?: XlatedBranchEvidence[]
 ): XlatedReturnExit[] {
   if (resolved.kind === "const") {
@@ -699,6 +828,30 @@ function toUnknownExit(
     ...(branchEvidence ? { branchEvidence } : {}),
     ...sourceEvidence(resolved.assignmentInsn ?? exitInsn),
   };
+}
+
+function toHelperUnknownExits(
+  exitInsn: XlatedInsn,
+  resolved: Extract<
+    ResolveResult,
+    { kind: "helper-return" | "const-helper-set" }
+  >,
+  branchEvidence?: XlatedBranchEvidence[]
+): XlatedReturnExit[] {
+  const helperReturns =
+    resolved.kind === "helper-return"
+      ? [{ helper: resolved.helper, assignmentInsn: resolved.assignmentInsn }]
+      : resolved.helperReturns;
+
+  return helperReturns.map(helperReturn => ({
+    exitIndex: exitInsn.index,
+    exitDisasm: exitInsn.disasm,
+    assignmentIndex: helperReturn.assignmentInsn?.index,
+    assignmentDisasm: helperReturn.assignmentInsn?.disasm,
+    reason: "dynamic-assignment" as const,
+    ...(branchEvidence ? { branchEvidence } : {}),
+    ...sourceEvidence(helperReturn.assignmentInsn ?? exitInsn),
+  }));
 }
 
 /**
@@ -739,7 +892,11 @@ export function analyzeXlatedReturns(
       predecessors,
       parsedInsn.pos
     );
-    if (resolved.kind === "const" || resolved.kind === "const-set") {
+    if (
+      resolved.kind === "const" ||
+      resolved.kind === "const-set" ||
+      resolved.kind === "const-helper-set"
+    ) {
       for (const exit of toKnownExits(
         parsedInsn.insn,
         resolved,
@@ -747,9 +904,25 @@ export function analyzeXlatedReturns(
       )) {
         constantExits.push(exit);
         if (exit.value !== undefined) {
-          constantCounts.set(exit.value, (constantCounts.get(exit.value) ?? 0) + 1);
+          constantCounts.set(
+            exit.value,
+            (constantCounts.get(exit.value) ?? 0) + 1
+          );
         }
       }
+    }
+
+    if (
+      resolved.kind === "helper-return" ||
+      resolved.kind === "const-helper-set"
+    ) {
+      unknownExits.push(
+        ...toHelperUnknownExits(parsedInsn.insn, resolved, branchEvidence)
+      );
+      continue;
+    }
+
+    if (resolved.kind === "const" || resolved.kind === "const-set") {
       continue;
     }
 

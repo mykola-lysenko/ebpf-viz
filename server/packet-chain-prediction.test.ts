@@ -390,27 +390,66 @@ describe("predictPacketChain", () => {
     const prediction = predictPacketChain(tcChain(), id => analyses.get(id));
 
     expect(prediction).toMatchObject({
-      possibleOutcomes: ["redirect", "unknown", "pass"],
+      possibleOutcomes: ["drop", "redirect"],
       alwaysPass: false,
-      hasUnknownBehavior: true,
-      confidence: "partial",
+      hasUnknownBehavior: false,
+      confidence: "high",
     });
     expect(prediction?.steps[1]).toMatchObject({
-      label: "can redirect",
-      tone: "redirect",
-      verdicts: ["redirect", "unknown"],
+      label: "can drop",
+      tone: "drop",
+      verdicts: ["drop", "redirect"],
+      reachability: "always",
+      canTerminateChain: true,
+      definitelyTerminatesChain: true,
+    });
+    expect(prediction?.steps[2].reachability).toBe("not-reached");
+    expect(prediction?.steps[1].verdictExplanations).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          verdict: "drop",
+          summary:
+            "Can drop if bpf_redirect fails at exit 9 from redirect.bpf.c:42 - return bpf_redirect(skb->ifindex, BPF_F_INGRESS);",
+        }),
+        expect.objectContaining({
+          verdict: "redirect",
+          summary:
+            "Can redirect via bpf_redirect helper return at exit 9 from redirect.bpf.c:42 - return bpf_redirect(skb->ifindex, BPF_F_INGRESS);",
+        }),
+      ])
+    );
+  });
+
+  it("keeps pass paths when a shared exit can return pass or bpf_redirect", () => {
+    const redirectAnalysis = returnAnalysis([0], { unknown: true });
+    redirectAnalysis.unknownExits[0] = {
+      exitIndex: 9,
+      exitDisasm: "(95) exit",
+      assignmentIndex: 8,
+      assignmentDisasm: "(85) call bpf_redirect#23",
+      reason: "dynamic-assignment",
+    };
+    const analyses = new Map([
+      [1, returnAnalysis([0])],
+      [2, redirectAnalysis],
+      [3, returnAnalysis([0])],
+    ]);
+
+    const prediction = predictPacketChain(tcChain(), id => analyses.get(id));
+
+    expect(prediction).toMatchObject({
+      possibleOutcomes: ["drop", "redirect", "pass"],
+      hasUnknownBehavior: false,
+      confidence: "high",
+    });
+    expect(prediction?.steps[1]).toMatchObject({
+      verdicts: ["drop", "redirect", "pass"],
       reachability: "always",
       canTerminateChain: true,
       definitelyTerminatesChain: false,
+      hasUnknownBehavior: false,
     });
     expect(prediction?.steps[2].reachability).toBe("conditional");
-    expect(prediction?.steps[1].verdictExplanations).toEqual([
-      expect.objectContaining({
-        verdict: "redirect",
-        summary:
-          "Can redirect via bpf_redirect return at exit 9; exact numeric return is runtime-dependent from redirect.bpf.c:42 - return bpf_redirect(skb->ifindex, BPF_F_INGRESS);",
-      }),
-    ]);
   });
 
   it("explains tail calls with resolved prog-array target programs", () => {

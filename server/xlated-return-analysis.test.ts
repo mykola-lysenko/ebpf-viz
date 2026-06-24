@@ -255,7 +255,9 @@ describe("analyzeXlatedReturns", () => {
         { value: 2, exitCount: 1 },
       ],
     });
-    expect(result.constantExits.map(exit => [exit.exitIndex, exit.value])).toEqual([
+    expect(
+      result.constantExits.map(exit => [exit.exitIndex, exit.value])
+    ).toEqual([
       [1, -1],
       [1, 2],
     ]);
@@ -329,6 +331,48 @@ describe("analyzeXlatedReturns", () => {
     });
   });
 
+  it("preserves constants and helper returns merged at a shared subprogram exit", () => {
+    const result = analyzeXlatedReturns([
+      insn(0, "(85) call pc+2#bpf_prog_redirector"),
+      insn(1, "(95) exit"),
+      insn(2, "(b7) r1 = 0"),
+      insn(3, "(15) if r1 == 0x0 goto pc+2"),
+      insn(4, "(b7) r0 = -1"),
+      insn(5, "(05) goto pc+1"),
+      insn(6, "(85) call bpf_redirect#23", {
+        source: "return bpf_redirect(skb->ifindex, BPF_F_INGRESS);",
+        sourceFile: "prog.bpf.c",
+        sourceLine: 18,
+      }),
+      insn(7, "(95) exit"),
+    ]);
+
+    expect(result).toMatchObject({
+      exitCount: 2,
+      hasUnknownExits: true,
+      observedConstants: [{ value: -1, exitCount: 1 }],
+    });
+    expect(result.constantExits).toEqual([
+      expect.objectContaining({
+        exitIndex: 1,
+        assignmentIndex: 0,
+        assignmentDisasm: "(85) call pc+2#bpf_prog_redirector",
+        value: -1,
+      }),
+    ]);
+    expect(result.unknownExits).toEqual([
+      expect.objectContaining({
+        exitIndex: 1,
+        assignmentIndex: 6,
+        assignmentDisasm: "(85) call bpf_redirect#23",
+        reason: "dynamic-assignment",
+        source: "return bpf_redirect(skb->ifindex, BPF_F_INGRESS);",
+        sourceFile: "prog.bpf.c",
+        sourceLine: 18,
+      }),
+    ]);
+  });
+
   it("marks exits without any r0/w0 assignment as unknown", () => {
     const result = analyzeXlatedReturns([
       insn(0, "(b7) r1 = 0"),
@@ -362,7 +406,9 @@ describe("analyzeXlatedReturns", () => {
         { value: 2, exitCount: 1 },
       ],
     });
-    expect(result.constantExits.map(exit => [exit.exitIndex, exit.value])).toEqual([
+    expect(
+      result.constantExits.map(exit => [exit.exitIndex, exit.value])
+    ).toEqual([
       [4, 0],
       [4, 2],
     ]);

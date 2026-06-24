@@ -3,6 +3,7 @@ import type {
   PacketTailCallTarget,
   PacketActionSemantics,
   PacketChainPrediction,
+  PacketHookFamily,
   PacketProgramPrediction,
   PacketTailCallContinuation,
   PacketVerdict,
@@ -68,21 +69,28 @@ function callHelperName(disasm?: string): string | undefined {
   return helper || undefined;
 }
 
-function helperReturnVerdict(
+function helperReturnVerdicts(
   exit: XlatedReturnExit,
-  semantics: PacketActionSemantics
-): PacketVerdict | null {
+  semantics: PacketActionSemantics,
+  family: PacketHookFamily
+): PacketVerdict[] {
   const helper = callHelperName(exit.assignmentDisasm ?? exit.exitDisasm);
   if (
     helper &&
     REDIRECT_RETURN_HELPERS.has(helper) &&
+    family === "tc" &&
     ((semantics.redirectValues?.length ?? 0) > 0 ||
       semantics.redirect.length > 0)
   ) {
-    return "redirect";
+    const verdicts: PacketVerdict[] = [];
+    if ((semantics.dropValues?.length ?? 0) > 0 || semantics.drop.length > 0) {
+      verdicts.push("drop");
+    }
+    verdicts.push("redirect");
+    return uniqueVerdicts(verdicts);
   }
 
-  return null;
+  return [];
 }
 
 function verdictTone(
@@ -256,21 +264,25 @@ function unknownExitExplanation(
   };
 }
 
-function helperReturnExplanation(
+function helperReturnExplanations(
   exit: XlatedReturnExit,
-  semantics: PacketActionSemantics
-): PacketVerdictExplanation | null {
-  const verdict = helperReturnVerdict(exit, semantics);
-  if (!verdict) return null;
+  semantics: PacketActionSemantics,
+  family: PacketHookFamily
+): PacketVerdictExplanation[] {
+  const verdicts = helperReturnVerdicts(exit, semantics, family);
+  if (verdicts.length === 0) return [];
 
   const source = sourceText(exit);
   const location = source ? ` from ${source}` : "";
   const helper = callHelperName(exit.assignmentDisasm ?? exit.exitDisasm);
+  const helperText = helper ? `bpf_${helper}` : "helper";
 
-  return {
+  return verdicts.map(verdict => ({
     verdict,
     summary: finishSentence(
-      `Can ${verdict} via ${helper ? `bpf_${helper}` : "helper"} return at exit ${exit.exitIndex}; exact numeric return is runtime-dependent${location}`
+      verdict === "drop"
+        ? `Can drop if ${helperText} fails at exit ${exit.exitIndex}${location}`
+        : `Can ${verdict} via ${helperText} helper return at exit ${exit.exitIndex}${location}`
     ),
     exitIndex: exit.exitIndex,
     source: exit.source,
@@ -278,7 +290,7 @@ function helperReturnExplanation(
     sourceLine: exit.sourceLine,
     sourceColumn: exit.sourceColumn,
     branchEvidence: exit.branchEvidence,
-  };
+  }));
 }
 
 function tailCallsForAnalysis(
@@ -350,6 +362,7 @@ function continuationExplanation(
 function buildVerdictExplanations(
   analysis: XlatedReturnAnalysis | null | undefined,
   semantics: PacketActionSemantics,
+  family: PacketHookFamily,
   context: PredictionContext = {},
   continuations: PacketTailCallContinuation[] = []
 ): PacketVerdictExplanation[] {
@@ -377,12 +390,18 @@ function buildVerdictExplanations(
         explanation !== null
     );
 
-  explanations.push(
-    ...analysis.unknownExits.map(
-      exit =>
-        helperReturnExplanation(exit, semantics) ?? unknownExitExplanation(exit)
-    )
-  );
+  for (const exit of analysis.unknownExits) {
+    const helperExplanations = helperReturnExplanations(
+      exit,
+      semantics,
+      family
+    );
+    explanations.push(
+      ...(helperExplanations.length > 0
+        ? helperExplanations
+        : [unknownExitExplanation(exit)])
+    );
+  }
 
   if (analysis.hasTailCalls) {
     const continuationsByTarget = continuationByTargetKey(continuations);
@@ -459,7 +478,9 @@ function confidenceFromBehavior(
   hasUnknownBehavior: boolean
 ): PacketChainPrediction["confidence"] {
   if (!hasUnknownBehavior) return "high";
-  return verdicts.some(verdict => verdict !== "unknown") ? "partial" : "unknown";
+  return verdicts.some(verdict => verdict !== "unknown")
+    ? "partial"
+    : "unknown";
 }
 
 function summarizeContinuationBehavior(
@@ -526,6 +547,7 @@ function unknownContinuation(
 function analyzeTailCallContinuations(
   analysis: XlatedReturnAnalysis,
   semantics: PacketActionSemantics,
+  family: PacketHookFamily,
   getAnalysis: AnalysisLookup,
   context: PredictionContext,
   path: number[],
@@ -567,6 +589,7 @@ function analyzeTailCallContinuations(
       target.targetProgId,
       targetAnalysis,
       semantics,
+      family,
       getAnalysis,
       context,
       [...path, target.targetProgId],
@@ -604,6 +627,7 @@ function analyzeProgramBehavior(
   progId: number,
   analysis: XlatedReturnAnalysis | null | undefined,
   semantics: PacketActionSemantics,
+  family: PacketHookFamily,
   getAnalysis: AnalysisLookup,
   context: PredictionContext,
   path: number[] = [progId],
@@ -618,18 +642,22 @@ function analyzeProgramBehavior(
     };
   }
 
+  const helperVerdicts = analysis.unknownExits.flatMap(exit =>
+    helperReturnVerdicts(exit, semantics, family)
+  );
+  const hasUnmodeledUnknownExits = analysis.unknownExits.some(
+    exit => helperReturnVerdicts(exit, semantics, family).length === 0
+  );
   const verdicts: PacketVerdict[] = [
     ...analysis.observedConstants.map(observed =>
       classifyPacketReturnConstant(observed.value, semantics)
     ),
-    ...analysis.unknownExits
-      .map(exit => helperReturnVerdict(exit, semantics))
-      .filter((verdict): verdict is PacketVerdict => verdict !== null),
+    ...helperVerdicts,
   ];
   const sideEffectLabels = new Set(analysis.sideEffects.labels);
   let hasUnknownBehavior =
     analysis.exitCount === 0 ||
-    analysis.hasUnknownExits ||
+    hasUnmodeledUnknownExits ||
     verdicts.includes("unknown");
 
   if (analysis.hasTailCalls) {
@@ -637,6 +665,7 @@ function analyzeProgramBehavior(
       analyzeTailCallContinuations(
         analysis,
         semantics,
+        family,
         getAnalysis,
         context,
         path,
@@ -766,6 +795,7 @@ export function predictPacketChain(
 ): PacketChainPrediction | null {
   const semantics = chain.packetContext?.semantics;
   if (!semantics) return null;
+  const family = chain.packetContext?.family ?? "unknown";
   const hasModeledSemantics = hasModeledActionSemantics(semantics);
 
   const steps: PacketProgramPrediction[] = [];
@@ -781,6 +811,7 @@ export function predictPacketChain(
       program.id,
       analysis,
       semantics,
+      family,
       getAnalysis,
       context
     );
@@ -820,6 +851,7 @@ export function predictPacketChain(
       verdictExplanations: buildVerdictExplanations(
         analysis,
         semantics,
+        family,
         context,
         behavior.tailCallContinuations
       ),
@@ -865,11 +897,7 @@ export function predictPacketChain(
       ? "unknown"
       : "partial"
     : "high";
-  const verdictSummary = summarizeChain(
-    chain,
-    outcomes,
-    hasUnknownBehavior
-  );
+  const verdictSummary = summarizeChain(chain, outcomes, hasUnknownBehavior);
   const effectSummary = summarizeChainEffects(sideEffectLabels);
 
   return {
