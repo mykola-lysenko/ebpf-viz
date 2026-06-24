@@ -16,6 +16,7 @@ import { usePacketChainAnalysis } from "@/hooks/usePacketChainAnalysis";
 import {
   chainTone,
   classifyRateDrop,
+  buildChainProgramRows,
   formatActions,
   formatAge,
   formatRunCnt,
@@ -92,46 +93,32 @@ function OsiLayerRow({
     programs: BpfProgram[];
   } | null>(null);
 
-  // Build a position map from all relevant chains: progId → { position, chain }
-  const positionMap = useMemo(() => {
-    const map = new Map<number, { position: number; chain: ProgramChain }>();
-    if (!chains) return map;
-    for (const chain of chains) {
-      for (const cp of chain.programs) {
-        map.set(cp.id, { position: cp.position, chain });
-      }
-    }
-    return map;
-  }, [chains]);
-
-  // Group programs by chain, keeping unchained programs separate
+  // Render chain rows from ProgramChain itself, then resolve live program metadata.
+  // This keeps displayed rows aligned with the "chain of N" header even when a
+  // program appears in multiple bpftool attachment records.
   const { chainGroups, unchained } = useMemo(() => {
-    const chainGroups = new Map<
-      string,
-      { chain: ProgramChain; progs: BpfProgram[] }
-    >();
+    const chainedProgramIds = new Set<number>();
+    const chainGroups =
+      chains
+        ?.map(chain => {
+          const rows = buildChainProgramRows(chain, programs);
+          for (const row of rows) {
+            chainedProgramIds.add(row.program.id);
+          }
+          return { chain, rows };
+        })
+        .filter(group => group.rows.length > 0) ?? [];
+
     const unchained: BpfProgram[] = [];
+    const seenUnchainedIds = new Set<number>();
     for (const p of programs) {
-      const info = positionMap.get(p.id);
-      if (info) {
-        if (!chainGroups.has(info.chain.hookId)) {
-          chainGroups.set(info.chain.hookId, { chain: info.chain, progs: [] });
-        }
-        chainGroups.get(info.chain.hookId)!.progs.push(p);
-      } else {
+      if (!chainedProgramIds.has(p.id) && !seenUnchainedIds.has(p.id)) {
         unchained.push(p);
+        seenUnchainedIds.add(p.id);
       }
     }
-    // Sort programs within each chain by position
-    for (const g of Array.from(chainGroups.values())) {
-      g.progs.sort(
-        (a, b) =>
-          (positionMap.get(a.id)?.position ?? 0) -
-          (positionMap.get(b.id)?.position ?? 0)
-      );
-    }
-    return { chainGroups: Array.from(chainGroups.values()), unchained };
-  }, [programs, positionMap]);
+    return { chainGroups, unchained };
+  }, [chains, programs]);
 
   return (
     <>
@@ -156,7 +143,8 @@ function OsiLayerRow({
           {hasProgs ? (
             <div className="space-y-2">
               {/* Chain groups — programs shown in execution order */}
-              {chainGroups.map(({ chain, progs }) => {
+              {chainGroups.map(({ chain, rows }) => {
+                const chainPrograms = rows.map(row => row.program);
                 const hasAnyAnalysis = chain.programs.some(program =>
                   returnAnalysisById.has(program.id)
                 );
@@ -175,7 +163,7 @@ function OsiLayerRow({
                       )
                     : null;
                 const predictionStepsById = new Map(
-                  prediction?.steps.map(step => [step.progId, step]) ?? []
+                  prediction?.steps.map(step => [step.position, step]) ?? []
                 );
                 const firstTerminal = prediction?.firstTerminalPrograms[0];
 
@@ -246,7 +234,7 @@ function OsiLayerRow({
                               setSelectedChainDetails({
                                 chain,
                                 prediction,
-                                programs: progs,
+                                programs: chainPrograms,
                               })
                             }
                           >
@@ -277,20 +265,21 @@ function OsiLayerRow({
                       </div>
                     )}
                     <div className="space-y-0.5 ml-1">
-                      {progs.map((p, pIdx) => {
-                        const pos = positionMap.get(p.id)?.position;
-                        const predictionStep = predictionStepsById.get(p.id);
+                      {rows.map((row, pIdx) => {
+                        const p = row.program;
+                        const pos = row.chainProgram.position;
+                        const predictionStep = predictionStepsById.get(pos);
                         // Drop indicator: compare live rates, not cumulative run_cnt
                         const currRate = historyMap.get(p.id)?.latest
                           ?.callsPerSec;
                         const prevRate =
                           chain.canShortCircuit && pIdx > 0
-                            ? historyMap.get(progs[pIdx - 1].id)?.latest
+                            ? historyMap.get(rows[pIdx - 1].program.id)?.latest
                                 ?.callsPerSec
                             : undefined;
                         const dropInfo = classifyRateDrop(prevRate, currRate);
                         return (
-                          <React.Fragment key={p.id}>
+                          <React.Fragment key={`${chain.hookId}:${pos}:${p.id}`}>
                             {dropInfo && (
                               <div
                                 className="flex items-center gap-1 ml-5 text-[9px] font-mono py-0.5"

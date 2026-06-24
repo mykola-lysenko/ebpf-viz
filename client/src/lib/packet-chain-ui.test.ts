@@ -1,9 +1,11 @@
 import { describe, expect, it, vi, afterEach } from "vitest";
 import type {
+  BpfProgram,
   PacketActionSemantics,
   ProgramChain,
 } from "../../../shared/ebpf-types";
 import {
+  buildChainProgramRows,
   chainTone,
   classifyRateDrop,
   formatActions,
@@ -30,6 +32,22 @@ function makeChain(semantics?: PacketActionSemantics): ProgramChain {
           semantics,
         }
       : undefined,
+  };
+}
+
+function makeProgram(id: number, name: string): BpfProgram {
+  return {
+    id,
+    name,
+    type: "sched_cls",
+    rawType: "sched_cls",
+    tag: `${id}`,
+    gplCompatible: true,
+    loadedAt: 0,
+    mapIds: [],
+    attachments: [],
+    osiLayer: "L3",
+    color: "#7c3aed",
   };
 }
 
@@ -130,5 +148,29 @@ describe("packet-chain-ui helpers", () => {
       "redirect",
       "unknown",
     ]);
+  });
+
+  it("builds chain rows from chain entries instead of visible program order", () => {
+    const chain = {
+      ...makeChain(),
+      programs: [
+        { id: 2, position: 1, name: "second" },
+        { id: 1, position: 2, name: "first" },
+      ],
+    };
+    const visiblePrograms = [
+      makeProgram(1, "first"),
+      makeProgram(3, "unchained"),
+      makeProgram(2, "second"),
+    ];
+
+    expect(
+      buildChainProgramRows(chain, visiblePrograms).map(row => row.program.id)
+    ).toEqual([2, 1]);
+    expect(
+      buildChainProgramRows(chain, visiblePrograms).map(
+        row => row.chainProgram.position
+      )
+    ).toEqual([1, 2]);
   });
 });

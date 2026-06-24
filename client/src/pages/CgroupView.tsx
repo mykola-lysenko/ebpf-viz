@@ -14,6 +14,7 @@ import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
 import { usePacketChainAnalysis } from "@/hooks/usePacketChainAnalysis";
 import {
+  buildChainProgramRows,
   chainTone,
   classifyRateDrop,
   formatActions,
@@ -310,6 +311,14 @@ function CgroupNodeRow({
                       `cgroup:${node.path}:${g.attachType}`
                     );
                     const isChain = chain && chain.programs.length >= 2;
+                    const displayRows =
+                      isChain && chain
+                        ? buildChainProgramRows(chain, g.progs)
+                        : g.progs.map(program => ({
+                            program,
+                            chainProgram: undefined,
+                          }));
+                    const displayPrograms = displayRows.map(row => row.program);
                     const hasAnyAnalysis = chain?.programs.some(program =>
                       returnAnalysisById.has(program.id)
                     );
@@ -328,7 +337,7 @@ function CgroupNodeRow({
                           )
                         : null;
                     const predictionStepsById = new Map(
-                      prediction?.steps.map(step => [step.progId, step]) ?? []
+                      prediction?.steps.map(step => [step.position, step]) ?? []
                     );
                     const firstTerminal = prediction?.firstTerminalPrograms[0];
                     const hasModeledSemantics =
@@ -409,7 +418,7 @@ function CgroupNodeRow({
                                   onSelectChainDetails({
                                     chain,
                                     prediction,
-                                    programs: g.progs,
+                                    programs: displayPrograms,
                                   })
                                 }
                               >
@@ -442,14 +451,13 @@ function CgroupNodeRow({
                         )}
                         {/* Programs with optional position numbers and stats */}
                         <div className="space-y-0.5 ml-1">
-                          {g.progs.map((p, pIdx) => {
-                            const position = isChain
-                              ? chain.programs.find(cp => cp.id === p.id)
-                                  ?.position
-                              : undefined;
-                            const predictionStep = predictionStepsById.get(
-                              p.id
-                            );
+                          {displayRows.map((row, pIdx) => {
+                            const p = row.program;
+                            const position = row.chainProgram?.position;
+                            const predictionStep =
+                              position != null
+                                ? predictionStepsById.get(position)
+                                : undefined;
                             const sharedColor = tagColorMap.get(p.tag);
                             const siblings = sharedTagMap.get(p.tag);
                             // Drop indicator: compare live rates (calls/sec), not raw run_cnt
@@ -457,8 +465,9 @@ function CgroupNodeRow({
                               ?.callsPerSec;
                             const prevRate =
                               isChain && chain.canShortCircuit && pIdx > 0
-                                ? historyMap.get(g.progs[pIdx - 1].id)?.latest
-                                    ?.callsPerSec
+                                ? historyMap.get(
+                                    displayRows[pIdx - 1].program.id
+                                  )?.latest?.callsPerSec
                                 : undefined;
                             const dropInfo = classifyRateDrop(
                               prevRate,
@@ -466,7 +475,13 @@ function CgroupNodeRow({
                               { flagIncreases: true }
                             );
                             return (
-                              <React.Fragment key={p.id}>
+                              <React.Fragment
+                                key={
+                                  position != null && chain
+                                    ? `${chain.hookId}:${position}:${p.id}`
+                                    : p.id
+                                }
+                              >
                                 {dropInfo && (
                                   <div
                                     className="flex items-center gap-1 ml-5 text-[9px] font-mono py-0.5"

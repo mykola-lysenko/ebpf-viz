@@ -1,4 +1,30 @@
-import type { PacketVerdict, ProgramChain } from "../../../shared/ebpf-types";
+import type {
+  BpfProgram,
+  PacketVerdict,
+  ProgramChain,
+} from "../../../shared/ebpf-types";
+
+export type ChainProgramRow = {
+  chainProgram: ProgramChain["programs"][number];
+  program: BpfProgram;
+};
+
+export function buildChainProgramRows(
+  chain: ProgramChain,
+  programs: readonly BpfProgram[]
+): ChainProgramRow[] {
+  const programById = new Map<number, BpfProgram>();
+  for (const program of programs) {
+    if (!programById.has(program.id)) {
+      programById.set(program.id, program);
+    }
+  }
+
+  return chain.programs.flatMap(chainProgram => {
+    const program = programById.get(chainProgram.id);
+    return program ? [{ chainProgram, program }] : [];
+  });
+}
 
 export type RateDropInfo = {
   rate: number;
