@@ -8,19 +8,46 @@
  *   Tab 4 — C Source (BTF linum interleaved) — shown only when available
  */
 
-import React, { useEffect, useRef, useState, useCallback, useMemo } from "react";
-import { X, Copy, Check, ChevronDown, ChevronRight, Loader2, AlertTriangle, Code2, GitBranch, Cpu, FileCode } from "lucide-react";
+import React, {
+  useEffect,
+  useRef,
+  useState,
+  useCallback,
+  useMemo,
+} from "react";
+import {
+  X,
+  Copy,
+  Check,
+  ChevronDown,
+  ChevronRight,
+  Loader2,
+  AlertTriangle,
+  Code2,
+  GitBranch,
+  Cpu,
+  FileCode,
+} from "lucide-react";
 import { trpc } from "@/lib/trpc";
-import type { BpfProgram, XlatedInsn, JitedInsn } from "../../../shared/ebpf-types";
+import type { Viz } from "@viz-js/viz";
+import type {
+  BpfProgram,
+  XlatedInsn,
+  JitedInsn,
+} from "../../../shared/ebpf-types";
 
 // ─── Viz.js lazy loader ───────────────────────────────────────────────────────
 
-let vizInstance: any = null;
-async function getViz() {
+let vizInstance: Viz | null = null;
+async function getViz(): Promise<Viz> {
   if (vizInstance) return vizInstance;
   const { instance } = await import("@viz-js/viz");
   vizInstance = await instance();
   return vizInstance;
+}
+
+function errorMessage(error: unknown, fallback: string): string {
+  return error instanceof Error ? error.message : fallback;
 }
 
 // ─── BPF ISA syntax highlighter ───────────────────────────────────────────────
@@ -65,7 +92,9 @@ function highlightXlated(disasm: string): React.ReactNode {
         const text = m[1];
         tokens.push(
           cls ? (
-            <span key={key++} className={cls}>{text}</span>
+            <span key={key++} className={cls}>
+              {text}
+            </span>
           ) : (
             <span key={key++}>{text}</span>
           )
@@ -76,7 +105,11 @@ function highlightXlated(disasm: string): React.ReactNode {
       }
     }
     if (!matched) {
-      tokens.push(<span key={key++} className="text-slate-300">{remaining[0]}</span>);
+      tokens.push(
+        <span key={key++} className="text-slate-300">
+          {remaining[0]}
+        </span>
+      );
       remaining = remaining.slice(1);
     }
   }
@@ -93,8 +126,10 @@ function highlightXlated(disasm: string): React.ReactNode {
 
 function highlightJited(disasm: string): React.ReactNode {
   // x86-64 / arm64 register coloring
-  const x86Regs = /\b(rax|rbx|rcx|rdx|rsi|rdi|rbp|rsp|r8|r9|r10|r11|r12|r13|r14|r15|eax|ebx|ecx|edx|esi|edi|esp|ebp|al|bl|cl|dl)\b/g;
-  const arm64Regs = /\b(x[0-9]|x1[0-9]|x2[0-9]|x30|sp|lr|fp|w[0-9]|w1[0-9]|w2[0-9])\b/g;
+  const x86Regs =
+    /\b(rax|rbx|rcx|rdx|rsi|rdi|rbp|rsp|r8|r9|r10|r11|r12|r13|r14|r15|eax|ebx|ecx|edx|esi|edi|esp|ebp|al|bl|cl|dl)\b/g;
+  const arm64Regs =
+    /\b(x[0-9]|x1[0-9]|x2[0-9]|x30|sp|lr|fp|w[0-9]|w1[0-9]|w2[0-9])\b/g;
   const immediates = /\b(0x[0-9a-fA-F]+|-?\d+)\b/g;
   const mnemonics = /^(\s*)(\w+)/;
 
@@ -109,31 +144,58 @@ function highlightJited(disasm: string): React.ReactNode {
     const mnemonic = mnemonicMatch[2];
     const rest = text.slice(indent.length + mnemonic.length);
     parts.push(<span key={key++}>{indent}</span>);
-    parts.push(<span key={key++} className="text-sky-400 font-medium">{mnemonic}</span>);
+    parts.push(
+      <span key={key++} className="text-sky-400 font-medium">
+        {mnemonic}
+      </span>
+    );
 
     // Highlight rest
     let remaining = rest;
     let lastIndex = 0;
-    const combined = new RegExp(`(${x86Regs.source}|${arm64Regs.source}|${immediates.source})`, "g");
+    const combined = new RegExp(
+      `(${x86Regs.source}|${arm64Regs.source}|${immediates.source})`,
+      "g"
+    );
     const matches = Array.from(remaining.matchAll(combined));
 
     for (const match of matches) {
       if (match.index! > lastIndex) {
-        parts.push(<span key={key++} className="text-slate-300">{remaining.slice(lastIndex, match.index)}</span>);
+        parts.push(
+          <span key={key++} className="text-slate-300">
+            {remaining.slice(lastIndex, match.index)}
+          </span>
+        );
       }
       const val = match[0];
       if (/^0x|^-?\d/.test(val)) {
-        parts.push(<span key={key++} className="text-green-400">{val}</span>);
+        parts.push(
+          <span key={key++} className="text-green-400">
+            {val}
+          </span>
+        );
       } else {
-        parts.push(<span key={key++} className="text-cyan-400">{val}</span>);
+        parts.push(
+          <span key={key++} className="text-cyan-400">
+            {val}
+          </span>
+        );
       }
       lastIndex = match.index! + val.length;
     }
     if (lastIndex < remaining.length) {
-      parts.push(<span key={key++} className="text-slate-300">{remaining.slice(lastIndex)}</span>);
+      parts.push(
+        <span key={key++} className="text-slate-300">
+          {remaining.slice(lastIndex)}
+        </span>
+      );
     }
   } else {
-    parts.push(<span key={key++} className="text-slate-300">{text}</span>);
+    parts.push(
+      <span key={key++} className="text-slate-300">
+        {text}
+      </span>
+    );
   }
 
   return <>{parts}</>;
@@ -159,7 +221,7 @@ function buildJumpMap(insns: XlatedInsn[]): Map<number, number[]> {
 
 function BytecodeTab({ insns }: { insns: XlatedInsn[] }) {
   const [highlightedLine, setHighlightedLine] = useState<number | null>(null);
-  const lineRefs = useRef<Map<number, HTMLDivElement>>(new Map());
+  const lineRefs = useRef<Map<number, HTMLTableRowElement>>(new Map());
   const jumpMap = useMemo(() => buildJumpMap(insns), [insns]);
   const [copied, setCopied] = useState(false);
 
@@ -173,7 +235,9 @@ function BytecodeTab({ insns }: { insns: XlatedInsn[] }) {
   }, []);
 
   const copyAll = useCallback(() => {
-    const text = insns.map(i => `${String(i.index).padStart(4)}: ${i.disasm}`).join("\n");
+    const text = insns
+      .map(i => `${String(i.index).padStart(4)}: ${i.disasm}`)
+      .join("\n");
     navigator.clipboard.writeText(text);
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
@@ -182,32 +246,46 @@ function BytecodeTab({ insns }: { insns: XlatedInsn[] }) {
   return (
     <div className="flex flex-col h-full">
       <div className="flex items-center justify-between px-4 py-2 border-b border-white/5 shrink-0">
-        <span className="text-xs text-slate-400">{insns.length} instructions</span>
+        <span className="text-xs text-slate-400">
+          {insns.length} instructions
+        </span>
         <button
           onClick={copyAll}
           className="flex items-center gap-1.5 text-xs text-slate-400 hover:text-white transition-colors px-2 py-1 rounded hover:bg-white/5"
         >
-          {copied ? <Check size={12} className="text-green-400" /> : <Copy size={12} />}
+          {copied ? (
+            <Check size={12} className="text-green-400" />
+          ) : (
+            <Copy size={12} />
+          )}
           {copied ? "Copied" : "Copy all"}
         </button>
       </div>
       <div className="flex-1 overflow-auto font-mono text-xs leading-relaxed">
         <table className="w-full border-collapse">
           <tbody>
-            {insns.map((insn) => {
+            {insns.map(insn => {
               const isJumpTarget = jumpMap.has(insn.index);
               const isHighlighted = highlightedLine === insn.index;
               const jumpMatch = insn.disasm.match(/goto pc([+-]\d+)/);
-              const jumpTarget = jumpMatch ? insn.index + 1 + parseInt(jumpMatch[1]) : null;
+              const jumpTarget = jumpMatch
+                ? insn.index + 1 + parseInt(jumpMatch[1])
+                : null;
 
               return (
                 <React.Fragment key={insn.index}>
                   <tr
-                    ref={el => { if (el) lineRefs.current.set(insn.index, el as any); }}
+                    ref={el => {
+                      if (el) lineRefs.current.set(insn.index, el);
+                    }}
                     className={[
                       "group transition-colors",
-                      isHighlighted ? "bg-yellow-500/20" : "hover:bg-white/[0.03]",
-                      isJumpTarget ? "border-l-2 border-blue-500/60" : "border-l-2 border-transparent",
+                      isHighlighted
+                        ? "bg-yellow-500/20"
+                        : "hover:bg-white/[0.03]",
+                      isJumpTarget
+                        ? "border-l-2 border-blue-500/60"
+                        : "border-l-2 border-transparent",
                     ].join(" ")}
                   >
                     {/* Line number */}
@@ -218,15 +296,17 @@ function BytecodeTab({ insns }: { insns: XlatedInsn[] }) {
                     <td className="px-2 py-0.5 whitespace-nowrap">
                       {highlightXlated(insn.disasm)}
                       {/* Clickable jump target */}
-                      {jumpTarget !== null && jumpTarget >= 0 && jumpTarget < insns.length && (
-                        <button
-                          onClick={() => scrollToLine(jumpTarget)}
-                          className="ml-2 text-yellow-400/60 hover:text-yellow-300 text-xs opacity-0 group-hover:opacity-100 transition-opacity"
-                          title={`Jump to instruction ${jumpTarget}`}
-                        >
-                          → {jumpTarget}
-                        </button>
-                      )}
+                      {jumpTarget !== null &&
+                        jumpTarget >= 0 &&
+                        jumpTarget < insns.length && (
+                          <button
+                            onClick={() => scrollToLine(jumpTarget)}
+                            className="ml-2 text-yellow-400/60 hover:text-yellow-300 text-xs opacity-0 group-hover:opacity-100 transition-opacity"
+                            title={`Jump to instruction ${jumpTarget}`}
+                          >
+                            → {jumpTarget}
+                          </button>
+                        )}
                     </td>
                     {/* Opcodes */}
                     {insn.opcodes && (
@@ -259,44 +339,49 @@ function CfgTab({ dot }: { dot: string }) {
     setLoading(true);
     setError("");
 
-    getViz().then(viz => {
-      if (cancelled) return;
-      try {
-        const svg = viz.renderSVGElement(dot);
-        // Style the SVG for dark theme
-        svg.style.maxWidth = "100%";
-        svg.style.height = "auto";
-        svg.querySelectorAll("text").forEach((t: SVGTextElement) => {
-          t.style.fill = "#cbd5e1";
-          t.style.fontFamily = "monospace";
-          t.style.fontSize = "10px";
-        });
-        svg.querySelectorAll("polygon, path").forEach((el: Element) => {
-          const e = el as SVGElement;
-          const fill = e.getAttribute("fill");
-          const stroke = e.getAttribute("stroke");
-          if (fill && fill !== "none") e.setAttribute("fill", "#0f172a");
-          if (stroke && stroke !== "none") e.setAttribute("stroke", "#334155");
-        });
-        svg.querySelectorAll("ellipse").forEach((el: Element) => {
-          const e = el as SVGElement;
-          e.setAttribute("fill", "#1e293b");
-          e.setAttribute("stroke", "#3b82f6");
-        });
-        setSvgContent(svg.outerHTML);
-      } catch (e: any) {
-        setError(e.message ?? "Failed to render CFG");
-      } finally {
-        setLoading(false);
-      }
-    }).catch(e => {
-      if (!cancelled) {
-        setError(e.message ?? "Failed to load Graphviz");
-        setLoading(false);
-      }
-    });
+    getViz()
+      .then(viz => {
+        if (cancelled) return;
+        try {
+          const svg = viz.renderSVGElement(dot);
+          // Style the SVG for dark theme
+          svg.style.maxWidth = "100%";
+          svg.style.height = "auto";
+          svg.querySelectorAll("text").forEach((t: SVGTextElement) => {
+            t.style.fill = "#cbd5e1";
+            t.style.fontFamily = "monospace";
+            t.style.fontSize = "10px";
+          });
+          svg.querySelectorAll("polygon, path").forEach((el: Element) => {
+            const e = el as SVGElement;
+            const fill = e.getAttribute("fill");
+            const stroke = e.getAttribute("stroke");
+            if (fill && fill !== "none") e.setAttribute("fill", "#0f172a");
+            if (stroke && stroke !== "none")
+              e.setAttribute("stroke", "#334155");
+          });
+          svg.querySelectorAll("ellipse").forEach((el: Element) => {
+            const e = el as SVGElement;
+            e.setAttribute("fill", "#1e293b");
+            e.setAttribute("stroke", "#3b82f6");
+          });
+          setSvgContent(svg.outerHTML);
+        } catch (e: unknown) {
+          setError(errorMessage(e, "Failed to render CFG"));
+        } finally {
+          setLoading(false);
+        }
+      })
+      .catch((e: unknown) => {
+        if (!cancelled) {
+          setError(errorMessage(e, "Failed to load Graphviz"));
+          setLoading(false);
+        }
+      });
 
-    return () => { cancelled = true; };
+    return () => {
+      cancelled = true;
+    };
   }, [dot]);
 
   if (loading) {
@@ -314,8 +399,12 @@ function CfgTab({ dot }: { dot: string }) {
         <AlertTriangle size={24} className="text-amber-400" />
         <p className="text-sm text-center">{error}</p>
         <details className="text-xs text-slate-600 max-w-lg">
-          <summary className="cursor-pointer hover:text-slate-400">View DOT source</summary>
-          <pre className="mt-2 p-3 bg-slate-900 rounded text-xs overflow-auto max-h-40">{dot}</pre>
+          <summary className="cursor-pointer hover:text-slate-400">
+            View DOT source
+          </summary>
+          <pre className="mt-2 p-3 bg-slate-900 rounded text-xs overflow-auto max-h-40">
+            {dot}
+          </pre>
         </details>
       </div>
     );
@@ -324,18 +413,41 @@ function CfgTab({ dot }: { dot: string }) {
   return (
     <div className="flex flex-col h-full">
       <div className="flex items-center gap-2 px-4 py-2 border-b border-white/5 shrink-0">
-        <span className="text-xs text-slate-400">Control-flow graph — basic blocks with branch edges</span>
+        <span className="text-xs text-slate-400">
+          Control-flow graph — basic blocks with branch edges
+        </span>
         <div className="ml-auto flex items-center gap-1">
-          <button onClick={() => setScale(s => Math.max(0.3, s - 0.1))} className="px-2 py-0.5 text-xs text-slate-400 hover:text-white hover:bg-white/5 rounded">−</button>
-          <span className="text-xs text-slate-500 w-10 text-center">{Math.round(scale * 100)}%</span>
-          <button onClick={() => setScale(s => Math.min(3, s + 0.1))} className="px-2 py-0.5 text-xs text-slate-400 hover:text-white hover:bg-white/5 rounded">+</button>
-          <button onClick={() => setScale(1)} className="px-2 py-0.5 text-xs text-slate-400 hover:text-white hover:bg-white/5 rounded ml-1">Reset</button>
+          <button
+            onClick={() => setScale(s => Math.max(0.3, s - 0.1))}
+            className="px-2 py-0.5 text-xs text-slate-400 hover:text-white hover:bg-white/5 rounded"
+          >
+            −
+          </button>
+          <span className="text-xs text-slate-500 w-10 text-center">
+            {Math.round(scale * 100)}%
+          </span>
+          <button
+            onClick={() => setScale(s => Math.min(3, s + 0.1))}
+            className="px-2 py-0.5 text-xs text-slate-400 hover:text-white hover:bg-white/5 rounded"
+          >
+            +
+          </button>
+          <button
+            onClick={() => setScale(1)}
+            className="px-2 py-0.5 text-xs text-slate-400 hover:text-white hover:bg-white/5 rounded ml-1"
+          >
+            Reset
+          </button>
         </div>
       </div>
       <div className="flex-1 overflow-auto p-4 flex items-start justify-center">
         <div
           ref={containerRef}
-          style={{ transform: `scale(${scale})`, transformOrigin: "top center", transition: "transform 0.15s" }}
+          style={{
+            transform: `scale(${scale})`,
+            transformOrigin: "top center",
+            transition: "transform 0.15s",
+          }}
           dangerouslySetInnerHTML={{ __html: svgContent }}
           className="[&_svg]:bg-slate-950 [&_svg]:rounded [&_svg]:p-2"
         />
@@ -346,12 +458,20 @@ function CfgTab({ dot }: { dot: string }) {
 
 // ─── JIT tab ──────────────────────────────────────────────────────────────────
 
-function JitTab({ insns, unavailableReason }: { insns: JitedInsn[] | null; unavailableReason?: string }) {
+function JitTab({
+  insns,
+  unavailableReason,
+}: {
+  insns: JitedInsn[] | null;
+  unavailableReason?: string;
+}) {
   const [copied, setCopied] = useState(false);
 
   const copyAll = useCallback(() => {
     if (!insns) return;
-    const text = insns.map(i => `${i.pc.padStart(18)}:  ${i.disasm}`).join("\n");
+    const text = insns
+      .map(i => `${i.pc.padStart(18)}:  ${i.disasm}`)
+      .join("\n");
     navigator.clipboard.writeText(text);
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
@@ -364,13 +484,19 @@ function JitTab({ insns, unavailableReason }: { insns: JitedInsn[] | null; unava
           <Cpu size={20} className="text-slate-500" />
         </div>
         <div>
-          <p className="text-sm text-slate-300 font-medium mb-2">JIT assembly not available</p>
-          <p className="text-xs text-slate-500 max-w-md leading-relaxed">{unavailableReason}</p>
+          <p className="text-sm text-slate-300 font-medium mb-2">
+            JIT assembly not available
+          </p>
+          <p className="text-xs text-slate-500 max-w-md leading-relaxed">
+            {unavailableReason}
+          </p>
         </div>
         <div className="mt-2 p-3 bg-slate-900/60 rounded-lg border border-white/5 text-left max-w-md">
           <p className="text-xs text-slate-500 font-mono">
-            # To enable JIT compilation:<br />
-            sudo sysctl -w net.core.bpf_jit_enable=1<br />
+            # To enable JIT compilation:
+            <br />
+            sudo sysctl -w net.core.bpf_jit_enable=1
+            <br />
             sudo sysctl -w kernel.kptr_restrict=0
           </p>
         </div>
@@ -381,12 +507,18 @@ function JitTab({ insns, unavailableReason }: { insns: JitedInsn[] | null; unava
   return (
     <div className="flex flex-col h-full">
       <div className="flex items-center justify-between px-4 py-2 border-b border-white/5 shrink-0">
-        <span className="text-xs text-slate-400">{insns.length} native instructions</span>
+        <span className="text-xs text-slate-400">
+          {insns.length} native instructions
+        </span>
         <button
           onClick={copyAll}
           className="flex items-center gap-1.5 text-xs text-slate-400 hover:text-white transition-colors px-2 py-1 rounded hover:bg-white/5"
         >
-          {copied ? <Check size={12} className="text-green-400" /> : <Copy size={12} />}
+          {copied ? (
+            <Check size={12} className="text-green-400" />
+          ) : (
+            <Copy size={12} />
+          )}
           {copied ? "Copied" : "Copy all"}
         </button>
       </div>
@@ -433,7 +565,13 @@ function formatSourceLocation(insn: XlatedInsn): string | undefined {
     : `${file}:${insn.sourceLine}:${insn.sourceColumn}`;
 }
 
-function SourceTab({ insns, hasLineInfo }: { insns: XlatedInsn[]; hasLineInfo: boolean }) {
+function SourceTab({
+  insns,
+  hasLineInfo,
+}: {
+  insns: XlatedInsn[];
+  hasLineInfo: boolean;
+}) {
   if (!hasLineInfo) {
     return (
       <div className="flex flex-col items-center justify-center h-full gap-4 p-8 text-center">
@@ -441,14 +579,18 @@ function SourceTab({ insns, hasLineInfo }: { insns: XlatedInsn[]; hasLineInfo: b
           <FileCode size={20} className="text-slate-500" />
         </div>
         <div>
-          <p className="text-sm text-slate-300 font-medium mb-2">C source not available</p>
+          <p className="text-sm text-slate-300 font-medium mb-2">
+            C source not available
+          </p>
           <p className="text-xs text-slate-500 max-w-md leading-relaxed">
-            No source annotations found in the bytecode dump. Source annotations require programs compiled with clang -g and loaded with BTF enabled.
+            No source annotations found in the bytecode dump. Source annotations
+            require programs compiled with clang -g and loaded with BTF enabled.
           </p>
         </div>
         <div className="mt-2 p-3 bg-slate-900/60 rounded-lg border border-white/5 text-left max-w-md">
           <p className="text-xs text-slate-500 font-mono">
-            # Compile with BTF + debug info:<br />
+            # Compile with BTF + debug info:
+            <br />
             clang -O2 -g -target bpf \<br />
             {"  "}-D__TARGET_ARCH_x86 \<br />
             {"  "}-c prog.bpf.c -o prog.bpf.o
@@ -478,8 +620,9 @@ function SourceTab({ insns, hasLineInfo }: { insns: XlatedInsn[]; hasLineInfo: b
       <div className="flex items-center gap-2 px-4 py-2 border-b border-white/5 shrink-0">
         <AlertTriangle size={12} className="text-amber-400 shrink-0" />
         <span className="text-xs text-slate-400">
-          Showing source annotations from BTF line info. Original source files are not loaded.
-          Snippets follow bytecode order and may be incomplete or reordered by the compiler.
+          Showing source annotations from BTF line info. Original source files
+          are not loaded. Snippets follow bytecode order and may be incomplete
+          or reordered by the compiler.
         </span>
       </div>
       <div className="flex-1 overflow-auto font-mono text-sm leading-relaxed p-4">
@@ -488,12 +631,18 @@ function SourceTab({ insns, hasLineInfo }: { insns: XlatedInsn[]; hasLineInfo: b
             key={line.key}
             className="py-0.5 flex gap-3 hover:bg-white/[0.03] transition-colors rounded px-2"
           >
-            <span className="text-slate-600 select-none w-8 text-right shrink-0">{idx + 1}</span>
+            <span className="text-slate-600 select-none w-8 text-right shrink-0">
+              {idx + 1}
+            </span>
             <div className="min-w-0">
               {line.location && (
-                <div className="text-[11px] leading-4 text-slate-500 truncate">{line.location}</div>
+                <div className="text-[11px] leading-4 text-slate-500 truncate">
+                  {line.location}
+                </div>
               )}
-              <div className="text-emerald-400/90 whitespace-pre-wrap">{line.source}</div>
+              <div className="text-emerald-400/90 whitespace-pre-wrap">
+                {line.source}
+              </div>
             </div>
           </div>
         ))}
@@ -514,19 +663,31 @@ interface CodeInspectorProps {
 export function CodeInspector({ program, onClose }: CodeInspectorProps) {
   const [activeTab, setActiveTab] = useState<Tab>("bytecode");
 
-  const { data: dump, isLoading, error } = trpc.ebpf.progDump.useQuery(
+  const {
+    data: dump,
+    isLoading,
+    error,
+  } = trpc.ebpf.progDump.useQuery(
     { id: program.id },
     { staleTime: 30_000, retry: 1 }
   );
 
   // Close on Escape
   useEffect(() => {
-    const handler = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
+    const handler = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
   }, [onClose]);
 
-  const tabs: Array<{ id: Tab; label: string; icon: React.ReactNode; available: boolean; badge?: string }> = [
+  const tabs: Array<{
+    id: Tab;
+    label: string;
+    icon: React.ReactNode;
+    available: boolean;
+    badge?: string;
+  }> = [
     {
       id: "bytecode",
       label: "BPF Bytecode",
@@ -552,14 +713,21 @@ export function CodeInspector({ program, onClose }: CodeInspectorProps) {
       label: "C Source",
       icon: <FileCode size={13} />,
       available: !!dump?.hasLineInfo,
-      badge: dump?.hasLineInfo ? (dump?.hasBtf ? "BTF" : "annotations") : undefined,
+      badge: dump?.hasLineInfo
+        ? dump?.hasBtf
+          ? "BTF"
+          : "annotations"
+        : undefined,
     },
   ];
 
   return (
     <div
       className="fixed inset-0 z-50 flex items-center justify-center"
-      style={{ background: "oklch(0.04 0.01 240 / 0.85)", backdropFilter: "blur(4px)" }}
+      style={{
+        background: "oklch(0.04 0.01 240 / 0.85)",
+        backdropFilter: "blur(4px)",
+      }}
     >
       <div
         className="relative flex flex-col rounded-xl border border-white/10 shadow-2xl"
@@ -577,16 +745,25 @@ export function CodeInspector({ program, onClose }: CodeInspectorProps) {
           />
           <div className="flex-1 min-w-0">
             <div className="flex items-center gap-2">
-              <span className="text-sm font-semibold text-white truncate">{program.name}</span>
-              <span className="text-xs text-slate-500 font-mono">id:{program.id}</span>
+              <span className="text-sm font-semibold text-white truncate">
+                {program.name}
+              </span>
+              <span className="text-xs text-slate-500 font-mono">
+                id:{program.id}
+              </span>
               <span
                 className="text-xs px-1.5 py-0.5 rounded font-mono"
-                style={{ background: program.color + "22", color: program.color }}
+                style={{
+                  background: program.color + "22",
+                  color: program.color,
+                }}
               >
                 {program.rawType}
               </span>
             </div>
-            <div className="text-xs text-slate-500 font-mono mt-0.5">tag: {program.tag}</div>
+            <div className="text-xs text-slate-500 font-mono mt-0.5">
+              tag: {program.tag}
+            </div>
           </div>
           <button
             onClick={onClose}
@@ -642,18 +819,20 @@ export function CodeInspector({ program, onClose }: CodeInspectorProps) {
             <>
               {dump.error && (
                 <div className="flex items-center gap-2 px-4 py-2 bg-amber-950/30 border-b border-amber-500/20 shrink-0">
-                  <AlertTriangle size={14} className="text-amber-400 shrink-0" />
+                  <AlertTriangle
+                    size={14}
+                    className="text-amber-400 shrink-0"
+                  />
                   <span className="text-xs text-amber-300">{dump.error}</span>
                 </div>
               )}
-              {activeTab === "bytecode" && (
-                <BytecodeTab insns={dump.xlated} />
-              )}
-              {activeTab === "cfg" && (
-                <CfgTab dot={dump.cfgDot} />
-              )}
+              {activeTab === "bytecode" && <BytecodeTab insns={dump.xlated} />}
+              {activeTab === "cfg" && <CfgTab dot={dump.cfgDot} />}
               {activeTab === "jit" && (
-                <JitTab insns={dump.jited} unavailableReason={dump.jitedUnavailableReason} />
+                <JitTab
+                  insns={dump.jited}
+                  unavailableReason={dump.jitedUnavailableReason}
+                />
               )}
               {activeTab === "source" && (
                 <SourceTab insns={dump.xlated} hasLineInfo={dump.hasLineInfo} />
@@ -667,9 +846,15 @@ export function CodeInspector({ program, onClose }: CodeInspectorProps) {
           <div className="flex items-center gap-4 px-5 py-2 border-t border-white/5 shrink-0 text-xs text-slate-600">
             <span>{dump.xlated.length} BPF insns</span>
             {dump.jited && <span>{dump.jited.length} native insns</span>}
-            {dump.hasBtf && <span className="text-emerald-600">BTF id:{dump.btfId}</span>}
-            {dump.hasLineInfo && <span className="text-emerald-600">source annotations</span>}
-            {!dump.jited && <span className="text-amber-600/60">JIT not available</span>}
+            {dump.hasBtf && (
+              <span className="text-emerald-600">BTF id:{dump.btfId}</span>
+            )}
+            {dump.hasLineInfo && (
+              <span className="text-emerald-600">source annotations</span>
+            )}
+            {!dump.jited && (
+              <span className="text-amber-600/60">JIT not available</span>
+            )}
           </div>
         )}
       </div>
