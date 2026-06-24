@@ -533,7 +533,9 @@
 
 ## Feature: Separate map dump file (Option D)
 - [x] capture-snapshot.sh: add --dump-maps flag; produces ebpf-mapdumps-<host>-<ts>.json with { _ebpfVizMapDumps: true, mapDumps: { [id]: RawMapEntry[] } }
-- [x] capture-snapshot.sh: cap at 200 entries per map; skip UNSUPPORTED_TYPES; print file size + scp instructions
+- [x] capture-snapshot.sh: capture map dumps for supported maps; UI displays up
+      to 1000 entries per map and preserves total entry counts; print file size
+      + scp instructions
 - [x] server/routers.ts: add parseMapDumps mutation: accepts SnapshotMapDumps JSON, returns parsed MapDumpResult[] keyed by mapId
 - [x] EbpfContext: add snapshotMapDumps state; add loadMapDumps(file) function
 - [x] EbpfContext: expose loadMapDumps and snapshotMapDumps via context

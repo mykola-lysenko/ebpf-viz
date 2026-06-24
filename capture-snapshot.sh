@@ -15,7 +15,8 @@
 # With --dump-maps, a second file is produced:
 #   ebpf-mapdumps-<hostname>-<YYYYMMDD-HHMMSS>.json
 # Load both files together in the UI to enable map entry inspection in snapshot mode.
-# Cap: 200 entries per map. Unsupported types (ringbuf, perf_event_array, etc.) are skipped.
+# The UI/server displays up to 1000 entries per map. Unsupported types
+# (ringbuf, perf_event_array, etc.) are skipped.
 #
 # Output: ebpf-snapshot-<hostname>-<YYYYMMDD-HHMMSS>.json
 #
@@ -33,6 +34,7 @@ MAX_MAPS=500          # max maps to dump with --dump-maps
 CMD_TIMEOUT=30        # seconds per bpftool command
 MAP_DUMP_TIMEOUT=10   # seconds per map dump command
 MAP_DUMP_DELAY=0.05   # seconds between map dumps to reduce lock contention
+MAP_DUMP_DISPLAY_LIMIT=1000  # entries displayed per map after upload
 
 # ── Argument parsing ──────────────────────────────────────────────────────────
 while [[ $# -gt 0 ]]; do
@@ -242,7 +244,7 @@ log "Writing snapshot to: $OUTPUT_FILE"
 
 # ── Optionally capture map entries ───────────────────────────────────────────
 if [[ $DUMP_MAPS -eq 1 ]]; then
-  log "Capturing map entries (--dump-maps, cap 200 entries/map, max $MAX_MAPS maps)..."
+  log "Capturing map entries (--dump-maps, max $MAX_MAPS maps; UI displays up to $MAP_DUMP_DISPLAY_LIMIT entries/map)..."
 
   # Map types that bpftool cannot dump
   UNSUPPORTED_TYPES="perf_event_array|ringbuf|user_ringbuf|cgroup_array|prog_array"
@@ -334,8 +336,9 @@ if [[ $DUMP_MAPS -eq 1 ]]; then
     fi
 
     # Append raw dump to the output file.
-    # Server-side parseMapDumps already truncates to 200 entries, so we pass
-    # the full dump through. This avoids fragile awk-based JSON truncation.
+    # Server-side parseMapDumps displays up to MAP_DUMP_DISPLAY_LIMIT entries,
+    # so we pass the full dump through. This avoids fragile shell-side JSON
+    # truncation while preserving total entry counts.
     {
       if [[ $FIRST_ENTRY -eq 0 ]]; then
         printf ','

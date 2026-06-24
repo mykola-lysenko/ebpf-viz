@@ -204,6 +204,10 @@ The script outputs two files:
 - `ebpf-snapshot-<hostname>-<YYYYMMDD-HHMMSS>.json` — topology snapshot (~0.3 MB typical)
 - `ebpf-mapdumps-<hostname>-<YYYYMMDD-HHMMSS>.json` — map entry contents (size varies; only with `--dump-maps`)
 
+Map dump files preserve raw map entries when feasible; unsupported map types are
+skipped, and the UI displays up to 1000 entries per map while preserving total
+entry counts.
+
 ### Step 2 — Transfer
 
 ```bash
