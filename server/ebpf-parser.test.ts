@@ -876,6 +876,75 @@ describe("buildProgramChains", () => {
     ]);
   });
 
+  it("orders detailed tc hook groups ingress before egress", () => {
+    const progs = parseProgList([
+      { ...xdpProg, id: 80, type: "sched_cls", name: "ingress_a" },
+      { ...xdpProg, id: 81, type: "sched_cls", name: "ingress_b" },
+      { ...xdpProg, id: 82, type: "sched_cls", name: "egress_a" },
+      { ...xdpProg, id: 83, type: "sched_cls", name: "egress_b" },
+    ]);
+    const net: RawNetSnapshot[] = [
+      {
+        tc: [
+          { devname: "eth0", ifindex: 2, id: 80, kind: "clsact/ingress" },
+          { devname: "eth0", ifindex: 2, id: 81, kind: "clsact/ingress" },
+          { devname: "eth0", ifindex: 2, id: 82, kind: "clsact/egress" },
+          { devname: "eth0", ifindex: 2, id: 83, kind: "clsact/egress" },
+        ],
+        tcFilters: [
+          {
+            devname: "eth0",
+            ifindex: 2,
+            direction: "egress",
+            pref: 1,
+            chain: 0,
+            order: 0,
+            options: { prog: { id: 82 } },
+          },
+          {
+            devname: "eth0",
+            ifindex: 2,
+            direction: "egress",
+            pref: 2,
+            chain: 0,
+            order: 1,
+            options: { prog: { id: 83 } },
+          },
+          {
+            devname: "eth0",
+            ifindex: 2,
+            direction: "ingress",
+            pref: 100,
+            chain: 0,
+            order: 2,
+            options: { prog: { id: 80 } },
+          },
+          {
+            devname: "eth0",
+            ifindex: 2,
+            direction: "ingress",
+            pref: 101,
+            chain: 0,
+            order: 3,
+            options: { prog: { id: 81 } },
+          },
+        ],
+      },
+    ];
+
+    const chains = buildProgramChains(progs, net, []);
+    expect(chains.map(chain => chain.attachType)).toEqual([
+      "clsact/ingress",
+      "clsact/egress",
+    ]);
+    expect(chains.map(chain => chain.programs.map(program => program.id))).toEqual(
+      [
+        [80, 81],
+        [82, 83],
+      ]
+    );
+  });
+
   it("adds cgroup_skb packet context to ingress and egress chains", () => {
     const ingressA: RawBpfProg = {
       ...cgroupSkbProg,

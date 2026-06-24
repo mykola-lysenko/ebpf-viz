@@ -122,6 +122,17 @@ function tcDirectionFromKind(kind: string | undefined): PacketDirection {
   return "unknown";
 }
 
+function tcDirectionOrder(direction: PacketDirection): number {
+  switch (direction) {
+    case "ingress":
+      return 0;
+    case "egress":
+      return 1;
+    default:
+      return 2;
+  }
+}
+
 function tcKindFromDirection(direction: RawTcFilterEntry["direction"]): string {
   return direction === "ingress" ? "clsact/ingress" : "clsact/egress";
 }
@@ -228,8 +239,11 @@ function tcProgramEntriesFromFilters(
 
   return entries.sort((a, b) => {
     if (a.devname !== b.devname) return a.devname.localeCompare(b.devname);
-    if (a.kind !== b.kind) return a.kind.localeCompare(b.kind);
+    const directionDelta =
+      tcDirectionOrder(a.direction) - tcDirectionOrder(b.direction);
+    if (directionDelta !== 0) return directionDelta;
     if (a.chain !== b.chain) return a.chain - b.chain;
+    if (a.kind !== b.kind) return a.kind.localeCompare(b.kind);
     if ((a.priority ?? Infinity) !== (b.priority ?? Infinity)) {
       return (a.priority ?? Infinity) - (b.priority ?? Infinity);
     }
