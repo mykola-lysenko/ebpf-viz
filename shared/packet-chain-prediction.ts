@@ -108,6 +108,11 @@ function verdictLabel(
   verdicts: PacketVerdict[],
   hasUnknownBehavior: boolean
 ): string {
+  if (verdicts.includes("drop") && verdicts.includes("redirect")) {
+    return verdicts.includes("pass")
+      ? "can pass, drop, or redirect"
+      : "can drop or redirect";
+  }
   if (verdicts.includes("drop")) return "can drop";
   if (verdicts.includes("redirect")) return "can redirect";
   if (hasUnknownBehavior || verdicts.includes("unknown"))
@@ -230,10 +235,13 @@ function constantExitExplanation(
 
   return {
     verdict,
+    evidenceKind: "constant-return",
     summary: finishSentence(
       `${verdictAction(verdict)} with return ${exit.value} at exit ${exit.exitIndex}${conditionText}${location}`
     ),
     exitIndex: exit.exitIndex,
+    assignmentIndex: exit.assignmentIndex,
+    assignmentDisasm: exit.assignmentDisasm,
     returnValue: exit.value,
     source: exit.source,
     sourceFile: exit.sourceFile,
@@ -252,10 +260,13 @@ function unknownExitExplanation(
 
   return {
     verdict: "unknown",
+    evidenceKind: "unknown-return",
     summary: finishSentence(
       `May return a runtime-dependent verdict at exit ${exit.exitIndex} (${reason})${location}`
     ),
     exitIndex: exit.exitIndex,
+    assignmentIndex: exit.assignmentIndex,
+    assignmentDisasm: exit.assignmentDisasm,
     source: exit.source,
     sourceFile: exit.sourceFile,
     sourceLine: exit.sourceLine,
@@ -279,12 +290,16 @@ function helperReturnExplanations(
 
   return verdicts.map(verdict => ({
     verdict,
+    evidenceKind: "modeled-helper-return",
     summary: finishSentence(
       verdict === "drop"
         ? `Can drop if ${helperText} fails at exit ${exit.exitIndex}${location}`
         : `Can ${verdict} via ${helperText} helper return at exit ${exit.exitIndex}${location}`
     ),
     exitIndex: exit.exitIndex,
+    assignmentIndex: exit.assignmentIndex,
+    assignmentDisasm: exit.assignmentDisasm,
+    helper: helper ? `bpf_${helper}` : undefined,
     source: exit.source,
     sourceFile: exit.sourceFile,
     sourceLine: exit.sourceLine,
@@ -432,6 +447,7 @@ function buildVerdictExplanations(
 
       explanations.push({
         verdict: continuation?.tone ?? "unknown",
+        evidenceKind: "tail-call",
         summary: resolvedTargetText
           ? `Tail call at instruction ${tailCall.insnIndex} may continue in ${resolvedTargetText} via ${tailCallTarget?.mapName ?? `map #${tailCall.mapId}`}[${tailCall.slot}].${continuationExplanation(continuation)}`
           : `Tail call at instruction ${tailCall.insnIndex} may continue in ${mapText}${slotText}; target program is not resolved from current snapshot.`,

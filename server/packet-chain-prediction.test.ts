@@ -396,7 +396,7 @@ describe("predictPacketChain", () => {
       confidence: "high",
     });
     expect(prediction?.steps[1]).toMatchObject({
-      label: "can drop",
+      label: "can drop or redirect",
       tone: "drop",
       verdicts: ["drop", "redirect"],
       reachability: "always",

@@ -314,9 +314,17 @@ export interface PacketTailCallContinuation {
 
 export interface PacketVerdictExplanation {
   verdict: PacketVerdict;
+  evidenceKind?:
+    | "constant-return"
+    | "modeled-helper-return"
+    | "unknown-return"
+    | "tail-call";
   summary: string;
   exitIndex?: number;
+  assignmentIndex?: number;
+  assignmentDisasm?: string;
   returnValue?: number;
+  helper?: string;
   source?: string;
   sourceFile?: string;
   sourceLine?: number;

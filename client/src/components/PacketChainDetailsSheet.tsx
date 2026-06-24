@@ -99,6 +99,14 @@ function EmptyLine({ children }: { children: ReactNode }) {
   return <div className="text-[11px] text-muted-foreground/60">{children}</div>;
 }
 
+function returnEvidenceKey(
+  value: Pick<XlatedReturnExit | PacketVerdictExplanation, "exitIndex"> & {
+    assignmentIndex?: number;
+  }
+): string {
+  return `${value.exitIndex ?? "unknown"}:${value.assignmentIndex ?? "unknown"}`;
+}
+
 function VerdictExplanations({
   explanations,
 }: {
@@ -140,9 +148,11 @@ function VerdictExplanations({
 function ReturnEvidence({
   exits,
   label,
+  modeledLabel,
 }: {
   exits: XlatedReturnExit[];
   label: string;
+  modeledLabel?: string;
 }) {
   if (exits.length === 0) {
     return <EmptyLine>No {label} exits.</EmptyLine>;
@@ -163,8 +173,15 @@ function ReturnEvidence({
               </span>
             )}
             {exit.reason && (
-              <span className="rounded border border-amber-500/25 bg-amber-500/5 px-1 py-0.5 text-amber-300">
-                {exit.reason}
+              <span
+                className={cn(
+                  "rounded border px-1 py-0.5",
+                  modeledLabel
+                    ? "border-cyan-500/25 bg-cyan-500/5 text-cyan-300"
+                    : "border-amber-500/25 bg-amber-500/5 text-amber-300"
+                )}
+              >
+                {modeledLabel ?? exit.reason}
               </span>
             )}
           </div>
@@ -357,6 +374,21 @@ function StepDetails({
   analysisResult?: ProgramReturnAnalysisResult;
 }) {
   const analysis = analysisResult?.returnAnalysis;
+  const modeledHelperExitKeys = new Set(
+    step.verdictExplanations
+      .filter(
+        explanation => explanation.evidenceKind === "modeled-helper-return"
+      )
+      .map(returnEvidenceKey)
+  );
+  const modeledHelperExits =
+    analysis?.unknownExits.filter(exit =>
+      modeledHelperExitKeys.has(returnEvidenceKey(exit))
+    ) ?? [];
+  const unresolvedUnknownExits =
+    analysis?.unknownExits.filter(
+      exit => !modeledHelperExitKeys.has(returnEvidenceKey(exit))
+    ) ?? [];
   const tailCallSummary =
     step.tailCallContinuations.length > 0
       ? step.tailCallContinuations
@@ -444,12 +476,30 @@ function StepDetails({
             <ReturnEvidence exits={analysis.constantExits} label="constant" />
           </div>
 
-          {(analysis.unknownExits.length > 0 || analysis.hasTailCalls) && (
+          {modeledHelperExits.length > 0 && (
+            <div>
+              <div className="mb-1 text-[10px] font-semibold uppercase tracking-wider text-cyan-300/80">
+                Modeled Helper Returns
+              </div>
+              <ReturnEvidence
+                exits={modeledHelperExits}
+                label="modeled helper"
+                modeledLabel="modeled helper return"
+              />
+            </div>
+          )}
+
+          {(unresolvedUnknownExits.length > 0 || analysis.hasTailCalls) && (
             <div>
               <div className="mb-1 text-[10px] font-semibold uppercase tracking-wider text-amber-300/80">
-                Tail Calls & Uncertainty
+                {analysis.hasTailCalls
+                  ? "Tail Calls & Unresolved Returns"
+                  : "Unresolved Returns"}
               </div>
-              <ReturnEvidence exits={analysis.unknownExits} label="unknown" />
+              <ReturnEvidence
+                exits={unresolvedUnknownExits}
+                label="unresolved"
+              />
               {analysis.hasTailCalls && (
                 <TailCallEvidence
                   tailCalls={analysis.tailCalls}
