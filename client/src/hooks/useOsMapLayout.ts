@@ -1,7 +1,17 @@
 import { useMemo, useState, useEffect, useRef } from "react";
-import type { Node, Edge } from "@xyflow/react";
-import type { EbpfSnapshot, BpfProgram, BpfMap, CgroupNode, NetworkInterface, KernelAttachmentZone } from "../../../shared/ebpf-types";
-import type { MapNodeData, MapSummaryNodeData } from "../components/osmap/OsMapNodes";
+import { MarkerType, type Node, type Edge } from "@xyflow/react";
+import type {
+  EbpfSnapshot,
+  BpfProgram,
+  BpfMap,
+  CgroupNode,
+  NetworkInterface,
+  KernelZone,
+} from "../../../shared/ebpf-types";
+import type {
+  MapNodeData,
+  MapSummaryNodeData,
+} from "../components/osmap/OsMapNodes";
 import { estimateInterfaceNodeHeight } from "../components/osmap/OsMapNodes";
 
 // ─── Layout constants ────────────────────────────────────────────────────────
@@ -43,7 +53,7 @@ const PROG_GAP = 8;
 // These program types are attached to network interfaces and are displayed
 // exclusively on the NIC nodes in the Network Layer band.  They are NOT shown
 // in the "Kernel Hook Zones" row to avoid duplication.
-const NIC_ZONE_KEYS = new Set([
+const NIC_ZONE_KEYS = new Set<KernelZone>([
   "xdp",
   "tc_ingress",
   "tc_egress",
@@ -56,24 +66,33 @@ const NIC_ZONE_KEYS = new Set([
 // ─── Zone layout data ─────────────────────────────────────────────────────────
 
 const ZONE_COLORS: Record<string, string> = {
-  xdp:            "#00d4ff",
-  tc_ingress:     "#7c3aed",
-  tc_egress:      "#6d28d9",
-  socket_filter:  "#a78bfa",
-  kprobe:         "#f59e0b",
-  tracepoint:     "#10b981",
-  perf_event:     "#f97316",
-  cgroup:         "#3b82f6",
+  xdp: "#00d4ff",
+  tc_ingress: "#7c3aed",
+  tc_egress: "#6d28d9",
+  socket_filter: "#a78bfa",
+  kprobe: "#f59e0b",
+  tracepoint: "#10b981",
+  perf_event: "#f97316",
+  cgroup: "#3b82f6",
   flow_dissector: "#ec4899",
-  netfilter:      "#f43f5e",
-  sk_ops:         "#8b5cf6",
-  other:          "#6b7280",
+  netfilter: "#f43f5e",
+  sk_ops: "#8b5cf6",
+  other: "#6b7280",
 };
 
 const ZONE_ICONS: Record<string, string> = {
-  xdp: "⚡", tc_ingress: "↓", tc_egress: "↑", socket_filter: "🔌",
-  kprobe: "🔍", tracepoint: "📍", perf_event: "📊", cgroup: "📁",
-  flow_dissector: "🔀", netfilter: "🛡", sk_ops: "🔧", other: "⚙",
+  xdp: "⚡",
+  tc_ingress: "↓",
+  tc_egress: "↑",
+  socket_filter: "🔌",
+  kprobe: "🔍",
+  tracepoint: "📍",
+  perf_event: "📊",
+  cgroup: "📁",
+  flow_dissector: "🔀",
+  netfilter: "🛡",
+  sk_ops: "🔧",
+  other: "⚙",
 };
 
 // ─── Node type identifiers ────────────────────────────────────────────────────
@@ -176,7 +195,10 @@ function layoutCgroupTree(
   startY: number,
   maxDepth?: number
 ): Map<string, { x: number; y: number; w: number; h: number }> {
-  const positions = new Map<string, { x: number; y: number; w: number; h: number }>();
+  const positions = new Map<
+    string,
+    { x: number; y: number; w: number; h: number }
+  >();
 
   // Group nodes by depth (up to maxDepth)
   const byDepth: CgroupNode[][] = [];
@@ -215,11 +237,11 @@ export interface OsMapLayout {
 // ─── Map category colors ─────────────────────────────────────────────────────
 
 const MAP_CATEGORY_COLORS: Record<string, string> = {
-  data:    "#a78bfa",
-  event:   "#f97316",
+  data: "#a78bfa",
+  event: "#f97316",
   control: "#10b981",
-  socket:  "#06b6d4",
-  other:   "#6b7280",
+  socket: "#06b6d4",
+  other: "#6b7280",
 };
 
 export function buildOsMapLayout(
@@ -242,18 +264,24 @@ export function buildOsMapLayout(
   // NIC_ZONE_KEYS (xdp, tc_ingress, tc_egress, netfilter, socket_filter,
   // flow_dissector, sk_ops) are shown exclusively on the NIC interface nodes
   // in the Network Layer band.  Showing them here too would duplicate them.
-  const KERNEL_ONLY_ZONES = ["kprobe", "tracepoint", "perf_event", "cgroup", "other"];
+  const KERNEL_ONLY_ZONES: KernelZone[] = [
+    "kprobe",
+    "tracepoint",
+    "perf_event",
+    "cgroup",
+    "other",
+  ];
 
   const zoneMap = new Map(snapshot.kernelZones.map(z => [z.zone, z]));
 
   // Filter to only zones that (a) are kernel-only and (b) have at least one program
   const visibleKernelZones = KERNEL_ONLY_ZONES.filter(zk => {
-    const zone = zoneMap.get(zk as any);
+    const zone = zoneMap.get(zk);
     return zone && zone.programs.length > 0;
   });
 
   visibleKernelZones.forEach((zk, idx) => {
-    const zone = zoneMap.get(zk as any)!;
+    const zone = zoneMap.get(zk)!;
     const x = KERNEL_PADDING + idx * (ZONE_W + ZONE_GAP);
     const y = ZONES_SECTION_Y;
     nodes.push({
@@ -266,8 +294,12 @@ export function buildOsMapLayout(
         description: zone.description,
         color: ZONE_COLORS[zk] ?? "#6b7280",
         icon: ZONE_ICONS[zk] ?? "⚙",
-        programCount: focusedSet ? zone.programs.filter(p => focusedSet.has(p.id)).length : zone.programs.length,
-        programs: focusedSet ? zone.programs.filter(p => focusedSet.has(p.id)) : zone.programs,
+        programCount: focusedSet
+          ? zone.programs.filter(p => focusedSet.has(p.id)).length
+          : zone.programs.length,
+        programs: focusedSet
+          ? zone.programs.filter(p => focusedSet.has(p.id))
+          : zone.programs,
         isPacketPath: false,
       } satisfies ZoneNodeData,
       style: { width: ZONE_W, height: ZONE_H },
@@ -280,7 +312,10 @@ export function buildOsMapLayout(
       id: "label-zones",
       type: "zoneSectionLabel",
       position: { x: KERNEL_PADDING, y: ZONES_SECTION_Y - 36 },
-      data: { label: "Kernel Hook Zones", color: "#00d4ff" } satisfies SectionLabelData,
+      data: {
+        label: "Kernel Hook Zones",
+        color: "#00d4ff",
+      } satisfies SectionLabelData,
       selectable: false,
       draggable: false,
     });
@@ -289,16 +324,25 @@ export function buildOsMapLayout(
   // ── 2. Cgroup tree ──────────────────────────────────────────────────────────
   const cgroupStartX = KERNEL_PADDING;
   // If there are no visible kernel zones, start cgroups right below the header
-  const cgroupStartY = visibleKernelZones.length > 0
-    ? ZONES_SECTION_Y + ZONE_H + 60
-    : ZONES_SECTION_Y;
+  const cgroupStartY =
+    visibleKernelZones.length > 0
+      ? ZONES_SECTION_Y + ZONE_H + 60
+      : ZONES_SECTION_Y;
 
-  const cgroupPositions = layoutCgroupTree(snapshot.cgroupTree, cgroupStartX, cgroupStartY, maxCgroupDepth);
+  const cgroupPositions = layoutCgroupTree(
+    snapshot.cgroupTree,
+    cgroupStartX,
+    cgroupStartY,
+    maxCgroupDepth
+  );
 
   // Only flatten up to maxCgroupDepth
-  const allCgroups = maxCgroupDepth !== undefined
-    ? flattenCgroup(snapshot.cgroupTree).filter(n => n.depth <= maxCgroupDepth)
-    : flattenCgroup(snapshot.cgroupTree);
+  const allCgroups =
+    maxCgroupDepth !== undefined
+      ? flattenCgroup(snapshot.cgroupTree).filter(
+          n => n.depth <= maxCgroupDepth
+        )
+      : flattenCgroup(snapshot.cgroupTree);
 
   // Compute cgroup section total height
   let cgroupMaxY = cgroupStartY;
@@ -311,7 +355,10 @@ export function buildOsMapLayout(
     if (!pos) return;
 
     // Count hidden descendants when this node is at the depth limit
-    const isAtLimit = maxCgroupDepth !== undefined && cgNode.depth === maxCgroupDepth && cgNode.children.length > 0;
+    const isAtLimit =
+      maxCgroupDepth !== undefined &&
+      cgNode.depth === maxCgroupDepth &&
+      cgNode.children.length > 0;
     const collapsedChildren = isAtLimit ? countDescendants(cgNode) : undefined;
 
     nodes.push({
@@ -350,7 +397,10 @@ export function buildOsMapLayout(
     id: "label-cgroups",
     type: "cgroupSectionLabel",
     position: { x: cgroupStartX, y: cgroupStartY - 36 },
-    data: { label: "Cgroup Hierarchy", color: "#3b82f6" } satisfies SectionLabelData,
+    data: {
+      label: "Cgroup Hierarchy",
+      color: "#3b82f6",
+    } satisfies SectionLabelData,
     selectable: false,
     draggable: false,
   });
@@ -394,14 +444,16 @@ export function buildOsMapLayout(
     const x = KERNEL_PADDING + idx * (IFACE_W + IFACE_GAP);
     const y = NET_Y + IFACE_NODE_PADDING_TOP;
 
-    const layers = focusedSet ? {
-      L2: iface.layers.L2.filter(p => focusedSet.has(p.id)),
-      L3: iface.layers.L3.filter(p => focusedSet.has(p.id)),
-      L4: iface.layers.L4.filter(p => focusedSet.has(p.id)),
-      L7: iface.layers.L7.filter(p => focusedSet.has(p.id)),
-    } : iface.layers;
-    
-    const allPrograms = focusedSet 
+    const layers = focusedSet
+      ? {
+          L2: iface.layers.L2.filter(p => focusedSet.has(p.id)),
+          L3: iface.layers.L3.filter(p => focusedSet.has(p.id)),
+          L4: iface.layers.L4.filter(p => focusedSet.has(p.id)),
+          L7: iface.layers.L7.filter(p => focusedSet.has(p.id)),
+        }
+      : iface.layers;
+
+    const allPrograms = focusedSet
       ? iface.allPrograms.filter(p => focusedSet.has(p.id))
       : iface.allPrograms;
 
@@ -442,7 +494,10 @@ export function buildOsMapLayout(
 
   // ── 5. Userspace processes ──────────────────────────────────────────────────
   // Collect unique processes from program pids
-  const processMap = new Map<number, { pid: number; comm: string; programIds: number[] }>();
+  const processMap = new Map<
+    number,
+    { pid: number; comm: string; programIds: number[] }
+  >();
   snapshot.programs.forEach(p => {
     if (p.pids) {
       p.pids.forEach(({ pid, comm }) => {
@@ -489,7 +544,11 @@ export function buildOsMapLayout(
             source: `proc-${proc.pid}`,
             target: `iface-${attachedIface.name}`,
             type: "smoothstep",
-            style: { stroke: "#ffffff15", strokeWidth: 1, strokeDasharray: "3 4" },
+            style: {
+              stroke: "#ffffff15",
+              strokeWidth: 1,
+              strokeDasharray: "3 4",
+            },
             animated: false,
           });
         }
@@ -502,7 +561,11 @@ export function buildOsMapLayout(
           source: `proc-${proc.pid}`,
           target: `zone-${zoneKey}`,
           type: "smoothstep",
-          style: { stroke: "#ffffff15", strokeWidth: 1, strokeDasharray: "3 4" },
+          style: {
+            stroke: "#ffffff15",
+            strokeWidth: 1,
+            strokeDasharray: "3 4",
+          },
           animated: false,
         });
       }
@@ -531,7 +594,12 @@ export function buildOsMapLayout(
   const MAP_H = 90;
   const MAP_GAP_X = 20;
   const MAP_GAP_Y = 16;
-  const MAP_COLS = Math.max(1, Math.floor((CANVAS_W - KERNEL_PADDING * 2 + MAP_GAP_X) / (MAP_W + MAP_GAP_X)));
+  const MAP_COLS = Math.max(
+    1,
+    Math.floor(
+      (CANVAS_W - KERNEL_PADDING * 2 + MAP_GAP_X) / (MAP_W + MAP_GAP_X)
+    )
+  );
   const MAPS_Y = NET_Y + netBandH + MAP_SECTION_TOP_MARGIN;
 
   let mapsMaxY = MAPS_Y;
@@ -552,7 +620,8 @@ export function buildOsMapLayout(
     const focusedSet = new Set(focusedProgIds || []);
 
     maps.forEach(m => {
-      const isFocused = focusedSet.size > 0 && m.usedByProgIds.some(id => focusedSet.has(id));
+      const isFocused =
+        focusedSet.size > 0 && m.usedByProgIds.some(id => focusedSet.has(id));
       if (isFocused) {
         expandedMaps.push(m);
       } else {
@@ -564,7 +633,7 @@ export function buildOsMapLayout(
 
     // 1. Draw Aggregated Maps (Summary Nodes)
     const categories = ["data", "event", "control", "socket", "other"];
-    categories.forEach((cat) => {
+    categories.forEach(cat => {
       const catMaps = aggregatedMaps.filter(m => m.category === cat);
       if (catMaps.length === 0) return;
 
@@ -596,7 +665,7 @@ export function buildOsMapLayout(
         const prog = progById.get(progId);
         if (!prog) return;
         const zoneKey = progTypeToZone(prog.rawType);
-        
+
         let sourceNodeId = `zone-${zoneKey}`;
         if (NIC_ZONE_KEYS.has(zoneKey)) {
           const attachedIface = snapshot.networkInterfaces.find(iface =>
@@ -604,15 +673,24 @@ export function buildOsMapLayout(
           );
           if (attachedIface) sourceNodeId = `iface-${attachedIface.name}`;
         }
-        
+
         edges.push({
           id: `e-prog-${progId}-maps-summary-${cat}`,
           source: sourceNodeId,
           target: nodeId,
           type: "smoothstep",
-          style: { stroke: `${color}40`, strokeWidth: 1, strokeDasharray: "3 4" },
+          style: {
+            stroke: `${color}40`,
+            strokeWidth: 1,
+            strokeDasharray: "3 4",
+          },
           animated: false,
-          markerEnd: { type: "arrowclosed" as any, color, width: 8, height: 8 },
+          markerEnd: {
+            type: MarkerType.ArrowClosed,
+            color,
+            width: 8,
+            height: 8,
+          },
         });
       });
       currentGridIndex++;
@@ -620,7 +698,7 @@ export function buildOsMapLayout(
     });
 
     // 2. Draw Expanded Maps
-    expandedMaps.forEach((map) => {
+    expandedMaps.forEach(map => {
       const col = currentGridIndex % MAP_COLS;
       const row = Math.floor(currentGridIndex / MAP_COLS);
       const x = KERNEL_PADDING + col * (MAP_W + MAP_GAP_X);
@@ -651,8 +729,8 @@ export function buildOsMapLayout(
 
       // Edges from programs to this map
       // We buffer them to bundle parallel edges
-      const mapEdgeBuffer: { progId: number, sourceNodeId: string }[] = [];
-      
+      const mapEdgeBuffer: { progId: number; sourceNodeId: string }[] = [];
+
       map.usedByProgIds.forEach(progId => {
         const prog = progById.get(progId);
         if (!prog) return;
@@ -667,49 +745,62 @@ export function buildOsMapLayout(
         }
         mapEdgeBuffer.push({ progId, sourceNodeId });
       });
-      
+
       // Group by source node
       const edgesBySource = new Map<string, number[]>();
       mapEdgeBuffer.forEach(({ progId, sourceNodeId }) => {
         let list = edgesBySource.get(sourceNodeId);
-        if (!list) { list = []; edgesBySource.set(sourceNodeId, list); }
+        if (!list) {
+          list = [];
+          edgesBySource.set(sourceNodeId, list);
+        }
         list.push(progId);
       });
-      
+
       // Render bundled edges
       edgesBySource.forEach((progIds, sourceNodeId) => {
         // Edge ID uses the first progId for consistency, but represents all of them
         const representativeProgId = progIds[0];
-        
+
         edges.push({
           id: `e-prog-${representativeProgId}-map-${map.id}`,
           source: sourceNodeId,
           target: nodeId,
           type: "smoothstep",
-          style: { stroke: `${color}40`, strokeWidth: progIds.length > 1 ? 2 : 1, strokeDasharray: "3 4" },
+          style: {
+            stroke: `${color}40`,
+            strokeWidth: progIds.length > 1 ? 2 : 1,
+            strokeDasharray: "3 4",
+          },
           animated: false,
           label: progIds.length > 1 ? `×${progIds.length}` : undefined,
           labelStyle: { fill: `${color}cc`, fontSize: 10, fontWeight: "bold" },
           labelBgStyle: { fill: "transparent" },
-          markerEnd: { type: "arrowclosed" as any, color, width: 8, height: 8 },
+          markerEnd: {
+            type: MarkerType.ArrowClosed,
+            color,
+            width: 8,
+            height: 8,
+          },
           // Store all bundled progIds so the focus/animation logic can find them
-          data: { bundledProgIds: progIds }
+          data: { bundledProgIds: progIds },
         });
       });
       currentGridIndex++;
       mapsMaxY = Math.max(mapsMaxY, y + MAP_H);
     });
   }
-  const totalHeight = (maps.length > 0 ? mapsMaxY + 60 : NET_Y + netBandH + 60);
+  const totalHeight = maps.length > 0 ? mapsMaxY + 60 : NET_Y + netBandH + 60;
 
   return { nodes, edges, totalHeight, totalWidth: CANVAS_W };
 }
 
-function progTypeToZone(rawType: string): string {
+function progTypeToZone(rawType: string): KernelZone {
   if (rawType === "xdp") return "xdp";
   if (rawType === "sched_cls" || rawType === "sched_act") return "tc_ingress";
   if (rawType === "kprobe" || rawType === "kretprobe") return "kprobe";
-  if (rawType === "tracepoint" || rawType === "raw_tracepoint") return "tracepoint";
+  if (rawType === "tracepoint" || rawType === "raw_tracepoint")
+    return "tracepoint";
   if (rawType === "perf_event") return "perf_event";
   if (rawType.startsWith("cgroup")) return "cgroup";
   if (rawType === "flow_dissector") return "flow_dissector";
@@ -736,10 +827,17 @@ export function useOsMapLayout(
   const lod = zoomToLod(zoom);
 
   const [layout, setLayout] = useState<OsMapLayout>(() => {
-    if (!snapshot) return { nodes: [], edges: [], totalHeight: 1200, totalWidth: CANVAS_W };
-    return buildOsMapLayout(snapshot, maps, lod, maxCgroupDepth, focusedProgIds);
+    if (!snapshot)
+      return { nodes: [], edges: [], totalHeight: 1200, totalWidth: CANVAS_W };
+    return buildOsMapLayout(
+      snapshot,
+      maps,
+      lod,
+      maxCgroupDepth,
+      focusedProgIds
+    );
   });
-  
+
   // Track the exact params we used for the initial synchronous layout
   // so we don't re-run it on the very first render cycle when the worker fires up.
   const syncSnapRef = useRef(snapshot);
@@ -747,19 +845,22 @@ export function useOsMapLayout(
   const syncLodRef = useRef(lod);
   const syncDepthRef = useRef(maxCgroupDepth);
   const syncFocusedRef = useRef(focusedProgIds?.join(","));
-  
+
   const workerRef = useRef<Worker | null>(null);
   const reqIdRef = useRef(0);
 
   // Initialize worker once
   useEffect(() => {
-    workerRef.current = new Worker(new URL('../workers/osmap.worker.ts', import.meta.url), { type: 'module' });
-    workerRef.current.onmessage = (e) => {
+    workerRef.current = new Worker(
+      new URL("../workers/osmap.worker.ts", import.meta.url),
+      { type: "module" }
+    );
+    workerRef.current.onmessage = e => {
       if (e.data.reqId === reqIdRef.current) {
         setLayout(e.data.layout);
       }
     };
-    workerRef.current.onerror = (e) => {
+    workerRef.current.onerror = e => {
       console.error("OS Map layout worker failed:", e);
     };
     return () => workerRef.current?.terminate();
@@ -768,7 +869,12 @@ export function useOsMapLayout(
   // Dispatch layout jobs to the worker, debounced
   useEffect(() => {
     if (!snapshot) {
-      setLayout({ nodes: [], edges: [], totalHeight: 1200, totalWidth: CANVAS_W });
+      setLayout({
+        nodes: [],
+        edges: [],
+        totalHeight: 1200,
+        totalWidth: CANVAS_W,
+      });
       return;
     }
 
@@ -788,7 +894,12 @@ export function useOsMapLayout(
     const timerId = setTimeout(() => {
       const reqId = ++reqIdRef.current;
       workerRef.current?.postMessage({
-        snapshot, maps, lod, maxCgroupDepth, focusedProgIds, reqId
+        snapshot,
+        maps,
+        lod,
+        maxCgroupDepth,
+        focusedProgIds,
+        reqId,
       });
     }, 300);
 
