@@ -237,9 +237,20 @@ export const appRouter = router({
     parseSnapshot: publicProcedure
       .input(rawSnapshotInputSchema)
       .mutation(({ input }) => {
+        const rawNet = (input.raw.net ?? []) as RawNetSnapshot[];
+        const rawTcFilters = input.raw.tcFilters as
+          | RawNetSnapshot["tcFilters"]
+          | undefined;
+        const net =
+          rawTcFilters && rawTcFilters.length > 0
+            ? [
+                { ...(rawNet[0] ?? {}), tcFilters: rawTcFilters },
+                ...rawNet.slice(1),
+              ]
+            : rawNet;
         const snap = buildSnapshot(
           input.raw.progs as RawBpfProg[],
-          (input.raw.net ?? []) as RawNetSnapshot[],
+          net,
           (input.raw.cgroups ?? []) as RawCgroupEntry[],
           {
             hostname: input.hostname ?? "unknown",

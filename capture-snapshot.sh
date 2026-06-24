@@ -176,6 +176,62 @@ run_bpftool_to_file() {
   return 0
 }
 
+# Capture detailed TC filter dumps as grouped records. The parser accepts this
+# optional raw.tcFilters field and merges it into the bpftool net snapshot.
+collect_tc_filters_to_file() {
+  local outfile="$1"
+  printf '[' > "$outfile"
+
+  if ! command -v tc &>/dev/null; then
+    printf ']\n' >> "$outfile"
+    return 0
+  fi
+
+  local devices=()
+  while IFS= read -r dev; do
+    [[ -n "$dev" ]] && devices+=("$dev")
+  done < <(
+    grep -oE '"devname"[[:space:]]*:[[:space:]]*"[^"]+"' "$TMPDIR_SNAP/net.json" \
+      | sed 's/.*"devname"[[:space:]]*:[[:space:]]*"//; s/"$//' \
+      | sort -u
+  )
+
+  local first=1
+  for dev in "${devices[@]}"; do
+    local safe_dev
+    safe_dev=$(printf '%s' "$dev" | tr -cs 'A-Za-z0-9_.-' '_')
+    for direction in ingress egress; do
+      local dump_tmp="$TMPDIR_SNAP/tc_${safe_dev}_${direction}.json"
+      local cmd_parts=()
+      if [[ -n "$TIMEOUT_CMD" ]]; then
+        cmd_parts+=("$TIMEOUT_CMD" "$CMD_TIMEOUT")
+      fi
+      if [[ -n "$SUDO_PREFIX" ]]; then
+        cmd_parts+=("$SUDO_PREFIX")
+      fi
+      cmd_parts+=(tc -s -d -j filter show dev "$dev" "$direction")
+
+      if ! "${cmd_parts[@]}" 2>/dev/null | grep -v '^libbpf:' > "$dump_tmp"; then
+        continue
+      fi
+      if [[ ! -s "$dump_tmp" ]]; then
+        continue
+      fi
+
+      if [[ $first -eq 0 ]]; then
+        printf ',\n' >> "$outfile"
+      fi
+      first=0
+      printf '    {"devname":"%s","direction":"%s","filters":' \
+        "$(json_escape_string "$dev")" "$direction" >> "$outfile"
+      cat "$dump_tmp" >> "$outfile"
+      printf '}' >> "$outfile"
+    done
+  done
+
+  printf '\n  ]\n' >> "$outfile"
+}
+
 # ── Gather metadata ───────────────────────────────────────────────────────────
 HOSTNAME_VAL=$(hostname 2>/dev/null || echo "unknown")
 KERNEL_VERSION=$(uname -r 2>/dev/null || echo "unknown")
@@ -203,6 +259,9 @@ run_bpftool_to_file "$TMPDIR_SNAP/net.json" "net"
 
 log "Running: bpftool cgroup tree..."
 run_bpftool_to_file "$TMPDIR_SNAP/cgroups.json" "cgroup tree"
+
+log "Running: tc filter show for detailed TC chain ordering..."
+collect_tc_filters_to_file "$TMPDIR_SNAP/tc-filters.json"
 
 # ── Determine output file ─────────────────────────────────────────────────────
 SAFE_HOST=$(echo "$HOSTNAME_VAL" | tr -cs 'a-zA-Z0-9_-' '_' | sed 's/_*$//')
@@ -236,6 +295,8 @@ log "Writing snapshot to: $OUTPUT_FILE"
   cat "$TMPDIR_SNAP/maps.json"
   printf ',\n    "net": '
   cat "$TMPDIR_SNAP/net.json"
+  printf ',\n    "tcFilters": '
+  cat "$TMPDIR_SNAP/tc-filters.json"
   printf ',\n    "cgroups": '
   cat "$TMPDIR_SNAP/cgroups.json"
   printf '\n  }\n'

@@ -2,7 +2,16 @@ import { exec, execFile, execSync } from "child_process";
 import { existsSync } from "fs";
 import { promisify } from "util";
 import { hostname } from "os";
-import type { BpfMap, EbpfSnapshot, PollingConfig, RawBpfMap, RawBpfProg, RawCgroupEntry, RawNetSnapshot } from "../shared/ebpf-types";
+import type {
+  BpfMap,
+  EbpfSnapshot,
+  PollingConfig,
+  RawBpfMap,
+  RawBpfProg,
+  RawCgroupEntry,
+  RawNetSnapshot,
+  RawTcFilterEntry,
+} from "../shared/ebpf-types";
 import { buildSnapshot } from "./ebpf-parser";
 import { buildMockMaps, parseMaps } from "./ebpf-map-parser";
 import { MOCK_CGROUPS, MOCK_NET, MOCK_PROGS } from "./ebpf-mock";
@@ -125,6 +134,39 @@ async function runBpftool(args: string): Promise<string> {
   return stdout.trim();
 }
 
+async function runTcFilterShow(
+  devname: string,
+  direction: RawTcFilterEntry["direction"]
+): Promise<RawTcFilterEntry[]> {
+  const tcArgs = [
+    "-s",
+    "-d",
+    "-j",
+    "filter",
+    "show",
+    "dev",
+    devname,
+    direction,
+  ];
+  const cmd = config.sudo ? "sudo" : "tc";
+  const fullArgv = config.sudo ? ["tc", ...tcArgs] : tcArgs;
+  const { stdout } = await execFileAsync(cmd, fullArgv, {
+    timeout: 5000,
+    maxBuffer: 16 * 1024 * 1024,
+  });
+  const parsed = JSON.parse(stripNonJson(stdout));
+  if (!Array.isArray(parsed)) return [];
+
+  return parsed
+    .filter(item => item && typeof item === "object")
+    .map((item, order) => ({
+      ...(item as Record<string, unknown>),
+      devname,
+      direction,
+      order,
+    })) as RawTcFilterEntry[];
+}
+
 // Strip libbpf warning lines that pollute JSON output
 function stripNonJson(raw: string): string {
   return raw
@@ -163,6 +205,30 @@ async function fetchLiveData(): Promise<{
   }
   if (mapOut.status === "fulfilled") {
     try { rawMaps = JSON.parse(stripNonJson(mapOut.value)); } catch { rawMaps = []; }
+  }
+
+  const netSnapshot = net[0];
+  const tcDevices = new Map<string, number>();
+  for (const entry of netSnapshot?.tc ?? []) {
+    tcDevices.set(entry.devname, entry.ifindex);
+  }
+  if (netSnapshot && tcDevices.size > 0) {
+    const filterResults = await Promise.allSettled(
+      Array.from(tcDevices.keys()).flatMap(devname =>
+        (["ingress", "egress"] as const).map(direction =>
+          runTcFilterShow(devname, direction)
+        )
+      )
+    );
+    const tcFilters = filterResults.flatMap(result =>
+      result.status === "fulfilled" ? result.value : []
+    );
+    if (tcFilters.length > 0) {
+      for (const filter of tcFilters) {
+        filter.ifindex = tcDevices.get(filter.devname);
+      }
+      net = [{ ...netSnapshot, tcFilters }, ...net.slice(1)];
+    }
   }
 
   return { progs, net, cgroups, rawMaps };

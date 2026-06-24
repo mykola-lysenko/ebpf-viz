@@ -13,7 +13,9 @@ import type {
   ProgramChain,
   RawBpfProg,
   RawCgroupEntry,
+  RawNetEntry,
   RawNetSnapshot,
+  RawTcFilterEntry,
 } from "../shared/ebpf-types";
 import { BPF_PROGRAM_TYPE_COLORS } from "../shared/ebpf-constants";
 
@@ -85,6 +87,182 @@ function getOsiLayer(type: BpfProgType): OsiLayer {
     default:
       return "kernel";
   }
+}
+
+type TcProgramEntry = {
+  id: number;
+  name: string;
+  devname: string;
+  ifindex: number;
+  kind: string;
+  direction: PacketDirection;
+  chain: number;
+  priority?: number;
+  order: number;
+  protocol?: string;
+  handle?: string;
+  directAction?: boolean;
+  actionCount?: number;
+  stats?: {
+    bytes?: number;
+    packets?: number;
+    drops?: number;
+  };
+};
+
+function asFiniteNumber(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value)
+    ? value
+    : undefined;
+}
+
+function tcDirectionFromKind(kind: string | undefined): PacketDirection {
+  if (kind?.includes("ingress")) return "ingress";
+  if (kind?.includes("egress")) return "egress";
+  return "unknown";
+}
+
+function tcKindFromDirection(direction: RawTcFilterEntry["direction"]): string {
+  return direction === "ingress" ? "clsact/ingress" : "clsact/egress";
+}
+
+function tcHookKey(devname: string, kind: string, chain = 0): string {
+  return chain === 0
+    ? `${devname}:${kind}`
+    : `${devname}:${kind}:chain:${chain}`;
+}
+
+function summarizeTcActionStats(
+  actions: unknown[] | undefined
+): TcProgramEntry["stats"] | undefined {
+  if (!actions) return undefined;
+  const stats: TcProgramEntry["stats"] = {};
+  for (const action of actions) {
+    if (!action || typeof action !== "object") continue;
+    const actionStats = (action as { stats?: unknown }).stats;
+    if (!actionStats || typeof actionStats !== "object") continue;
+    const candidate = actionStats as Record<string, unknown>;
+    for (const key of ["bytes", "packets", "drops"] as const) {
+      const value = asFiniteNumber(candidate[key]);
+      if (value !== undefined) {
+        stats[key] = (stats[key] ?? 0) + value;
+      }
+    }
+  }
+  return Object.keys(stats).length > 0 ? stats : undefined;
+}
+
+function tcProgramEntriesFromFilters(
+  progs: Map<number, BpfProgram>,
+  snapshot: RawNetSnapshot
+): TcProgramEntry[] {
+  const entries: TcProgramEntry[] = [];
+  const seen = new Set<string>();
+  const ifindexByDevname = new Map<string, number>();
+  for (const entry of [
+    ...(snapshot.xdp ?? []),
+    ...(snapshot.tc ?? []),
+    ...(snapshot.tcx ?? []),
+    ...(snapshot.netkit ?? []),
+    ...(snapshot.flow_dissector ?? []),
+    ...(snapshot.netfilter ?? []),
+  ]) {
+    ifindexByDevname.set(entry.devname, entry.ifindex);
+  }
+
+  const filters: RawTcFilterEntry[] = (snapshot.tcFilters ?? []).flatMap(
+    filter => {
+      if ("filters" in filter && Array.isArray(filter.filters)) {
+        return filter.filters.map((nestedFilter, order) => ({
+          ...nestedFilter,
+          devname: filter.devname,
+          direction: filter.direction,
+          ifindex: filter.ifindex,
+          order: nestedFilter.order ?? order,
+        }));
+      }
+      return [filter];
+    }
+  );
+  for (let index = 0; index < filters.length; index++) {
+    const filter = filters[index];
+    const id = filter.options?.prog?.id;
+    if (id === undefined || !progs.has(id)) continue;
+
+    const direction = filter.direction;
+    const kind = tcKindFromDirection(direction);
+    const chain = filter.chain ?? 0;
+    const handle = filter.options?.handle;
+    const priority = filter.pref;
+    const signature = [
+      filter.devname,
+      direction,
+      chain,
+      priority ?? "",
+      handle ?? "",
+      id,
+    ].join(":");
+    if (seen.has(signature)) continue;
+    seen.add(signature);
+
+    entries.push({
+      id,
+      name:
+        filter.options?.bpf_name ??
+        filter.options?.prog?.name ??
+        progs.get(id)!.name,
+      devname: filter.devname,
+      ifindex: filter.ifindex ?? ifindexByDevname.get(filter.devname) ?? 0,
+      kind,
+      direction,
+      chain,
+      priority,
+      order: filter.order ?? index,
+      protocol: filter.protocol,
+      handle,
+      directAction: filter.options?.["direct-action"],
+      actionCount: filter.options?.actions?.length,
+      stats: summarizeTcActionStats(filter.options?.actions),
+    });
+  }
+
+  return entries.sort((a, b) => {
+    if (a.devname !== b.devname) return a.devname.localeCompare(b.devname);
+    if (a.kind !== b.kind) return a.kind.localeCompare(b.kind);
+    if (a.chain !== b.chain) return a.chain - b.chain;
+    if ((a.priority ?? Infinity) !== (b.priority ?? Infinity)) {
+      return (a.priority ?? Infinity) - (b.priority ?? Infinity);
+    }
+    return a.order - b.order;
+  });
+}
+
+function detailedTcHookKeys(entries: TcProgramEntry[]): Set<string> {
+  return new Set(entries.map(entry => tcHookKey(entry.devname, entry.kind, entry.chain)));
+}
+
+function tcLayerEntries(
+  progs: Map<number, BpfProgram>,
+  snapshot: RawNetSnapshot
+): RawNetEntry[] {
+  const detailed = tcProgramEntriesFromFilters(progs, snapshot);
+  if (detailed.length === 0) {
+    return [...(snapshot.tc ?? []), ...(snapshot.tcx ?? [])];
+  }
+
+  const detailedHooks = detailedTcHookKeys(detailed);
+  const coarseEntries = [...(snapshot.tc ?? []), ...(snapshot.tcx ?? [])].filter(
+    entry => !detailedHooks.has(tcHookKey(entry.devname, entry.kind ?? "tc"))
+  );
+  const detailedEntries: RawNetEntry[] = detailed.map(entry => ({
+    devname: entry.devname,
+    ifindex: entry.ifindex,
+    kind: entry.kind,
+    id: entry.id,
+    name: entry.name,
+  }));
+
+  return [...coarseEntries, ...detailedEntries];
 }
 
 function getKernelZone(type: BpfProgType): KernelZone {
@@ -292,7 +470,7 @@ export function buildNetworkInterfaces(
     iface.allPrograms.push(p);
   }
 
-  for (const entry of [...(snapshot.tc ?? []), ...(snapshot.tcx ?? [])]) {
+  for (const entry of tcLayerEntries(progs, snapshot)) {
     const p = progs.get(entry.id);
     if (!p) continue;
     const iface = getOrCreate(entry.devname, entry.ifindex, "nic");
@@ -696,41 +874,86 @@ export function buildProgramChains(
 
   // ── TC chains ──────────────────────────────────────────────────────────
   const snapshot = rawNet[0] ?? {};
-  // Group TC entries by (devname, kind) preserving order
-  const tcByHook = new Map<string, Array<{ id: number; name: string }>>();
+  const detailedTcEntries = tcProgramEntriesFromFilters(progs, snapshot);
+  const detailedHooks = detailedTcHookKeys(detailedTcEntries);
+
+  // Group TC entries by hook, preserving kernel execution order.
+  const tcByHook = new Map<
+    string,
+    {
+      devname: string;
+      kind: string;
+      chain: number;
+      programs: ProgramChain["programs"];
+    }
+  >();
+
+  for (const entry of detailedTcEntries) {
+    const key = tcHookKey(entry.devname, entry.kind, entry.chain);
+    if (!tcByHook.has(key)) {
+      tcByHook.set(key, {
+        devname: entry.devname,
+        kind: entry.kind,
+        chain: entry.chain,
+        programs: [],
+      });
+    }
+
+    tcByHook.get(key)!.programs.push({
+      id: entry.id,
+      position: tcByHook.get(key)!.programs.length + 1,
+      name: entry.name,
+      tc: {
+        protocol: entry.protocol,
+        priority: entry.priority,
+        chain: entry.chain,
+        handle: entry.handle,
+        directAction: entry.directAction,
+        actionCount: entry.actionCount,
+        stats: entry.stats,
+      },
+    });
+  }
+
   for (const entry of snapshot.tc ?? []) {
     if (!progs.has(entry.id)) continue;
-    const key = `${entry.devname}:${entry.kind ?? "tc"}`;
-    if (!tcByHook.has(key)) tcByHook.set(key, []);
-    // Avoid duplicate entries (same prog on ingress+egress lists)
-    const list = tcByHook.get(key)!;
-    if (!list.some(p => p.id === entry.id)) {
-      list.push({
+    const kind = entry.kind ?? "tc";
+    const key = tcHookKey(entry.devname, kind);
+    if (detailedHooks.has(key)) continue;
+    if (!tcByHook.has(key)) {
+      tcByHook.set(key, {
+        devname: entry.devname,
+        kind,
+        chain: 0,
+        programs: [],
+      });
+    }
+
+    const group = tcByHook.get(key)!;
+    // The coarse bpftool net view can repeat the same attachment; avoid
+    // manufacturing duplicate chain positions unless detailed tc data says so.
+    if (!group.programs.some(p => p.id === entry.id)) {
+      group.programs.push({
         id: entry.id,
+        position: group.programs.length + 1,
         name: entry.name ?? progs.get(entry.id)!.name,
       });
     }
   }
 
-  for (const [key, progList] of Array.from(tcByHook.entries())) {
-    if (progList.length < 2) continue;
-    const [devname, kind] = key.split(":");
-    const direction: PacketDirection = kind.includes("ingress")
-      ? "ingress"
-      : kind.includes("egress")
-        ? "egress"
-        : "unknown";
+  for (const [key, group] of Array.from(tcByHook.entries())) {
+    if (group.programs.length < 2) continue;
+    const direction = tcDirectionFromKind(group.kind);
     chains.push({
       hookId: `tc:${key}`,
-      hookLabel: `${devname} ${direction === "unknown" ? kind : direction}`,
+      hookLabel: `${group.devname} ${
+        direction === "unknown" ? group.kind : direction
+      }`,
       hookType: "tc",
-      attachPoint: devname,
-      attachType: kind,
-      programs: progList.map((p: { id: number; name: string }, i: number) => ({
-        id: p.id,
-        position: i + 1,
-        name: p.name,
-      })),
+      attachPoint: group.devname,
+      attachType:
+        group.chain === 0 ? group.kind : `${group.kind} chain ${group.chain}`,
+      programs: group.programs,
       canShortCircuit: true, // TC programs can return TC_ACT_SHOT
       packetContext: buildTcPacketContext(direction),
     });

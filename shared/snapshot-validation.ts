@@ -49,6 +49,7 @@ export const rawSnapshotPayloadSchema = z.object({
   progs: z.array(rawBpfProgSchema).max(MAX_SNAPSHOT_PROGRAMS),
   maps: z.array(rawBpfMapSchema).max(MAX_SNAPSHOT_MAPS).optional(),
   net: z.array(rawNetSnapshotSchema).max(MAX_SNAPSHOT_NET_ENTRIES).optional(),
+  tcFilters: z.array(z.unknown()).max(MAX_SNAPSHOT_NET_ENTRIES).optional(),
   cgroups: z.array(rawCgroupEntrySchema).max(MAX_SNAPSHOT_CGROUPS).optional(),
 });
 

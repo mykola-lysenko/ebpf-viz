@@ -736,6 +736,146 @@ describe("buildProgramChains", () => {
     });
   });
 
+  it("prefers detailed tc filter order when available", () => {
+    const tcA: RawBpfProg = {
+      ...xdpProg,
+      id: 80,
+      type: "sched_cls",
+      name: "late_prog",
+    };
+    const tcB: RawBpfProg = {
+      ...xdpProg,
+      id: 81,
+      type: "sched_cls",
+      name: "early_prog",
+    };
+    const progs = parseProgList([tcA, tcB]);
+    const net: RawNetSnapshot[] = [
+      {
+        tc: [
+          { devname: "eth0", ifindex: 2, id: 80, kind: "clsact/egress" },
+          { devname: "eth0", ifindex: 2, id: 81, kind: "clsact/egress" },
+        ],
+        tcFilters: [
+          {
+            devname: "eth0",
+            ifindex: 2,
+            direction: "egress",
+            protocol: "all",
+            pref: 200,
+            kind: "bpf",
+            chain: 0,
+            order: 0,
+            options: {
+              handle: "0x2",
+              bpf_name: "late_filter",
+              "direct-action": true,
+              prog: { id: 80, name: "late_prog" },
+              actions: [
+                {
+                  stats: {
+                    bytes: 128,
+                    packets: 4,
+                    drops: 1,
+                  },
+                },
+              ],
+            },
+          },
+          {
+            devname: "eth0",
+            ifindex: 2,
+            direction: "egress",
+            protocol: "all",
+            pref: 100,
+            kind: "bpf",
+            chain: 0,
+            order: 1,
+            options: {
+              handle: "0x1",
+              bpf_name: "early_filter",
+              "direct-action": true,
+              prog: { id: 81, name: "early_prog" },
+            },
+          },
+        ],
+      },
+    ];
+
+    const chains = buildProgramChains(progs, net, []);
+    expect(chains).toHaveLength(1);
+    expect(chains[0]).toMatchObject({
+      hookId: "tc:eth0:clsact/egress",
+      attachType: "clsact/egress",
+      packetContext: {
+        direction: "egress",
+      },
+    });
+    expect(chains[0].programs.map(program => program.id)).toEqual([81, 80]);
+    expect(chains[0].programs.map(program => program.name)).toEqual([
+      "early_filter",
+      "late_filter",
+    ]);
+    expect(chains[0].programs[1].tc).toMatchObject({
+      protocol: "all",
+      priority: 200,
+      chain: 0,
+      handle: "0x2",
+      directAction: true,
+      actionCount: 1,
+      stats: {
+        bytes: 128,
+        packets: 4,
+        drops: 1,
+      },
+    });
+
+    const [iface] = buildNetworkInterfaces(progs, net);
+    expect(iface.layers.L3.map(program => program.id)).toEqual([81, 80]);
+  });
+
+  it("preserves repeated tc program ids when filters are distinct", () => {
+    const tcA: RawBpfProg = {
+      ...xdpProg,
+      id: 80,
+      type: "sched_cls",
+      name: "shared_prog",
+    };
+    const progs = parseProgList([tcA]);
+    const net: RawNetSnapshot[] = [
+      {
+        tc: [{ devname: "eth0", ifindex: 2, id: 80, kind: "clsact/ingress" }],
+        tcFilters: [
+          {
+            devname: "eth0",
+            ifindex: 2,
+            direction: "ingress",
+            pref: 10,
+            chain: 0,
+            order: 0,
+            options: { handle: "0x1", prog: { id: 80 } },
+          },
+          {
+            devname: "eth0",
+            ifindex: 2,
+            direction: "ingress",
+            pref: 20,
+            chain: 0,
+            order: 1,
+            options: { handle: "0x2", prog: { id: 80 } },
+          },
+        ],
+      },
+    ];
+
+    const chains = buildProgramChains(progs, net, []);
+    expect(chains).toHaveLength(1);
+    expect(chains[0].programs).toMatchObject([
+      { id: 80, position: 1, tc: { priority: 10, handle: "0x1" } },
+      { id: 80, position: 2, tc: { priority: 20, handle: "0x2" } },
+    ]);
+  });
+
   it("adds cgroup_skb packet context to ingress and egress chains", () => {
     const ingressA: RawBpfProg = {
       ...cgroupSkbProg,

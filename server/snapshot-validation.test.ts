@@ -53,6 +53,51 @@ describe("snapshot upload validation", () => {
       },
     } as never)).rejects.toMatchObject({ code: "BAD_REQUEST" });
   });
+
+  it("parses optional raw tc filter dumps into ordered program chains", async () => {
+    const caller = makeCaller();
+
+    const result = await caller.ebpf.parseSnapshot({
+      raw: {
+        progs: [
+          { id: 1, type: "sched_cls", name: "later" },
+          { id: 2, type: "sched_cls", name: "earlier" },
+        ],
+        maps: [],
+        net: [
+          {
+            tc: [
+              { devname: "eth0", ifindex: 2, kind: "clsact/ingress", id: 1 },
+              { devname: "eth0", ifindex: 2, kind: "clsact/ingress", id: 2 },
+            ],
+          },
+        ],
+        tcFilters: [
+          {
+            devname: "eth0",
+            direction: "ingress",
+            filters: [
+              {
+                pref: 20,
+                chain: 0,
+                options: { handle: "0x2", prog: { id: 1 } },
+              },
+              {
+                pref: 10,
+                chain: 0,
+                options: { handle: "0x1", prog: { id: 2 } },
+              },
+            ],
+          },
+        ],
+        cgroups: [],
+      },
+    });
+
+    expect(
+      result.snapshot.programChains[0].programs.map(program => program.id)
+    ).toEqual([2, 1]);
+  });
 });
 
 describe("map dump upload validation", () => {

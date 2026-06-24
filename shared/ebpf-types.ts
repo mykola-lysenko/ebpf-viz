@@ -32,10 +32,41 @@ export interface RawNetEntry {
   act?: unknown[];
 }
 
+export interface RawTcFilterEntry {
+  devname: string;
+  direction: "ingress" | "egress";
+  ifindex?: number;
+  protocol?: string;
+  pref?: number;
+  kind?: string;
+  chain?: number;
+  order?: number;
+  options?: {
+    handle?: string;
+    bpf_name?: string;
+    "direct-action"?: boolean;
+    prog?: {
+      id?: number;
+      name?: string;
+      tag?: string;
+    };
+    actions?: unknown[];
+  };
+}
+
+export interface RawTcFilterDump {
+  devname: string;
+  direction: "ingress" | "egress";
+  ifindex?: number;
+  filters: Array<Omit<RawTcFilterEntry, "devname" | "direction" | "ifindex">>;
+}
+
 export interface RawNetSnapshot {
   xdp?: RawNetEntry[];
   tc?: RawNetEntry[];
   tcx?: RawNetEntry[];
+  /** Normalized or grouped `tc -s -d -j filter show dev <ifname> ingress|egress` rows. */
+  tcFilters?: Array<RawTcFilterEntry | RawTcFilterDump>;
   netkit?: RawNetEntry[];
   flow_dissector?: RawNetEntry[];
   netfilter?: RawNetEntry[];
@@ -247,6 +278,19 @@ export interface ProgramChain {
     position: number;
     name: string;
     attachFlags?: string;
+    tc?: {
+      protocol?: string;
+      priority?: number;
+      chain?: number;
+      handle?: string;
+      directAction?: boolean;
+      actionCount?: number;
+      stats?: {
+        bytes?: number;
+        packets?: number;
+        drops?: number;
+      };
+    };
   }>;
   /** Whether an early program can short-circuit (drop/reject) and prevent
    *  later programs from running. True for TC, cgroup networking hooks. */
