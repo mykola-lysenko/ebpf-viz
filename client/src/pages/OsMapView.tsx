@@ -23,7 +23,10 @@ import {
 import "@xyflow/react/dist/style.css";
 import { useEbpf } from "@/contexts/EbpfContext";
 import { useOsMapLayout, zoomToLod } from "@/hooks/useOsMapLayout";
-import { OS_MAP_NODE_TYPES } from "@/components/osmap/OsMapNodes";
+import {
+  OS_MAP_NODE_TYPES,
+  type MapNodeData,
+} from "@/components/osmap/OsMapNodes";
 import {
   MapLegend,
   MapPlaceholder,
@@ -437,7 +440,7 @@ function OsMapCanvas() {
       }
 
       if (type === "mapNode") {
-        const data = node.data as any;
+        const data = node.data as unknown as MapNodeData;
         setDumpMapId(data.mapId);
         return;
       }
