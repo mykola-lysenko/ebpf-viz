@@ -12,89 +12,24 @@ import {
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
-import { trpc } from "@/lib/trpc";
+import { usePacketChainAnalysis } from "@/hooks/usePacketChainAnalysis";
+import {
+  chainTone,
+  classifyRateDrop,
+  formatActions,
+  formatAge,
+  formatRunCnt,
+  VERDICT_TONE_CLASSES,
+} from "@/lib/packet-chain-ui";
 import { predictPacketChain } from "../../../shared/packet-chain-prediction";
 import type {
   BpfProgram,
   NetworkInterface,
   PacketChainPrediction,
-  PacketVerdict,
   ProgArrayTarget,
   ProgramChain,
   ProgramReturnAnalysisResult,
 } from "../../../shared/ebpf-types";
-
-/** Classify live rate drop between consecutive chain programs */
-function classifyRateDrop(
-  prevRate: number | undefined,
-  currRate: number | undefined
-): { rate: number; label: string; color: string } | null {
-  if (prevRate == null || currRate == null || prevRate <= 0) return null;
-  const drop = 1 - currRate / prevRate;
-  if (drop < 0.05) return null;
-  if (drop < 0.2)
-    return {
-      rate: drop,
-      label: `~${Math.round(drop * 100)}% fewer/s`,
-      color: "#f59e0b",
-    };
-  if (drop < 0.5)
-    return {
-      rate: drop,
-      label: `~${Math.round(drop * 100)}% fewer/s`,
-      color: "#f97316",
-    };
-  return {
-    rate: drop,
-    label: `~${Math.round(drop * 100)}% fewer/s`,
-    color: "#ef4444",
-  };
-}
-
-function formatRunCnt(n: number): string {
-  if (n >= 1_000_000_000) return `${(n / 1_000_000_000).toFixed(1)}B`;
-  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
-  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}K`;
-  return String(n);
-}
-
-function formatAge(loadedAt: number): string {
-  const now = Date.now() / 1000;
-  const secs = Math.max(0, now - loadedAt);
-  if (secs < 60) return `${Math.round(secs)}s ago`;
-  if (secs < 3600) return `${Math.round(secs / 60)}m ago`;
-  if (secs < 86400) return `${Math.round(secs / 3600)}h ago`;
-  return `${Math.round(secs / 86400)}d ago`;
-}
-
-function formatActions(actions: string[]): string {
-  if (actions.length === 0) return "not modeled";
-  const visible = actions.slice(0, 2).join(", ");
-  return actions.length > 2 ? `${visible}, +${actions.length - 2}` : visible;
-}
-
-function chainTone(
-  outcomes: PacketVerdict[],
-  hasUnknownBehavior: boolean
-): PacketVerdict {
-  if (outcomes.includes("drop")) return "drop";
-  if (outcomes.includes("redirect")) return "redirect";
-  if (hasUnknownBehavior || outcomes.includes("unknown")) return "unknown";
-  if (outcomes.includes("other")) return "other";
-  return "pass";
-}
-
-const VERDICT_TONE_CLASSES: Record<PacketVerdict, string> = {
-  pass: "border-emerald-500/30 bg-emerald-500/10 text-emerald-300",
-  drop: "border-red-500/35 bg-red-500/10 text-red-300",
-  redirect: "border-cyan-500/35 bg-cyan-500/10 text-cyan-300",
-  unknown: "border-amber-500/35 bg-amber-500/10 text-amber-300",
-  other: "border-slate-500/35 bg-slate-500/10 text-slate-300",
-};
-
-const MAX_RETURN_ANALYSIS_PROGRAMS = 64;
-const MAX_TAIL_CALL_MAP_DUMPS = 16;
-const MAX_TAIL_CALL_TARGET_ANALYSIS_PROGRAMS = 32;
 
 const OSI_LAYERS = [
   {
@@ -407,9 +342,7 @@ function OsiLayerRow({
                                   <span
                                     className="rounded border border-amber-500/25 bg-amber-500/5 px-1.5 py-0.5 text-[9px] font-mono text-amber-300/80"
                                     title={predictionStep.tailCallContinuations
-                                      .map(
-                                        continuation => continuation.summary
-                                      )
+                                      .map(continuation => continuation.summary)
                                       .join("; ")}
                                   >
                                     tail call →{" "}
@@ -745,121 +678,15 @@ export default function NetworkView() {
     [snapshot]
   );
 
-  const filteredProgramIds = useMemo(
-    () =>
-      searchQuery ? new Set(filteredPrograms.map(program => program.id)) : null,
-    [filteredPrograms, searchQuery]
-  );
-
-  const returnAnalysisProgramIds = useMemo(() => {
-    const ids = new Set<number>();
-    for (const chain of tcChains) {
-      if (!chain.packetContext) continue;
-      for (const program of chain.programs) {
-        if (filteredProgramIds && !filteredProgramIds.has(program.id)) continue;
-        ids.add(program.id);
-      }
-    }
-    return Array.from(ids).slice(0, MAX_RETURN_ANALYSIS_PROGRAMS);
-  }, [filteredProgramIds, tcChains]);
-
-  const returnAnalysisQuery = trpc.ebpf.progReturnAnalysis.useQuery(
-    { ids: returnAnalysisProgramIds },
-    {
-      enabled: appMode !== "snapshot" && returnAnalysisProgramIds.length > 0,
-      retry: 1,
-      staleTime: 5 * 60_000,
-    }
-  );
-
-  const baseReturnAnalysisById = useMemo(() => {
-    const map = new Map<number, ProgramReturnAnalysisResult>();
-    for (const result of returnAnalysisQuery.data ?? []) {
-      map.set(result.progId, result);
-    }
-    return map;
-  }, [returnAnalysisQuery.data]);
-
-  const tailCallMapIds = useMemo(() => {
-    const progArrayMapIds = new Set(
-      maps
-        .filter(
-          map => map.rawType.toLowerCase().replace(/-/g, "_") === "prog_array"
-        )
-        .map(map => map.id)
-    );
-    const ids = new Set<number>();
-    for (const result of Array.from(baseReturnAnalysisById.values())) {
-      for (const tailCall of result.returnAnalysis?.tailCalls ?? []) {
-        if (
-          tailCall.mapId !== undefined &&
-          progArrayMapIds.has(tailCall.mapId)
-        ) {
-          ids.add(tailCall.mapId);
-        }
-      }
-    }
-    return Array.from(ids).slice(0, MAX_TAIL_CALL_MAP_DUMPS);
-  }, [baseReturnAnalysisById, maps]);
-
-  const progArrayDumpQueries = trpc.useQueries(t =>
-    tailCallMapIds.map(mapId =>
-      t.ebpf.mapDump(
-        { id: mapId },
-        {
-          enabled: appMode !== "snapshot",
-          retry: 1,
-          staleTime: 30_000,
-        }
-      )
-    )
-  );
-
-  const progArrayTargets = useMemo(() => {
-    if (appMode === "snapshot") {
-      return tailCallMapIds.flatMap(
-        mapId => snapshotMapDumps[mapId]?.progArrayTargets ?? []
-      );
-    }
-    return progArrayDumpQueries.flatMap(
-      query => query.data?.progArrayTargets ?? []
-    );
-  }, [appMode, progArrayDumpQueries, snapshotMapDumps, tailCallMapIds]);
-
-  const tailCallTargetProgramIds = useMemo(() => {
-    const baseIds = new Set(returnAnalysisProgramIds);
-    const ids = new Set<number>();
-    for (const target of progArrayTargets) {
-      if (!baseIds.has(target.targetProgId)) {
-        ids.add(target.targetProgId);
-      }
-    }
-    return Array.from(ids).slice(0, MAX_TAIL_CALL_TARGET_ANALYSIS_PROGRAMS);
-  }, [progArrayTargets, returnAnalysisProgramIds]);
-
-  const tailCallTargetAnalysisQuery = trpc.ebpf.progReturnAnalysis.useQuery(
-    { ids: tailCallTargetProgramIds },
-    {
-      enabled:
-        appMode !== "snapshot" && tailCallTargetProgramIds.length > 0,
-      retry: 1,
-      staleTime: 5 * 60_000,
-    }
-  );
-
-  const returnAnalysisById = useMemo(() => {
-    const map = new Map(baseReturnAnalysisById);
-    for (const result of tailCallTargetAnalysisQuery.data ?? []) {
-      map.set(result.progId, result);
-    }
-    return map;
-  }, [baseReturnAnalysisById, tailCallTargetAnalysisQuery.data]);
-
-  const returnAnalysisLoading =
-    returnAnalysisQuery.isLoading ||
-    returnAnalysisQuery.isFetching ||
-    tailCallTargetAnalysisQuery.isLoading ||
-    tailCallTargetAnalysisQuery.isFetching;
+  const { returnAnalysisById, returnAnalysisLoading, progArrayTargets } =
+    usePacketChainAnalysis({
+      chains: tcChains,
+      filteredPrograms,
+      searchQuery,
+      appMode,
+      maps,
+      snapshotMapDumps,
+    });
 
   if (!snapshot) {
     return (

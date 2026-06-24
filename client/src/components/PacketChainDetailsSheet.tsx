@@ -17,6 +17,7 @@ import {
   SheetHeader,
   SheetTitle,
 } from "@/components/ui/sheet";
+import { VERDICT_TONE_CLASSES } from "@/lib/packet-chain-ui";
 import { cn } from "@/lib/utils";
 import type {
   BpfProgram,
@@ -25,7 +26,6 @@ import type {
   PacketTailCallContinuation,
   PacketTailCallTarget,
   PacketVerdictExplanation,
-  PacketVerdict,
   ProgramChain,
   ProgramReturnAnalysisResult,
   XlatedBranchEvidence,
@@ -33,14 +33,6 @@ import type {
   XlatedSideEffect,
   XlatedTailCall,
 } from "../../../shared/ebpf-types";
-
-const VERDICT_TONE_CLASSES: Record<PacketVerdict, string> = {
-  pass: "border-emerald-500/30 bg-emerald-500/10 text-emerald-300",
-  drop: "border-red-500/35 bg-red-500/10 text-red-300",
-  redirect: "border-cyan-500/35 bg-cyan-500/10 text-cyan-300",
-  unknown: "border-amber-500/35 bg-amber-500/10 text-amber-300",
-  other: "border-slate-500/35 bg-slate-500/10 text-slate-300",
-};
 
 interface PacketChainDetailsSheetProps {
   open: boolean;
