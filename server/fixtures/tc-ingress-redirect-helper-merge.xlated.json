@@ -1,0 +1,90 @@
+[
+  {
+    "src": "return sample_router(skb, BPF_F_INGRESS);",
+    "file": "./././sample_tc.bpf.c",
+    "line_num": 88,
+    "line_col": 10,
+    "disasm": "(85) call pc+3#bpf_prog_d93815e3b70daae7_sample_udp_router_v4"
+  },
+  {
+    "src": "return sample_connection_router_v4(skb, direction, ip_hdr, config);",
+    "file": "./././sample_tc.bpf.c",
+    "line_num": 66,
+    "line_col": 10,
+    "disasm": "(bc) w1 = w0"
+  },
+  {
+    "src": "return sample_router(skb, BPF_F_INGRESS);",
+    "file": "./././sample_tc.bpf.c",
+    "line_num": 88,
+    "line_col": 10,
+    "disasm": "(bc) w0 = w1"
+  },
+  {
+    "disasm": "(95) exit"
+  },
+  {
+    "src": "if (enable_ingress_redirect) {",
+    "file": "./././SampleTcRouter.h",
+    "line_num": 219,
+    "line_col": 7,
+    "disasm": "(15) if r1 == 0x0 goto pc+6"
+  },
+  {
+    "src": "if ((ret = bpf_skb_store_bytes(...)) < 0) {",
+    "file": "./././SampleTcRouter.h",
+    "line_num": 204,
+    "line_col": 7,
+    "disasm": "(15) if r2 == 0x0 goto pc+3"
+  },
+  {
+    "src": "return TC_ACT_UNSPEC;",
+    "file": "./././SampleTcRouter.h",
+    "line_num": 322,
+    "line_col": 3,
+    "disasm": "(b4) w6 = -1"
+  },
+  {
+    "disasm": "(05) goto pc+6"
+  },
+  {
+    "disasm": "(bf) r3 = r3"
+  },
+  {
+    "src": "return TC_ACT_SHOT;",
+    "file": "./././SampleTcRouter.h",
+    "line_num": 322,
+    "line_col": 3,
+    "disasm": "(b4) w6 = 2"
+  },
+  {
+    "disasm": "(05) goto pc+3"
+  },
+  {
+    "src": "return bpf_redirect(skb->ifindex, BPF_F_INGRESS);",
+    "file": "./././SampleTcRouter.h",
+    "line_num": 220,
+    "line_col": 12,
+    "disasm": "(b7) r2 = 1"
+  },
+  {
+    "src": "return bpf_redirect(skb->ifindex, BPF_F_INGRESS);",
+    "file": "./././SampleTcRouter.h",
+    "line_num": 220,
+    "line_col": 12,
+    "disasm": "(85) call bpf_redirect#12139344"
+  },
+  {
+    "disasm": "(bf) r6 = r0"
+  },
+  {
+    "src": "}",
+    "file": "./././SampleTcRouter.h",
+    "line_num": 322,
+    "line_col": 3,
+    "disasm": "(bc) w0 = w6"
+  },
+  {
+    "disasm": "(95) exit"
+  }
+]
