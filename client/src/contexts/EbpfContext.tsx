@@ -1,12 +1,21 @@
-import React, { createContext, useContext, useState, useCallback, useMemo, useRef } from "react";
+import React, {
+  createContext,
+  useContext,
+  useState,
+  useCallback,
+  useMemo,
+  useRef,
+} from "react";
 import { trpc } from "@/lib/trpc";
 import { useEbpfStream } from "@/hooks/useEbpfStream";
-import type { BpfProgram, BpfMap, EbpfSnapshot, ProgHistory, ActivitySummary, MapDumpResult } from "../../../shared/ebpf-types";
-import {
-  formatValidationError,
-  mapDumpsUploadSchema,
-  snapshotUploadSchema,
-} from "../../../shared/snapshot-validation";
+import type {
+  BpfProgram,
+  BpfMap,
+  EbpfSnapshot,
+  ProgHistory,
+  ActivitySummary,
+  MapDumpResult,
+} from "../../../shared/ebpf-types";
 
 export type { StreamStatus } from "@/hooks/useEbpfStream";
 
@@ -74,17 +83,23 @@ function useStableRef<T>(value: T, isEqual: (a: T, b: T) => boolean): T {
 }
 
 export function EbpfProvider({ children }: { children: React.ReactNode }) {
-  const [selectedProgram, setSelectedProgram] = useState<BpfProgram | null>(null);
+  const [selectedProgram, setSelectedProgram] = useState<BpfProgram | null>(
+    null
+  );
   const [searchQuery, setSearchQuery] = useState("");
   const [typeFilter, setTypeFilter] = useState<string[]>([]);
   // refreshInterval is kept for the Settings page UI but no longer drives polling
   const [refreshInterval, setRefreshInterval] = useState(5000);
 
   // ── Snapshot mode state ────────────────────────────────────────────────────
-  const [loadedSnapshot, setLoadedSnapshot] = useState<EbpfSnapshot | null>(null);
+  const [loadedSnapshot, setLoadedSnapshot] = useState<EbpfSnapshot | null>(
+    null
+  );
   const [snapshotMaps, setSnapshotMaps] = useState<BpfMap[]>([]);
   const [snapshotMeta, setSnapshotMeta] = useState<SnapshotMeta | null>(null);
-  const [snapshotMapDumps, setSnapshotMapDumps] = useState<Record<number, MapDumpResult>>({});
+  const [snapshotMapDumps, setSnapshotMapDumps] = useState<
+    Record<number, MapDumpResult>
+  >({});
 
   // ── SSE live stream ────────────────────────────────────────────────────────
   const {
@@ -97,9 +112,8 @@ export function EbpfProvider({ children }: { children: React.ReactNode }) {
 
   // Stabilize the SSE state: only trigger downstream re-renders if the topology actually changes
   // Ignore 'timestamp' and 'stats' on the snapshot since those change every 5 seconds without affecting layout
-  const liveSnapshot = useStableRef(
-    rawLiveSnapshot,
-    (a, b) => deepEqual(a, b, new Set(["timestamp", "stats"]))
+  const liveSnapshot = useStableRef(rawLiveSnapshot, (a, b) =>
+    deepEqual(a, b, new Set(["timestamp", "stats"]))
   );
   const liveMaps = useStableRef(rawLiveMaps, deepEqual);
 
@@ -112,7 +126,10 @@ export function EbpfProvider({ children }: { children: React.ReactNode }) {
   // ── Active snapshot: loaded snapshot takes priority over live stream ───────
   const snapshot = loadedSnapshot ?? liveSnapshot ?? null;
   const maps: BpfMap[] = loadedSnapshot ? snapshotMaps : liveMaps;
-  const isLoading = loadedSnapshot === null && liveSnapshot === null && streamStatus === "connecting";
+  const isLoading =
+    loadedSnapshot === null &&
+    liveSnapshot === null &&
+    streamStatus === "connecting";
 
   // Manual refresh: trigger an immediate server-side poll via tRPC mutation
   const refreshMutation = trpc.ebpf.refresh.useMutation();
@@ -140,6 +157,9 @@ export function EbpfProvider({ children }: { children: React.ReactNode }) {
 
   // ── Snapshot loading ───────────────────────────────────────────────────────
   const loadSnapshot = useCallback(async (file: File) => {
+    const { formatValidationError, snapshotUploadSchema } = await import(
+      "../../../shared/snapshot-validation"
+    );
     const text = await file.text();
     let parsed: unknown;
     try {
@@ -150,7 +170,12 @@ export function EbpfProvider({ children }: { children: React.ReactNode }) {
 
     const validation = snapshotUploadSchema.safeParse(parsed);
     if (!validation.success) {
-      throw new Error(formatValidationError("Invalid eBPF Viz snapshot file.", validation.error));
+      throw new Error(
+        formatValidationError(
+          "Invalid eBPF Viz snapshot file.",
+          validation.error
+        )
+      );
     }
     const obj = validation.data;
 
@@ -181,10 +206,14 @@ export function EbpfProvider({ children }: { children: React.ReactNode }) {
       ebpfSnapshot = result.snapshot;
       parsedMaps = result.maps;
     } else {
-      throw new Error("Snapshot file is missing the 'snapshot' or 'raw' field.");
+      throw new Error(
+        "Snapshot file is missing the 'snapshot' or 'raw' field."
+      );
     }
 
-    const capturedAt = (obj.capturedAt as string) ?? new Date(ebpfSnapshot.timestamp).toISOString();
+    const capturedAt =
+      (obj.capturedAt as string) ??
+      new Date(ebpfSnapshot.timestamp).toISOString();
     setLoadedSnapshot(ebpfSnapshot);
     setSnapshotMaps(parsedMaps);
     setSnapshotMeta({
@@ -201,30 +230,45 @@ export function EbpfProvider({ children }: { children: React.ReactNode }) {
   const loadedSnapshotRef = useRef(loadedSnapshot);
   loadedSnapshotRef.current = loadedSnapshot;
 
-  const loadMapDumps = useCallback(async (file: File): Promise<{ loaded: number }> => {
-    if (!loadedSnapshotRef.current) {
-      throw new Error("Load a snapshot first before loading map dumps.");
-    }
-    const text = await file.text();
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(text);
-    } catch {
-      throw new Error("Invalid JSON file");
-    }
-    const validation = mapDumpsUploadSchema.safeParse(parsed);
-    if (!validation.success) {
-      throw new Error(formatValidationError("Invalid eBPF Viz map dump file.", validation.error));
-    }
-    // Send to server for parsing (normalizes RawMapEntry → MapEntry)
-    const currentMaps = snapshotMapsRef.current;
-    const result = await parseMapDumpsRef.current({
-      mapDumps: validation.data.mapDumps,
-      maps: currentMaps.map(m => ({ id: m.id, rawType: m.rawType, name: m.name })),
-    });
-    setSnapshotMapDumps(result as Record<number, MapDumpResult>);
-    return { loaded: Object.keys(result).length };
-  }, []);
+  const loadMapDumps = useCallback(
+    async (file: File): Promise<{ loaded: number }> => {
+      const { formatValidationError, mapDumpsUploadSchema } = await import(
+        "../../../shared/snapshot-validation"
+      );
+      if (!loadedSnapshotRef.current) {
+        throw new Error("Load a snapshot first before loading map dumps.");
+      }
+      const text = await file.text();
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(text);
+      } catch {
+        throw new Error("Invalid JSON file");
+      }
+      const validation = mapDumpsUploadSchema.safeParse(parsed);
+      if (!validation.success) {
+        throw new Error(
+          formatValidationError(
+            "Invalid eBPF Viz map dump file.",
+            validation.error
+          )
+        );
+      }
+      // Send to server for parsing (normalizes RawMapEntry → MapEntry)
+      const currentMaps = snapshotMapsRef.current;
+      const result = await parseMapDumpsRef.current({
+        mapDumps: validation.data.mapDumps,
+        maps: currentMaps.map(m => ({
+          id: m.id,
+          rawType: m.rawType,
+          name: m.name,
+        })),
+      });
+      setSnapshotMapDumps(result as Record<number, MapDumpResult>);
+      return { loaded: Object.keys(result).length };
+    },
+    []
+  );
 
   const clearSnapshot = useCallback(() => {
     setLoadedSnapshot(null);
@@ -236,7 +280,9 @@ export function EbpfProvider({ children }: { children: React.ReactNode }) {
   // ── Derived mode ───────────────────────────────────────────────────────────
   const appMode: AppMode = loadedSnapshot
     ? "snapshot"
-    : (snapshot?.demoMode ? "demo" : "live");
+    : snapshot?.demoMode
+      ? "demo"
+      : "live";
 
   // Build a Map<id, ProgHistory> for O(1) lookup in components
   const historyMap = useMemo(() => {
@@ -254,12 +300,13 @@ export function EbpfProvider({ children }: { children: React.ReactNode }) {
 
     if (searchQuery.trim()) {
       const q = searchQuery.toLowerCase();
-      progs = progs.filter(p =>
-        p.name.toLowerCase().includes(q) ||
-        p.rawType.toLowerCase().includes(q) ||
-        p.tag.toLowerCase().includes(q) ||
-        String(p.id).includes(q) ||
-        p.attachments.some(a => a.detail.toLowerCase().includes(q))
+      progs = progs.filter(
+        p =>
+          p.name.toLowerCase().includes(q) ||
+          p.rawType.toLowerCase().includes(q) ||
+          p.tag.toLowerCase().includes(q) ||
+          String(p.id).includes(q) ||
+          p.attachments.some(a => a.detail.toLowerCase().includes(q))
       );
     }
 
@@ -271,60 +318,82 @@ export function EbpfProvider({ children }: { children: React.ReactNode }) {
   }, [snapshot, searchQuery, typeFilter]);
 
   // Legacy compat shim — components that read autoRefresh get true when live
-  const autoRefresh = appMode !== "snapshot" && (streamStatus === "live" || streamStatus === "reconnecting");
+  const autoRefresh =
+    appMode !== "snapshot" &&
+    (streamStatus === "live" || streamStatus === "reconnecting");
   const setAutoRefresh = useCallback((v: boolean) => {
     // No-op: SSE manages its own connection lifecycle.
     // Kept for API compatibility with SettingsView and EbpfLayout.
     void v;
   }, []);
 
-  const error = appMode !== "snapshot" && streamStatus === "offline"
-    ? "Stream disconnected — check server"
-    : null;
+  const error =
+    appMode !== "snapshot" && streamStatus === "offline"
+      ? "Stream disconnected — check server"
+      : null;
   const demoMode = appMode === "demo";
   const statsEnabled = pollerStatus?.statsEnabled ?? false;
   const activityValue = activity ?? null;
 
-  const contextValue = useMemo<EbpfContextValue>(() => ({
-    snapshot: snapshot ?? null,
-    isLoading,
-    error,
-    selectedProgram,
-    setSelectedProgram,
-    searchQuery,
-    setSearchQuery,
-    typeFilter,
-    setTypeFilter,
-    filteredPrograms,
-    streamStatus,
-    autoRefresh,
-    setAutoRefresh,
-    refreshInterval,
-    setRefreshInterval,
-    refresh,
-    demoMode,
-    appMode,
-    snapshotMeta,
-    loadSnapshot,
-    loadMapDumps,
-    clearSnapshot,
-    snapshotMapDumps,
-    historyMap,
-    activity: activityValue,
-    statsEnabled,
-    maps,
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }), [
-    snapshot, isLoading, error, selectedProgram, searchQuery, typeFilter,
-    filteredPrograms, streamStatus, autoRefresh, refreshInterval,
-    demoMode, appMode, snapshotMeta, snapshotMapDumps, historyMap,
-    activityValue, statsEnabled, maps,
-  ]);
+  const contextValue = useMemo<EbpfContextValue>(
+    () => ({
+      snapshot: snapshot ?? null,
+      isLoading,
+      error,
+      selectedProgram,
+      setSelectedProgram,
+      searchQuery,
+      setSearchQuery,
+      typeFilter,
+      setTypeFilter,
+      filteredPrograms,
+      streamStatus,
+      autoRefresh,
+      setAutoRefresh,
+      refreshInterval,
+      setRefreshInterval,
+      refresh,
+      demoMode,
+      appMode,
+      snapshotMeta,
+      loadSnapshot,
+      loadMapDumps,
+      clearSnapshot,
+      snapshotMapDumps,
+      historyMap,
+      activity: activityValue,
+      statsEnabled,
+      maps,
+    }),
+    [
+      snapshot,
+      isLoading,
+      error,
+      selectedProgram,
+      searchQuery,
+      typeFilter,
+      filteredPrograms,
+      streamStatus,
+      autoRefresh,
+      refreshInterval,
+      setAutoRefresh,
+      refresh,
+      demoMode,
+      appMode,
+      snapshotMeta,
+      loadSnapshot,
+      loadMapDumps,
+      clearSnapshot,
+      snapshotMapDumps,
+      historyMap,
+      activityValue,
+      statsEnabled,
+      maps,
+    ]
+  );
 
   return (
-    <EbpfContext.Provider value={contextValue}>
-      {children}
-    </EbpfContext.Provider>
+    <EbpfContext.Provider value={contextValue}>{children}</EbpfContext.Provider>
   );
 }
 
