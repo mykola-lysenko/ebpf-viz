@@ -1,4 +1,10 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import React, {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import {
   ReactFlow,
   Background,
@@ -18,401 +24,44 @@ import "@xyflow/react/dist/style.css";
 import { useEbpf } from "@/contexts/EbpfContext";
 import { useOsMapLayout, zoomToLod } from "@/hooks/useOsMapLayout";
 import { OS_MAP_NODE_TYPES } from "@/components/osmap/OsMapNodes";
+import {
+  MapLegend,
+  MapPlaceholder,
+  MapToolbar,
+  OS_MAP_FLOW_STYLES,
+} from "@/components/osmap/OsMapChrome";
 import { MapEntriesModal } from "@/components/MapEntriesModal";
 import { MAP_TYPE_META } from "../../../shared/ebpf-types";
-import type { ZoneNodeData, CgroupNodeData, InterfaceNodeData, ProcessNodeData } from "@/hooks/useOsMapLayout";
-import type { BpfProgram } from "../../../shared/ebpf-types";
-import { Button } from "@/components/ui/button";
-import { Badge } from "@/components/ui/badge";
-import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import {
-  Maximize2, ZoomIn, ZoomOut, Layers, Map as MapIcon,
-  Eye, EyeOff, Info, Cpu, Download, X
-} from "lucide-react";
+import type {
+  ZoneNodeData,
+  CgroupNodeData,
+  InterfaceNodeData,
+  ProcessNodeData,
+} from "@/hooks/useOsMapLayout";
 import { cn } from "@/lib/utils";
 import { trpc } from "@/lib/trpc";
 
-const STRUCTURAL_NODES = ["band-userspace", "band-kernel", "band-network", "label-zones", "label-cgroups", "label-maps"];
-
-// ─── Styles injected once ─────────────────────────────────────────────────────
-
-const FLOW_STYLES = `
-.os-map-flow .react-flow__renderer { background: transparent; }
-.os-map-flow .react-flow__edge-path { transition: stroke 0.3s ease, opacity 0.3s ease; }
-.os-map-flow .react-flow__node { transition: opacity 0.3s ease; }
-.os-map-flow .react-flow__controls { background: oklch(0.12 0.015 240 / 0.9); border: 1px solid oklch(0.22 0.015 240); border-radius: 10px; overflow: hidden; }
-.os-map-flow .react-flow__controls-button { background: transparent; border: none; color: oklch(0.65 0.01 240); fill: oklch(0.65 0.01 240); }
-.os-map-flow .react-flow__controls-button:hover { background: oklch(0.18 0.015 240); color: oklch(0.9 0.01 240); fill: oklch(0.9 0.01 240); }
-.os-map-flow .react-flow__minimap { background: oklch(0.10 0.012 240 / 0.95); border: 1px solid oklch(0.22 0.015 240); border-radius: 10px; overflow: hidden; }
-.os-map-flow .react-flow__minimap-mask { fill: oklch(0.06 0.012 240 / 0.7); }
-.os-map-flow .react-flow__background { opacity: 0.4; }
-
-/* Fast DOM-based styling for active search/focus filters */
-.os-map-flow.filtering-active .react-flow__node {
-  opacity: 0.10;
-}
-.os-map-flow.filtering-active .react-flow__edge {
-  opacity: 0;
-}
-.os-map-flow.filtering-active .react-flow__node[data-is-filtered="true"],
-.os-map-flow.filtering-active .react-flow__edge[data-is-filtered="true"],
-.os-map-flow.filtering-active .react-flow__node.is-filtered,
-.os-map-flow.filtering-active .react-flow__edge.is-filtered {
-  opacity: 1;
-}
-`;
-
-// ─── LOD legend ───────────────────────────────────────────────────────────────
-
-function LodIndicator({ zoom }: { zoom: number }) {
-  const level = zoom <= 0.45 ? "Bird's Eye" : zoom < 0.65 ? "Overview" : "Detail";
-  const color = zoom <= 0.45 ? "#f59e0b" : zoom < 0.65 ? "#10b981" : "#00d4ff";
-  return (
-    <div style={{
-      display: "flex",
-      alignItems: "center",
-      gap: 6,
-      padding: "4px 10px",
-      background: "oklch(0.12 0.015 240 / 0.9)",
-      border: `1px solid ${color}40`,
-      borderRadius: 8,
-      fontSize: 10,
-      fontFamily: "monospace",
-      color,
-    }}>
-      <Layers size={10} />
-      {level} · {(zoom * 100).toFixed(0)}%
-    </div>
-  );
-}
-
-// ─── Toolbar ──────────────────────────────────────────────────────────────────
-
-function MapToolbar({
-  zoom,
-  showLabels,
-  onToggleLabels,
-  nodeCount,
-  progCount,
-  onDownload,
-  maxTreeDepth,
-  maxCgroupDepth,
-  onMaxCgroupDepthChange,
-  focusedProcess,
-  onClearFocus,
-}: {
-  zoom: number;
-  showLabels: boolean;
-  onToggleLabels: () => void;
-  nodeCount: number;
-  progCount: number;
-  onDownload: () => void;
-  maxTreeDepth: number;
-  maxCgroupDepth: number | undefined;
-  onMaxCgroupDepthChange: (v: number | undefined) => void;
-  focusedProcess: { pid: number; comm: string } | null;
-  onClearFocus: () => void;
-}) {
-  const { fitView, zoomIn, zoomOut } = useReactFlow();
-
-  return (
-    <div style={{
-      display: "flex",
-      alignItems: "center",
-      gap: 8,
-      padding: "6px 10px",
-      background: "oklch(0.11 0.015 240 / 0.95)",
-      border: "1px solid oklch(0.22 0.015 240)",
-      borderRadius: 12,
-      backdropFilter: "blur(8px)",
-    }}>
-      <div style={{ display: "flex", alignItems: "center", gap: 4, marginRight: 4 }}>
-        <MapIcon size={14} style={{ color: "#00d4ff" }} />
-        <span style={{ fontSize: 11, fontWeight: 700, color: "#00d4ff", fontFamily: "monospace" }}>
-          OS Map
-        </span>
-      </div>
-
-      <div style={{ width: 1, height: 16, background: "oklch(0.25 0.01 240)" }} />
-
-      <LodIndicator zoom={zoom} />
-
-      <div style={{ width: 1, height: 16, background: "oklch(0.25 0.01 240)" }} />
-
-      <span style={{ fontSize: 10, fontFamily: "monospace", color: "oklch(0.55 0.01 240)" }}>
-        {progCount} programs · {nodeCount} nodes
-      </span>
-
-      {/* Focus mode indicator */}
-      {focusedProcess && (
-        <>
-          <div style={{ width: 1, height: 16, background: "oklch(0.25 0.01 240)" }} />
-          <div style={{
-            display: "flex",
-            alignItems: "center",
-            gap: 6,
-            padding: "3px 8px 3px 10px",
-            background: "#f59e0b18",
-            border: "1px solid #f59e0b40",
-            borderRadius: 6,
-          }}>
-            <Eye size={10} style={{ color: "#f59e0b" }} />
-            <span style={{ fontSize: 10, fontFamily: "monospace", color: "#f59e0b", whiteSpace: "nowrap" }}>
-              {focusedProcess.comm}
-              <span style={{ color: "#f59e0b80", marginLeft: 4 }}>pid {focusedProcess.pid}</span>
-            </span>
-            <button
-              onClick={onClearFocus}
-              title="Exit focus mode"
-              style={{
-                width: 16, height: 16, borderRadius: 4,
-                background: "#f59e0b20",
-                border: "1px solid #f59e0b40",
-                display: "flex", alignItems: "center", justifyContent: "center",
-                cursor: "pointer", color: "#f59e0b", padding: 0,
-              }}
-            >
-              <X size={9} />
-            </button>
-          </div>
-        </>
-      )}
-
-      <div style={{ width: 1, height: 16, background: "oklch(0.25 0.01 240)" }} />
-
-      <Tooltip>
-        <TooltipTrigger asChild>
-          <button
-            onClick={() => zoomIn({ duration: 300 })}
-            style={{
-              width: 28, height: 28, borderRadius: 6,
-              background: "oklch(0.16 0.015 240)",
-              border: "1px solid oklch(0.25 0.015 240)",
-              display: "flex", alignItems: "center", justifyContent: "center",
-              cursor: "pointer", color: "oklch(0.7 0.01 240)",
-            }}
-          >
-            <ZoomIn size={13} />
-          </button>
-        </TooltipTrigger>
-        <TooltipContent>Zoom in</TooltipContent>
-      </Tooltip>
-
-      <Tooltip>
-        <TooltipTrigger asChild>
-          <button
-            onClick={() => zoomOut({ duration: 300 })}
-            style={{
-              width: 28, height: 28, borderRadius: 6,
-              background: "oklch(0.16 0.015 240)",
-              border: "1px solid oklch(0.25 0.015 240)",
-              display: "flex", alignItems: "center", justifyContent: "center",
-              cursor: "pointer", color: "oklch(0.7 0.01 240)",
-            }}
-          >
-            <ZoomOut size={13} />
-          </button>
-        </TooltipTrigger>
-        <TooltipContent>Zoom out</TooltipContent>
-      </Tooltip>
-
-      <Tooltip>
-        <TooltipTrigger asChild>
-          <button
-            onClick={() => fitView({ duration: 600, padding: 0.06 })}
-            style={{
-              width: 28, height: 28, borderRadius: 6,
-              background: "oklch(0.16 0.015 240)",
-              border: "1px solid oklch(0.25 0.015 240)",
-              display: "flex", alignItems: "center", justifyContent: "center",
-              cursor: "pointer", color: "oklch(0.7 0.01 240)",
-            }}
-          >
-            <Maximize2 size={13} />
-          </button>
-        </TooltipTrigger>
-        <TooltipContent>Fit all</TooltipContent>
-      </Tooltip>
-
-      <Tooltip>
-        <TooltipTrigger asChild>
-          <button
-            onClick={onToggleLabels}
-            style={{
-              width: 28, height: 28, borderRadius: 6,
-              background: showLabels ? "oklch(0.16 0.015 240 / 0.8)" : "oklch(0.14 0.015 240)",
-              border: `1px solid ${showLabels ? "#00d4ff40" : "oklch(0.25 0.015 240)"}`,
-              display: "flex", alignItems: "center", justifyContent: "center",
-              cursor: "pointer",
-              color: showLabels ? "#00d4ff" : "oklch(0.5 0.01 240)",
-            }}
-          >
-            {showLabels ? <Eye size={13} /> : <EyeOff size={13} />}
-          </button>
-        </TooltipTrigger>
-        <TooltipContent>{showLabels ? "Hide labels" : "Show labels"}</TooltipContent>
-      </Tooltip>
-
-      {/* Cgroup depth slider — only shown when tree has depth > 0 */}
-      {maxTreeDepth > 0 && (
-        <>
-          <div style={{ width: 1, height: 16, background: "oklch(0.25 0.01 240)" }} />
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                <span style={{ fontSize: 10, fontFamily: "monospace", color: "oklch(0.55 0.01 240)", whiteSpace: "nowrap" }}>
-                  Cgroup depth:
-                </span>
-                <input
-                  type="range"
-                  min={0}
-                  max={maxTreeDepth}
-                  value={maxCgroupDepth ?? maxTreeDepth}
-                  onChange={e => {
-                    const v = parseInt(e.target.value, 10);
-                    onMaxCgroupDepthChange(v >= maxTreeDepth ? undefined : v);
-                  }}
-                  style={{
-                    width: 72,
-                    accentColor: "#3b82f6",
-                    cursor: "pointer",
-                  }}
-                />
-                <span style={{
-                  fontSize: 10,
-                  fontFamily: "monospace",
-                  color: maxCgroupDepth !== undefined ? "#3b82f6" : "oklch(0.55 0.01 240)",
-                  minWidth: 14,
-                  textAlign: "right",
-                }}>
-                  {maxCgroupDepth ?? maxTreeDepth}
-                </span>
-                {maxCgroupDepth !== undefined && (
-                  <button
-                    onClick={() => onMaxCgroupDepthChange(undefined)}
-                    title="Show all depths"
-                    style={{
-                      width: 16, height: 16, borderRadius: 4,
-                      background: "#3b82f620",
-                      border: "1px solid #3b82f640",
-                      display: "flex", alignItems: "center", justifyContent: "center",
-                      cursor: "pointer", color: "#3b82f6", padding: 0,
-                    }}
-                  >
-                    <X size={9} />
-                  </button>
-                )}
-              </div>
-            </TooltipTrigger>
-            <TooltipContent>
-              {maxCgroupDepth !== undefined
-                ? `Showing cgroup subtrees up to depth ${maxCgroupDepth} — drag to expand`
-                : `Showing full cgroup tree (depth ${maxTreeDepth}) — drag to collapse subtrees`}
-            </TooltipContent>
-          </Tooltip>
-        </>
-      )}
-
-      <div style={{ width: 1, height: 16, background: "oklch(0.25 0.01 240)" }} />
-
-      <Tooltip>
-        <TooltipTrigger asChild>
-          <button
-            onClick={onDownload}
-            style={{
-              width: 28, height: 28, borderRadius: 6,
-              background: "oklch(0.16 0.015 240)",
-              border: "1px solid oklch(0.25 0.015 240)",
-              display: "flex", alignItems: "center", justifyContent: "center",
-              cursor: "pointer", color: "oklch(0.7 0.01 240)",
-            }}
-          >
-            <Download size={13} />
-          </button>
-        </TooltipTrigger>
-        <TooltipContent>Download topology JSON</TooltipContent>
-      </Tooltip>
-    </div>
-  );
-}
-
-// ─── Legend ───────────────────────────────────────────────────────────────────
-
-function MapLegend() {
-  const [open, setOpen] = useState(false);
-
-  const items = [
-    { color: "#f59e0b", label: "Userspace (processes)" },
-    { color: "#00d4ff", label: "Kernel hook zones" },
-    { color: "#3b82f6", label: "Cgroup hierarchy" },
-    { color: "#10b981", label: "Network interfaces" },
-    { color: "#ffffff30", label: "Dashed = ownership edge" },
-    { color: "#00d4ff50", label: "Animated = active attachment" },
-    { color: "#a78bfa",   label: "BPF maps (data/event/control)" },
-    { color: "#a78bfa40", label: "Dashed border = aggregated maps" },
-    { color: "#a78bfa40", label: "Dashed line = program \u2192 map edge" },
-  ];
-
-  return (
-    <div style={{ position: "relative" }}>
-      <button
-        onClick={() => setOpen(o => !o)}
-        style={{
-          width: 28, height: 28, borderRadius: 6,
-          background: open ? "oklch(0.16 0.015 240)" : "oklch(0.13 0.015 240)",
-          border: `1px solid ${open ? "#00d4ff40" : "oklch(0.22 0.015 240)"}`,
-          display: "flex", alignItems: "center", justifyContent: "center",
-          cursor: "pointer", color: open ? "#00d4ff" : "oklch(0.55 0.01 240)",
-        }}
-      >
-        <Info size={13} />
-      </button>
-
-      {open && (
-        <div style={{
-          position: "absolute",
-          bottom: 36,
-          right: 0,
-          background: "oklch(0.11 0.015 240 / 0.98)",
-          border: "1px solid oklch(0.22 0.015 240)",
-          borderRadius: 10,
-          padding: "10px 14px",
-          minWidth: 220,
-          backdropFilter: "blur(12px)",
-          zIndex: 100,
-        }}>
-          <div style={{ fontSize: 10, fontWeight: 700, color: "#00d4ff", fontFamily: "monospace", marginBottom: 8, letterSpacing: "0.1em" }}>
-            LEGEND
-          </div>
-          {items.map(({ color, label }) => (
-            <div key={label} style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 5 }}>
-              <div style={{
-                width: 12, height: 12, borderRadius: 3,
-                background: color,
-                flexShrink: 0,
-              }} />
-              <span style={{ fontSize: 10, color: "oklch(0.65 0.01 240)", fontFamily: "monospace" }}>
-                {label}
-              </span>
-            </div>
-          ))}
-          <div style={{ marginTop: 8, paddingTop: 8, borderTop: "1px solid oklch(0.18 0.01 240)" }}>
-            <div style={{ fontSize: 9, color: "oklch(0.45 0.01 240)", fontFamily: "monospace", lineHeight: 1.5 }}>
-              Scroll to zoom · Drag to pan<br />
-              Double-click node to zoom-fit<br />
-              Click program badge to inspect
-            </div>
-          </div>
-        </div>
-      )}
-    </div>
-  );
-}
+const STRUCTURAL_NODES = [
+  "band-userspace",
+  "band-kernel",
+  "band-network",
+  "label-zones",
+  "label-cgroups",
+  "label-maps",
+];
 
 // ─── Inner canvas (needs ReactFlowProvider context) ───────────────────────────
 
 function OsMapCanvas() {
-  const { snapshot, searchQuery, setSelectedProgram, maps: contextMaps, appMode, historyMap, snapshotMapDumps } = useEbpf();
+  const {
+    snapshot,
+    searchQuery,
+    setSelectedProgram,
+    maps: contextMaps,
+    appMode,
+    historyMap,
+    snapshotMapDumps,
+  } = useEbpf();
   const [dumpMapId, setDumpMapId] = useState<number | null>(null);
   // In snapshot mode, maps come from EbpfContext (parsed from the snapshot file).
   // In live/demo mode, maps arrive via the SSE stream (also in EbpfContext).
@@ -432,7 +81,9 @@ function OsMapCanvas() {
   // zoom must be declared before useOsMapLayout so the LOD can be derived from it
   const [zoom, setZoom] = useState(0.35);
   // maxCgroupDepth: undefined = show all; 0 = root only; N = show up to depth N
-  const [maxCgroupDepth, setMaxCgroupDepth] = useState<number | undefined>(undefined);
+  const [maxCgroupDepth, setMaxCgroupDepth] = useState<number | undefined>(
+    undefined
+  );
   const [focusedProcessId, setFocusedProcessId] = useState<number | null>(null);
 
   // pid → program IDs (precomputed, stable across focus changes)
@@ -443,7 +94,10 @@ function OsMapCanvas() {
       if (p.pids) {
         for (const { pid } of p.pids) {
           let arr = m.get(pid);
-          if (!arr) { arr = []; m.set(pid, arr); }
+          if (!arr) {
+            arr = [];
+            m.set(pid, arr);
+          }
           arr.push(p.id);
         }
       }
@@ -455,31 +109,43 @@ function OsMapCanvas() {
     return focusedProcessId ? pidToProgIds.get(focusedProcessId) : undefined;
   }, [focusedProcessId, pidToProgIds]);
 
-  const layout = useOsMapLayout(snapshot, maps, zoom, maxCgroupDepth, focusedProgIds);
+  const layout = useOsMapLayout(
+    snapshot,
+    maps,
+    zoom,
+    maxCgroupDepth,
+    focusedProgIds
+  );
   const { fitView, getViewport, setViewport } = useReactFlow();
   // Keep stable refs so they never appear in useEffect deps
   const fitViewRef = useRef(fitView);
-  useEffect(() => { fitViewRef.current = fitView; });
+  useEffect(() => {
+    fitViewRef.current = fitView;
+  });
   const setViewportRef = useRef(setViewport);
-  useEffect(() => { setViewportRef.current = setViewport; });
+  useEffect(() => {
+    setViewportRef.current = setViewport;
+  });
   const [nodes, setNodes, onNodesChangeRaw] = useNodesState(layout.nodes);
   const [edges, setEdges, onEdgesChange] = useEdgesState(layout.edges);
-  
+
   // Persist user-moved node positions
   const onNodesChange = useCallback(
     (changes: Parameters<typeof onNodesChangeRaw>[0]) => {
       const filtered = changes.filter(c => c.type !== "select");
-      
+
       // If a node was explicitly moved by the user, save its new position to localStorage
       filtered.forEach(change => {
         if (change.type === "position" && change.dragging && change.position) {
           try {
             const key = `osmap-pos-${snapshot?.hostname}-${change.id}`;
             localStorage.setItem(key, JSON.stringify(change.position));
-          } catch { /* ignore */ }
+          } catch {
+            /* ignore */
+          }
         }
       });
-      
+
       if (filtered.length > 0) onNodesChangeRaw(filtered);
     },
     [onNodesChangeRaw, snapshot]
@@ -492,7 +158,9 @@ function OsMapCanvas() {
   // fitView is accessed via ref so it never appears in deps (it is not stable
   // across renders in React Flow and would cause an infinite loop).
   const getViewportRef = useRef(getViewport);
-  useEffect(() => { getViewportRef.current = getViewport; });
+  useEffect(() => {
+    getViewportRef.current = getViewport;
+  });
 
   // Track layout structure so we can skip no-op node replacements.
   // Replacing 1600+ nodes with identical-but-new objects causes React Flow
@@ -504,7 +172,7 @@ function OsMapCanvas() {
     // (same nodes, same positions) — skip the expensive setNodes call.
     const fingerprint = layout.nodes.map(n => n.id).join("\0");
     const structureChanged = fingerprint !== prevLayoutFingerprint.current;
-    
+
     if (!structureChanged && didFit.current) {
       return; // identical layout — nothing to update
     }
@@ -514,18 +182,26 @@ function OsMapCanvas() {
     // LOD-driven relayouts (which would otherwise let React Flow reset
     // the viewport when all node objects are replaced).
     const savedViewport = didFit.current ? getViewportRef.current() : null;
-    
+
     // Apply saved coordinates from localStorage before setting nodes into the React Flow instance
     const restoredNodes = layout.nodes.map(n => {
       try {
-        const saved = localStorage.getItem(`osmap-pos-${snapshot?.hostname}-${n.id}`);
+        const saved = localStorage.getItem(
+          `osmap-pos-${snapshot?.hostname}-${n.id}`
+        );
         if (saved) {
           const parsed = JSON.parse(saved);
-          if (parsed && typeof parsed.x === "number" && typeof parsed.y === "number") {
+          if (
+            parsed &&
+            typeof parsed.x === "number" &&
+            typeof parsed.y === "number"
+          ) {
             return { ...n, position: { x: parsed.x, y: parsed.y } };
           }
         }
-      } catch { /* ignore parsing errors */ }
+      } catch {
+        /* ignore parsing errors */
+      }
       return n;
     });
 
@@ -538,9 +214,13 @@ function OsMapCanvas() {
         setTimeout(() => {
           isAnimating.current = true;
           const contentNodes = layout.nodes.filter(
-            n => n.type === "zoneNode" || n.type === "cgroupNode" ||
-                 n.type === "interfaceNode" || n.type === "processNode" ||
-                 n.type === "mapNode" || n.type === "mapSummaryNode"
+            n =>
+              n.type === "zoneNode" ||
+              n.type === "cgroupNode" ||
+              n.type === "interfaceNode" ||
+              n.type === "processNode" ||
+              n.type === "mapNode" ||
+              n.type === "mapSummaryNode"
           );
           fitViewRef.current({
             nodes: contentNodes.length > 0 ? contentNodes : undefined,
@@ -584,7 +264,10 @@ function OsMapCanvas() {
     const index = new Map<number, Set<string>>();
     const addEntry = (progId: number, nodeId: string) => {
       let s = index.get(progId);
-      if (!s) { s = new Set(); index.set(progId, s); }
+      if (!s) {
+        s = new Set();
+        index.set(progId, s);
+      }
       s.add(nodeId);
     };
 
@@ -625,10 +308,11 @@ function OsMapCanvas() {
     if (!searchQuery || !snapshot || !progNodeIndex) return null;
     const q = searchQuery.toLowerCase();
     const matchingProgIds = snapshot.programs
-      .filter(p =>
-        p.name.toLowerCase().includes(q) ||
-        p.rawType.toLowerCase().includes(q) ||
-        p.tag.toLowerCase().includes(q)
+      .filter(
+        p =>
+          p.name.toLowerCase().includes(q) ||
+          p.rawType.toLowerCase().includes(q) ||
+          p.tag.toLowerCase().includes(q)
       )
       .map(p => p.id);
 
@@ -666,7 +350,14 @@ function OsMapCanvas() {
         if (focusedNodeIds.has(id)) combined.add(id);
       });
       // Always keep structural nodes
-      ["band-userspace", "band-kernel", "band-network", "label-zones", "label-cgroups", "label-maps"].forEach(id => {
+      [
+        "band-userspace",
+        "band-kernel",
+        "band-network",
+        "label-zones",
+        "label-cgroups",
+        "label-maps",
+      ].forEach(id => {
         combined.add(id);
       });
       return combined;
@@ -707,8 +398,10 @@ function OsMapCanvas() {
 
   const displayEdges = useMemo(() => {
     return edges.map(e => {
-      const isFiltered = activeFilter ? (activeFilter.has(e.source) && activeFilter.has(e.target)) : false;
-      
+      const isFiltered = activeFilter
+        ? activeFilter.has(e.source) && activeFilter.has(e.target)
+        : false;
+
       let isAnimated = false;
       if (activeProgIds.size > 0) {
         const match = e.id.match(/-prog-(\d+)/);
@@ -728,45 +421,46 @@ function OsMapCanvas() {
     });
   }, [edges, activeFilter, activeProgIds]);
 
-
-
   // Node click handler — extract program from zone/cgroup/interface and open detail panel,
   // or toggle focus mode when clicking a process node.
-  const onNodeClick: NodeMouseHandler = useCallback((_evt, node) => {
-    if (!snapshot) return;
+  const onNodeClick: NodeMouseHandler = useCallback(
+    (_evt, node) => {
+      if (!snapshot) return;
 
-    const type = node.type;
+      const type = node.type;
 
-    if (type === "processNode") {
-      const data = node.data as unknown as ProcessNodeData;
-      // Toggle focus: click same process again to exit
-      setFocusedProcessId(prev => prev === data.pid ? null : data.pid);
-      return;
-    }
+      if (type === "processNode") {
+        const data = node.data as unknown as ProcessNodeData;
+        // Toggle focus: click same process again to exit
+        setFocusedProcessId(prev => (prev === data.pid ? null : data.pid));
+        return;
+      }
 
-    if (type === "mapNode") {
-      const data = node.data as any;
-      setDumpMapId(data.mapId);
-      return;
-    }
-    
-    if (type === "zoneNode") {
-      const data = node.data as unknown as ZoneNodeData;
-      if (data.programs.length === 1) {
-        setSelectedProgram(data.programs[0]);
+      if (type === "mapNode") {
+        const data = node.data as any;
+        setDumpMapId(data.mapId);
+        return;
       }
-    } else if (type === "cgroupNode") {
-      const data = node.data as unknown as CgroupNodeData;
-      if (data.programs.length === 1) {
-        setSelectedProgram(data.programs[0]);
+
+      if (type === "zoneNode") {
+        const data = node.data as unknown as ZoneNodeData;
+        if (data.programs.length === 1) {
+          setSelectedProgram(data.programs[0]);
+        }
+      } else if (type === "cgroupNode") {
+        const data = node.data as unknown as CgroupNodeData;
+        if (data.programs.length === 1) {
+          setSelectedProgram(data.programs[0]);
+        }
+      } else if (type === "interfaceNode") {
+        const data = node.data as unknown as InterfaceNodeData;
+        if (data.allPrograms.length === 1) {
+          setSelectedProgram(data.allPrograms[0]);
+        }
       }
-    } else if (type === "interfaceNode") {
-      const data = node.data as unknown as InterfaceNodeData;
-      if (data.allPrograms.length === 1) {
-        setSelectedProgram(data.allPrograms[0]);
-      }
-    }
-  }, [snapshot, setSelectedProgram]);
+    },
+    [snapshot, setSelectedProgram]
+  );
 
   // Focus mode: no viewport change — just dim non-focused nodes via displayNodes
   // opacity. The user's current pan/zoom is preserved. If a process's programs
@@ -774,14 +468,17 @@ function OsMapCanvas() {
   // which looks like an unwanted viewport reset.
 
   // Double-click to zoom-fit node
-  const onNodeDoubleClick: NodeMouseHandler = useCallback((_evt, node) => {
-    isAnimating.current = true;
-    fitView({
-      nodes: [node],
-      duration: 500,
-      padding: 0.3,
-    });
-  }, [fitView]);
+  const onNodeDoubleClick: NodeMouseHandler = useCallback(
+    (_evt, node) => {
+      isAnimating.current = true;
+      fitView({
+        nodes: [node],
+        duration: 500,
+        padding: 0.3,
+      });
+    },
+    [fitView]
+  );
 
   const progCount = snapshot?.stats.total ?? 0;
 
@@ -803,7 +500,10 @@ function OsMapCanvas() {
     let max = 0;
     const snap = snapshot;
     function walk(nodes: typeof snap.cgroupTree) {
-      nodes.forEach(n => { max = Math.max(max, n.depth); walk(n.children); });
+      nodes.forEach(n => {
+        max = Math.max(max, n.depth);
+        walk(n.children);
+      });
     }
     walk(snap.cgroupTree);
     return max;
@@ -844,11 +544,13 @@ function OsMapCanvas() {
   }, [snapshot]);
 
   const dumpMap = dumpMapId ? maps.find(m => m.id === dumpMapId) : null;
-  const mapMeta = dumpMap ? (MAP_TYPE_META[dumpMap.type] ?? MAP_TYPE_META["unknown"]!) : null;
+  const mapMeta = dumpMap
+    ? (MAP_TYPE_META[dumpMap.type] ?? MAP_TYPE_META["unknown"]!)
+    : null;
 
   return (
     <div style={{ width: "100%", height: "100%", position: "relative" }}>
-      <style>{FLOW_STYLES}</style>
+      <style>{OS_MAP_FLOW_STYLES}</style>
 
       <ReactFlow
         className={cn("os-map-flow", activeFilter ? "filtering-active" : "")}
@@ -880,11 +582,14 @@ function OsMapCanvas() {
 
         <MiniMap
           position="bottom-right"
-          nodeColor={(n) => {
+          nodeColor={n => {
             if (n.type === "kernelBand") return "oklch(0.18 0.018 240)";
             if (n.type === "userspaceBand") return "oklch(0.18 0.020 55)";
             if (n.type === "networkBand") return "oklch(0.18 0.020 160)";
-            if (n.type === "zoneNode") return ((n.data as unknown as ZoneNodeData).color ?? "#6b7280") + "80";
+            if (n.type === "zoneNode")
+              return (
+                ((n.data as unknown as ZoneNodeData).color ?? "#6b7280") + "80"
+              );
             if (n.type === "cgroupNode") return "#3b82f680";
             if (n.type === "interfaceNode") return "#10b98180";
             if (n.type === "processNode") return "#f59e0b80";
@@ -904,7 +609,11 @@ function OsMapCanvas() {
             zoom={zoom}
             showLabels={showLabels}
             onToggleLabels={() => setShowLabels(l => !l)}
-            nodeCount={nodes.filter(n => !n.type?.includes("Band") && !n.type?.includes("Label")).length}
+            nodeCount={
+              nodes.filter(
+                n => !n.type?.includes("Band") && !n.type?.includes("Label")
+              ).length
+            }
             progCount={progCount}
             onDownload={handleDownload}
             maxTreeDepth={maxTreeDepth}
@@ -923,15 +632,17 @@ function OsMapCanvas() {
         {/* Search match count */}
         {searchQuery && highlightedNodeIds && (
           <Panel position="bottom-center">
-            <div style={{
-              padding: "4px 12px",
-              background: "oklch(0.12 0.015 240 / 0.95)",
-              border: "1px solid #00d4ff40",
-              borderRadius: 8,
-              fontSize: 10,
-              fontFamily: "monospace",
-              color: "#00d4ff",
-            }}>
+            <div
+              style={{
+                padding: "4px 12px",
+                background: "oklch(0.12 0.015 240 / 0.95)",
+                border: "1px solid #00d4ff40",
+                borderRadius: 8,
+                fontSize: 10,
+                fontFamily: "monospace",
+                color: "#00d4ff",
+              }}
+            >
               {highlightedNodeIds.size - 5} nodes match "{searchQuery}"
             </div>
           </Panel>
@@ -948,37 +659,11 @@ function OsMapCanvas() {
           keyBytes={dumpMap.bytesKey}
           valueBytes={dumpMap.bytesValue}
           onClose={() => setDumpMapId(null)}
-          snapshotDump={appMode === "snapshot" ? snapshotMapDumps[dumpMap.id] : undefined}
+          snapshotDump={
+            appMode === "snapshot" ? snapshotMapDumps[dumpMap.id] : undefined
+          }
         />
       )}
-    </div>
-  );
-}
-
-// ─── Loading / empty states ───────────────────────────────────────────────────
-
-function MapPlaceholder() {
-  return (
-    <div style={{
-      width: "100%",
-      height: "100%",
-      display: "flex",
-      flexDirection: "column",
-      alignItems: "center",
-      justifyContent: "center",
-      gap: 16,
-      background: "oklch(0.075 0.012 240)",
-    }}>
-      <div style={{
-        width: 48, height: 48,
-        border: "2px solid #00d4ff",
-        borderTopColor: "transparent",
-        borderRadius: "50%",
-        animation: "spin 1s linear infinite",
-      }} />
-      <p style={{ fontSize: 13, color: "oklch(0.55 0.01 240)", fontFamily: "monospace" }}>
-        Building OS map…
-      </p>
     </div>
   );
 }
@@ -994,11 +679,16 @@ export default function OsMapView() {
 
   if (!snapshot) {
     return (
-      <div style={{
-        width: "100%", height: "100%",
-        display: "flex", alignItems: "center", justifyContent: "center",
-        background: "oklch(0.075 0.012 240)",
-      }}>
+      <div
+        style={{
+          width: "100%",
+          height: "100%",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          background: "oklch(0.075 0.012 240)",
+        }}
+      >
         <p style={{ color: "oklch(0.55 0.01 240)", fontFamily: "monospace" }}>
           No snapshot data available
         </p>
