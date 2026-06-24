@@ -83,11 +83,36 @@ function formatTcStats(stats: NonNullable<ChainProgram["tc"]>["stats"]): string 
   return parts.join(", ");
 }
 
-function TcFilterMetadata({ tc }: { tc?: ChainProgram["tc"] }) {
+type TcDirection = "ingress" | "egress";
+
+function directionFromText(value: string): TcDirection | undefined {
+  const lower = value.toLowerCase();
+  if (lower.includes("ingress")) return "ingress";
+  if (lower.includes("egress")) return "egress";
+  return undefined;
+}
+
+function TcFilterMetadata({
+  attachType,
+  programName,
+  tc,
+}: {
+  attachType: string;
+  programName: string;
+  tc?: ChainProgram["tc"];
+}) {
   if (!tc) return null;
+  const attachDirection = directionFromText(attachType);
+  const nameDirection = directionFromText(programName);
+  const directionMismatch =
+    attachDirection && nameDirection && attachDirection !== nameDirection;
   const statsText = formatTcStats(tc.stats);
   const title = [
     "Detailed TC filter metadata from tc -s -d -j filter show.",
+    attachDirection ? `tc attach direction: ${attachDirection}` : null,
+    directionMismatch
+      ? `Program name contains "${nameDirection}", but tc reports this filter on ${attachType}. Program names are not authoritative for packet direction.`
+      : null,
     tc.priority != null ? `priority/pref: ${tc.priority}` : null,
     tc.chain != null ? `chain: ${tc.chain}` : null,
     tc.handle ? `handle: ${tc.handle}` : null,
@@ -101,6 +126,15 @@ function TcFilterMetadata({ tc }: { tc?: ChainProgram["tc"] }) {
 
   return (
     <>
+      {directionMismatch && (
+        <span
+          className="inline-flex items-center gap-1 rounded border border-amber-500/30 bg-amber-500/5 px-1.5 py-0.5 text-[9px] font-mono text-amber-300/85"
+          title={title}
+        >
+          <AlertTriangle size={8} />
+          name says {nameDirection}
+        </span>
+      )}
       {tc.priority != null && (
         <span
           className="rounded border border-violet-500/25 bg-violet-500/5 px-1.5 py-0.5 text-[9px] font-mono text-violet-300/80"
@@ -378,7 +412,11 @@ function OsiLayerRow({
                                 </span>
                               )}
                               <ProgBadge program={p} />
-                              <TcFilterMetadata tc={row.chainProgram.tc} />
+                              <TcFilterMetadata
+                                attachType={chain.attachType}
+                                programName={p.name}
+                                tc={row.chainProgram.tc}
+                              />
                               {predictionStep && (
                                 <span
                                   className={cn(
