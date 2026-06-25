@@ -3,6 +3,7 @@ import type {
   BpfProgram,
   PacketActionSemantics,
   ProgramChain,
+  XlatedReturnAnalysis,
 } from "../../../shared/ebpf-types";
 import {
   buildChainProgramRows,
@@ -10,8 +11,11 @@ import {
   classifyRateDrop,
   formatActions,
   formatAge,
+  formatChainObservedReturnConstants,
+  formatObservedReturnConstants,
   formatRunCnt,
   hasModeledReturnSemantics,
+  isSideEffectOnlySocketChain,
   VERDICT_TONE_CLASSES,
 } from "./packet-chain-ui";
 
@@ -48,6 +52,42 @@ function makeProgram(id: number, name: string): BpfProgram {
     attachments: [],
     osiLayer: "L3",
     color: "#7c3aed",
+  };
+}
+
+function makeAnalysis(
+  observedConstants: XlatedReturnAnalysis["observedConstants"],
+  options: { unknownExits?: number; tailCalls?: number } = {}
+): XlatedReturnAnalysis {
+  return {
+    exitCount:
+      observedConstants.reduce((sum, entry) => sum + entry.exitCount, 0) +
+      (options.unknownExits ?? 0),
+    constantExits: [],
+    unknownExits: Array.from({ length: options.unknownExits ?? 0 }, (_, i) => ({
+      exitIndex: i,
+      exitDisasm: "(95) exit",
+      reason: "dynamic-assignment",
+    })),
+    observedConstants,
+    tailCallIndices: Array.from(
+      { length: options.tailCalls ?? 0 },
+      (_, i) => i
+    ),
+    hasUnknownExits: (options.unknownExits ?? 0) > 0,
+    hasTailCalls: (options.tailCalls ?? 0) > 0,
+    sideEffects: {
+      hasSideEffects: false,
+      labels: [],
+      effects: [],
+      hasMapWrites: false,
+      hasDirectMemoryWrites: false,
+      hasPacketMutations: false,
+      hasRedirects: false,
+      hasTelemetryOutput: false,
+      hasTailCalls: false,
+      hasSocketMutations: false,
+    },
   };
 }
 
@@ -138,6 +178,81 @@ describe("packet-chain-ui helpers", () => {
         makeChain({ pass: [], drop: ["0"], redirect: [], other: [] })
       )
     ).toBe(true);
+  });
+
+  it("detects side-effect-only cgroup socket chains", () => {
+    expect(
+      isSideEffectOnlySocketChain({
+        ...makeChain({ pass: [], drop: [], redirect: [], other: [] }),
+        hookType: "cgroup",
+        packetContext: {
+          family: "cgroup_sock",
+          direction: "unknown",
+          summary: "socket hook",
+          semantics: { pass: [], drop: [], redirect: [], other: [] },
+        },
+      })
+    ).toBe(true);
+    expect(
+      isSideEffectOnlySocketChain({
+        ...makeChain({ pass: ["1"], drop: ["0"], redirect: [], other: [] }),
+        hookType: "cgroup",
+        packetContext: {
+          family: "cgroup_sock_addr",
+          direction: "unknown",
+          summary: "socket address hook",
+          semantics: { pass: ["1"], drop: ["0"], redirect: [], other: [] },
+        },
+      })
+    ).toBe(false);
+  });
+
+  it("formats raw observed return constants without verdict labels", () => {
+    expect(formatObservedReturnConstants(undefined)).toBe("not analyzed");
+    expect(
+      formatObservedReturnConstants(
+        makeAnalysis(
+          [
+            { value: 1, exitCount: 4 },
+            { value: 0, exitCount: 2 },
+          ],
+          { unknownExits: 1, tailCalls: 1 }
+        )
+      )
+    ).toBe("0 x2, 1 x4, 1 unknown exit, 1 tail call");
+  });
+
+  it("aggregates raw return constants across a chain", () => {
+    const chain = {
+      ...makeChain({ pass: [], drop: [], redirect: [], other: [] }),
+      programs: [
+        { id: 1, position: 1, name: "first" },
+        { id: 2, position: 2, name: "second" },
+        { id: 3, position: 3, name: "missing" },
+      ],
+    };
+    const analyses = new Map([
+      [
+        1,
+        {
+          progId: 1,
+          returnAnalysis: makeAnalysis([{ value: 0, exitCount: 1 }]),
+        },
+      ],
+      [
+        2,
+        {
+          progId: 2,
+          returnAnalysis: makeAnalysis([{ value: 1, exitCount: 2 }], {
+            unknownExits: 1,
+          }),
+        },
+      ],
+    ]);
+
+    expect(formatChainObservedReturnConstants(chain, analyses)).toBe(
+      "0, 1 x2, 1 unknown exit, 1 program not analyzed"
+    );
   });
 
   it("exports verdict tone classes for every verdict", () => {

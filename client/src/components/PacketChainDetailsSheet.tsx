@@ -17,7 +17,12 @@ import {
   SheetHeader,
   SheetTitle,
 } from "@/components/ui/sheet";
-import { VERDICT_TONE_CLASSES } from "@/lib/packet-chain-ui";
+import {
+  formatChainObservedReturnConstants,
+  formatObservedReturnConstants,
+  isSideEffectOnlySocketChain,
+  VERDICT_TONE_CLASSES,
+} from "@/lib/packet-chain-ui";
 import { cn } from "@/lib/utils";
 import type {
   BpfProgram,
@@ -368,12 +373,15 @@ function StepDetails({
   step,
   program,
   analysisResult,
+  sideEffectFirst,
 }: {
   step: PacketProgramPrediction;
   program?: BpfProgram;
   analysisResult?: ProgramReturnAnalysisResult;
+  sideEffectFirst: boolean;
 }) {
   const analysis = analysisResult?.returnAnalysis;
+  const rawReturns = formatObservedReturnConstants(analysis);
   const modeledHelperExitKeys = new Set(
     step.verdictExplanations
       .filter(
@@ -410,25 +418,54 @@ function StepDetails({
         ) : (
           <span className="text-sm font-mono">{step.name}</span>
         )}
-        <span
-          className={cn(
-            "rounded border px-1.5 py-0.5 text-[10px] font-mono",
-            VERDICT_TONE_CLASSES[step.tone]
-          )}
-        >
-          verdict: {step.label}
-        </span>
-        <span
-          className={cn(
-            "rounded border px-1.5 py-0.5 text-[10px] font-mono",
-            step.hasSideEffects
-              ? "border-cyan-500/25 bg-cyan-500/5 text-cyan-300/80"
-              : "border-border/60 bg-muted/20 text-muted-foreground/70"
-          )}
-        >
-          effects:{" "}
-          {step.hasSideEffects ? step.sideEffectLabels.join(", ") : "none"}
-        </span>
+        {sideEffectFirst ? (
+          <>
+            <span
+              className={cn(
+                "rounded border px-1.5 py-0.5 text-[10px] font-mono",
+                step.hasSideEffects
+                  ? "border-cyan-500/25 bg-cyan-500/5 text-cyan-300/80"
+                  : "border-border/60 bg-muted/20 text-muted-foreground/70"
+              )}
+            >
+              effects:{" "}
+              {step.hasSideEffects
+                ? step.sideEffectLabels.join(", ")
+                : "none detected"}
+            </span>
+            <span className="rounded border border-border/60 bg-muted/20 px-1.5 py-0.5 text-[10px] font-mono text-muted-foreground/80">
+              returns: {rawReturns}
+            </span>
+            <span
+              className="rounded border border-amber-500/25 bg-amber-500/5 px-1.5 py-0.5 text-[10px] font-mono text-amber-300/80"
+              title={step.title}
+            >
+              packet verdict not modeled
+            </span>
+          </>
+        ) : (
+          <>
+            <span
+              className={cn(
+                "rounded border px-1.5 py-0.5 text-[10px] font-mono",
+                VERDICT_TONE_CLASSES[step.tone]
+              )}
+            >
+              verdict: {step.label}
+            </span>
+            <span
+              className={cn(
+                "rounded border px-1.5 py-0.5 text-[10px] font-mono",
+                step.hasSideEffects
+                  ? "border-cyan-500/25 bg-cyan-500/5 text-cyan-300/80"
+                  : "border-border/60 bg-muted/20 text-muted-foreground/70"
+              )}
+            >
+              effects:{" "}
+              {step.hasSideEffects ? step.sideEffectLabels.join(", ") : "none"}
+            </span>
+          </>
+        )}
         {step.tailCallContinuations.length > 0 && (
           <span
             className="rounded border border-amber-500/25 bg-amber-500/5 px-1.5 py-0.5 text-[10px] font-mono text-amber-300/80"
@@ -446,11 +483,13 @@ function StepDetails({
         </div>
         <div>
           <span className="text-muted-foreground/60">Chain impact: </span>
-          {step.definitelyTerminatesChain
-            ? "always terminates normal flow"
-            : step.canTerminateChain
-              ? "may terminate normal flow"
-              : "does not terminate normal flow based on modeled exits"}
+          {sideEffectFirst
+            ? "packet verdict is not modeled for this socket hook"
+            : step.definitelyTerminatesChain
+              ? "always terminates normal flow"
+              : step.canTerminateChain
+                ? "may terminate normal flow"
+                : "does not terminate normal flow based on modeled exits"}
         </div>
       </div>
 
@@ -460,18 +499,29 @@ function StepDetails({
         </div>
       )}
 
-      <div className="mt-3">
-        <div className="mb-1 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
-          Verdict Explanation
+      {!sideEffectFirst && (
+        <div className="mt-3">
+          <div className="mb-1 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+            Verdict Explanation
+          </div>
+          <VerdictExplanations explanations={step.verdictExplanations} />
         </div>
-        <VerdictExplanations explanations={step.verdictExplanations} />
-      </div>
+      )}
 
       {analysis && (
         <div className="mt-3 space-y-3">
+          {sideEffectFirst && (
+            <div>
+              <div className="mb-1 text-[10px] font-semibold uppercase tracking-wider text-cyan-300/80">
+                Side Effects
+              </div>
+              <SideEffectEvidence effects={analysis.sideEffects.effects} />
+            </div>
+          )}
+
           <div>
             <div className="mb-1 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
-              Return Evidence
+              {sideEffectFirst ? "Raw Return Values" : "Return Evidence"}
             </div>
             <ReturnEvidence exits={analysis.constantExits} label="constant" />
           </div>
@@ -511,12 +561,14 @@ function StepDetails({
             </div>
           )}
 
-          <div>
-            <div className="mb-1 text-[10px] font-semibold uppercase tracking-wider text-cyan-300/80">
-              Side Effects
+          {!sideEffectFirst && (
+            <div>
+              <div className="mb-1 text-[10px] font-semibold uppercase tracking-wider text-cyan-300/80">
+                Side Effects
+              </div>
+              <SideEffectEvidence effects={analysis.sideEffects.effects} />
             </div>
-            <SideEffectEvidence effects={analysis.sideEffects.effects} />
-          </div>
+          )}
         </div>
       )}
     </div>
@@ -532,6 +584,10 @@ export function PacketChainDetailsSheet({
   returnAnalysisById,
 }: PacketChainDetailsSheetProps) {
   const programsById = new Map(programs.map(program => [program.id, program]));
+  const sideEffectFirst = chain ? isSideEffectOnlySocketChain(chain) : false;
+  const observedReturns = chain
+    ? formatChainObservedReturnConstants(chain, returnAnalysisById)
+    : "not analyzed";
 
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
@@ -550,17 +606,28 @@ export function PacketChainDetailsSheet({
                 {formatChainSource(chain.chainSource)}
               </Badge>
             )}
-            {prediction?.possibleOutcomes.map(outcome => (
-              <span
-                key={outcome}
-                className={cn(
-                  "rounded border px-1.5 py-0.5 text-[10px] font-mono",
-                  VERDICT_TONE_CLASSES[outcome]
-                )}
-              >
-                {outcome}
-              </span>
-            ))}
+            {sideEffectFirst ? (
+              <>
+                <span className="rounded border border-cyan-500/25 bg-cyan-500/5 px-1.5 py-0.5 text-[10px] font-mono text-cyan-300/80">
+                  socket side-effect hook
+                </span>
+                <span className="rounded border border-amber-500/25 bg-amber-500/5 px-1.5 py-0.5 text-[10px] font-mono text-amber-300/80">
+                  packet verdict not modeled
+                </span>
+              </>
+            ) : (
+              prediction?.possibleOutcomes.map(outcome => (
+                <span
+                  key={outcome}
+                  className={cn(
+                    "rounded border px-1.5 py-0.5 text-[10px] font-mono",
+                    VERDICT_TONE_CLASSES[outcome]
+                  )}
+                >
+                  {outcome}
+                </span>
+              ))
+            )}
           </div>
           <SheetTitle className="font-mono text-base">
             {chain?.hookLabel ?? "Packet Chain"}
@@ -578,15 +645,32 @@ export function PacketChainDetailsSheet({
                 <div className="flex items-start gap-3">
                   <Route className="mt-0.5 h-4 w-4 shrink-0 text-primary" />
                   <div className="min-w-0">
-                    <div className="text-sm font-medium text-foreground">
-                      verdict: {prediction.verdictSummary}
-                    </div>
-                    <div className="mt-1 text-xs text-cyan-300/85">
-                      effects: {prediction.effectSummary}
-                    </div>
-                    <div className="mt-1 text-xs text-muted-foreground">
-                      {formatConfidence(prediction)}
-                    </div>
+                    {sideEffectFirst ? (
+                      <>
+                        <div className="text-sm font-medium text-foreground">
+                          effects: {prediction.effectSummary}
+                        </div>
+                        <div className="mt-1 text-xs text-muted-foreground">
+                          returns: {observedReturns}
+                        </div>
+                        <div className="mt-1 text-xs text-amber-300/85">
+                          Packet allow/drop verdicts are not modeled for this
+                          socket hook.
+                        </div>
+                      </>
+                    ) : (
+                      <>
+                        <div className="text-sm font-medium text-foreground">
+                          verdict: {prediction.verdictSummary}
+                        </div>
+                        <div className="mt-1 text-xs text-cyan-300/85">
+                          effects: {prediction.effectSummary}
+                        </div>
+                        <div className="mt-1 text-xs text-muted-foreground">
+                          {formatConfidence(prediction)}
+                        </div>
+                      </>
+                    )}
                   </div>
                 </div>
               </section>
@@ -595,21 +679,23 @@ export function PacketChainDetailsSheet({
                 <div className="rounded-lg border border-border/70 bg-card/40 p-3">
                   <div className="flex items-center gap-2 text-[10px] uppercase tracking-wider text-muted-foreground">
                     <ShieldCheck className="h-3.5 w-3.5" />
-                    Confidence
+                    {sideEffectFirst ? "Verdict Model" : "Confidence"}
                   </div>
                   <div className="mt-1 text-sm font-semibold">
-                    {prediction.confidence}
+                    {sideEffectFirst ? "not modeled" : prediction.confidence}
                   </div>
                 </div>
                 <div className="rounded-lg border border-border/70 bg-card/40 p-3">
                   <div className="flex items-center gap-2 text-[10px] uppercase tracking-wider text-muted-foreground">
                     <GitBranch className="h-3.5 w-3.5" />
-                    First Stop
+                    {sideEffectFirst ? "Raw Returns" : "First Stop"}
                   </div>
                   <div className="mt-1 text-sm font-semibold">
-                    {prediction.firstTerminalPrograms[0]
-                      ? `#${prediction.firstTerminalPrograms[0].position} ${prediction.firstTerminalPrograms[0].name}`
-                      : "none"}
+                    {sideEffectFirst
+                      ? observedReturns
+                      : prediction.firstTerminalPrograms[0]
+                        ? `#${prediction.firstTerminalPrograms[0].position} ${prediction.firstTerminalPrograms[0].name}`
+                        : "none"}
                   </div>
                 </div>
                 <div className="rounded-lg border border-border/70 bg-card/40 p-3">
@@ -639,6 +725,7 @@ export function PacketChainDetailsSheet({
                       step={step}
                       program={programsById.get(step.progId)}
                       analysisResult={returnAnalysisById.get(step.progId)}
+                      sideEffectFirst={sideEffectFirst}
                     />
                   ))}
                 </div>

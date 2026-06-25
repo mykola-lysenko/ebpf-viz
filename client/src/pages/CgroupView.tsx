@@ -19,8 +19,11 @@ import {
   classifyRateDrop,
   formatActions,
   formatAge,
+  formatChainObservedReturnConstants,
+  formatObservedReturnConstants,
   formatRunCnt,
   hasModeledReturnSemantics,
+  isSideEffectOnlySocketChain,
   VERDICT_TONE_CLASSES,
 } from "@/lib/packet-chain-ui";
 import { predictPacketChain } from "../../../shared/packet-chain-prediction";
@@ -367,6 +370,14 @@ function CgroupNodeRow({
                     const firstTerminal = prediction?.firstTerminalPrograms[0];
                     const hasModeledSemantics =
                       chain !== undefined && hasModeledReturnSemantics(chain);
+                    const isSideEffectOnly =
+                      chain !== undefined && isSideEffectOnlySocketChain(chain);
+                    const observedReturns = chain
+                      ? formatChainObservedReturnConstants(
+                          chain,
+                          returnAnalysisById
+                        )
+                      : "not analyzed";
 
                     return (
                       <div key={g.attachType}>
@@ -426,6 +437,15 @@ function CgroupNodeRow({
                                   )}
                                 </span>
                               </>
+                            ) : isSideEffectOnly ? (
+                              <>
+                                <span className="rounded border border-cyan-500/25 bg-cyan-500/5 px-1 py-0.5 text-cyan-300/80">
+                                  socket side-effect hook
+                                </span>
+                                <span className="rounded border border-amber-500/25 bg-amber-500/5 px-1 py-0.5 text-amber-300/80">
+                                  packet verdict not modeled
+                                </span>
+                              </>
                             ) : (
                               <span className="rounded border border-amber-500/25 bg-amber-500/5 px-1 py-0.5 text-amber-300/80">
                                 packet verdict not modeled
@@ -440,17 +460,23 @@ function CgroupNodeRow({
                                 type="button"
                                 className={cn(
                                   "w-full rounded border px-2 py-1 text-left text-[10px] leading-snug transition-colors hover:bg-accent/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50",
-                                  VERDICT_TONE_CLASSES[
-                                    chainTone(
-                                      prediction.possibleOutcomes,
-                                      prediction.hasUnknownBehavior
-                                    )
-                                  ]
+                                  isSideEffectOnly
+                                    ? prediction.hasSideEffects
+                                      ? "border-cyan-500/25 bg-cyan-500/5 text-cyan-200"
+                                      : "border-amber-500/25 bg-amber-500/5 text-amber-300"
+                                    : VERDICT_TONE_CLASSES[
+                                        chainTone(
+                                          prediction.possibleOutcomes,
+                                          prediction.hasUnknownBehavior
+                                        )
+                                      ]
                                 )}
                                 title={
-                                  firstTerminal
-                                    ? `First program that may alter normal chain flow: #${firstTerminal.position} ${firstTerminal.name}. Confidence: ${prediction.confidence}.`
-                                    : `Confidence: ${prediction.confidence}.`
+                                  isSideEffectOnly
+                                    ? chain.packetContext.summary
+                                    : firstTerminal
+                                      ? `First program that may alter normal chain flow: #${firstTerminal.position} ${firstTerminal.name}. Confidence: ${prediction.confidence}.`
+                                      : `Confidence: ${prediction.confidence}.`
                                 }
                                 onClick={() =>
                                   onSelectChainDetails({
@@ -460,29 +486,53 @@ function CgroupNodeRow({
                                   })
                                 }
                               >
-                                <span className="block font-medium">
-                                  verdict: {prediction.verdictSummary}
-                                </span>
-                                <span className="block opacity-80">
-                                  effects: {prediction.effectSummary}
-                                </span>
-                                <span className="opacity-75">
-                                  confidence: {prediction.confidence}
-                                </span>
-                                {firstTerminal && (
-                                  <span className="ml-1 opacity-75">
-                                    first possible stop: #
-                                    {firstTerminal.position}{" "}
-                                    {firstTerminal.name}
-                                  </span>
+                                {isSideEffectOnly ? (
+                                  <>
+                                    <span className="block font-medium">
+                                      effects: {prediction.effectSummary}
+                                    </span>
+                                    <span className="block opacity-80">
+                                      returns: {observedReturns}
+                                    </span>
+                                    <span className="opacity-75">
+                                      packet verdict not modeled for this socket
+                                      hook
+                                    </span>
+                                  </>
+                                ) : (
+                                  <>
+                                    <span className="block font-medium">
+                                      verdict: {prediction.verdictSummary}
+                                    </span>
+                                    <span className="block opacity-80">
+                                      effects: {prediction.effectSummary}
+                                    </span>
+                                    <span className="opacity-75">
+                                      confidence: {prediction.confidence}
+                                    </span>
+                                    {firstTerminal && (
+                                      <span className="ml-1 opacity-75">
+                                        first possible stop: #
+                                        {firstTerminal.position}{" "}
+                                        {firstTerminal.name}
+                                      </span>
+                                    )}
+                                  </>
                                 )}
-                                <span className="ml-1 opacity-60">
+                                <span
+                                  className={cn(
+                                    "opacity-60",
+                                    isSideEffectOnly ? "block" : "ml-1"
+                                  )}
+                                >
                                   click for details
                                 </span>
                               </button>
                             ) : (
                               <div className="rounded border border-border/60 px-2 py-1 text-[10px] text-muted-foreground/60">
-                                Analyzing cgroup verdicts…
+                                {isSideEffectOnly
+                                  ? "Analyzing cgroup side effects…"
+                                  : "Analyzing cgroup verdicts…"}
                               </div>
                             )}
                           </div>
@@ -497,6 +547,7 @@ function CgroupNodeRow({
                               position != null
                                 ? predictionStepsById.get(position)
                                 : undefined;
+                            const analysisResult = returnAnalysisById.get(p.id);
                             const sharedColor = tagColorMap.get(p.tag);
                             const siblings = sharedTagMap.get(p.tag);
                             // Drop indicator: compare live rates (calls/sec), not raw run_cnt
@@ -559,7 +610,7 @@ function CgroupNodeRow({
                                         : "direct"}
                                     </span>
                                   )}
-                                  {predictionStep && (
+                                  {predictionStep && !isSideEffectOnly && (
                                     <span
                                       className={cn(
                                         "rounded border px-1.5 py-0.5 text-[9px] font-mono",
@@ -581,6 +632,25 @@ function CgroupNodeRow({
                                       {formatActions(
                                         predictionStep.sideEffectLabels
                                       )}
+                                    </span>
+                                  )}
+                                  {predictionStep && isSideEffectOnly && (
+                                    <span
+                                      className="rounded border border-border/60 bg-muted/20 px-1.5 py-0.5 text-[9px] font-mono text-muted-foreground/80"
+                                      title={predictionStep.title}
+                                    >
+                                      returns:{" "}
+                                      {formatObservedReturnConstants(
+                                        analysisResult?.returnAnalysis
+                                      )}
+                                    </span>
+                                  )}
+                                  {predictionStep && isSideEffectOnly && (
+                                    <span
+                                      className="rounded border border-amber-500/25 bg-amber-500/5 px-1.5 py-0.5 text-[9px] font-mono text-amber-300/80"
+                                      title={chain.packetContext?.summary}
+                                    >
+                                      packet verdict not modeled
                                     </span>
                                   )}
                                   {predictionStep &&
@@ -627,9 +697,7 @@ function CgroupNodeRow({
                                     chain.packetContext &&
                                     !predictionStep &&
                                     (() => {
-                                      const result = returnAnalysisById.get(
-                                        p.id
-                                      );
+                                      const result = analysisResult;
                                       if (returnAnalysisLoading && !result) {
                                         return (
                                           <span className="rounded border border-border/60 px-1.5 py-0.5 text-[9px] font-mono text-muted-foreground/60">

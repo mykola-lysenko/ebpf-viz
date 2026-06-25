@@ -2,6 +2,8 @@ import type {
   BpfProgram,
   PacketVerdict,
   ProgramChain,
+  ProgramReturnAnalysisResult,
+  XlatedReturnAnalysis,
 } from "../../../shared/ebpf-types";
 
 export type ChainProgramRow = {
@@ -100,6 +102,84 @@ export function hasModeledReturnSemantics(chain: ProgramChain): boolean {
     semantics.redirect.length > 0 ||
     semantics.other.length > 0
   );
+}
+
+export function isSideEffectOnlySocketChain(chain: ProgramChain): boolean {
+  return (
+    chain.hookType === "cgroup" &&
+    chain.packetContext?.family === "cgroup_sock" &&
+    !hasModeledReturnSemantics(chain)
+  );
+}
+
+export function formatObservedReturnConstants(
+  analysis: XlatedReturnAnalysis | null | undefined
+): string {
+  if (!analysis) return "not analyzed";
+
+  const parts = analysis.observedConstants
+    .slice()
+    .sort((a, b) => a.value - b.value)
+    .map(
+      observed =>
+        `${observed.value}${observed.exitCount > 1 ? ` x${observed.exitCount}` : ""}`
+    );
+  if (analysis.unknownExits.length > 0) {
+    parts.push(
+      `${analysis.unknownExits.length} unknown exit${analysis.unknownExits.length === 1 ? "" : "s"}`
+    );
+  }
+  if (analysis.tailCallIndices.length > 0) {
+    parts.push(
+      `${analysis.tailCallIndices.length} tail call${analysis.tailCallIndices.length === 1 ? "" : "s"}`
+    );
+  }
+
+  return parts.length > 0 ? parts.join(", ") : "none";
+}
+
+export function formatChainObservedReturnConstants(
+  chain: ProgramChain,
+  returnAnalysisById: Map<number, ProgramReturnAnalysisResult>
+): string {
+  const counts = new Map<number, number>();
+  let analyzed = 0;
+  let unknownExits = 0;
+  let tailCalls = 0;
+
+  for (const program of chain.programs) {
+    const analysis = returnAnalysisById.get(program.id)?.returnAnalysis;
+    if (!analysis) continue;
+
+    analyzed += 1;
+    unknownExits += analysis.unknownExits.length;
+    tailCalls += analysis.tailCallIndices.length;
+    for (const observed of analysis.observedConstants) {
+      counts.set(
+        observed.value,
+        (counts.get(observed.value) ?? 0) + observed.exitCount
+      );
+    }
+  }
+
+  if (analyzed === 0) return "not analyzed";
+
+  const parts = Array.from(counts.entries())
+    .sort(([a], [b]) => a - b)
+    .map(([value, count]) => `${value}${count > 1 ? ` x${count}` : ""}`);
+  if (unknownExits > 0) {
+    parts.push(`${unknownExits} unknown exit${unknownExits === 1 ? "" : "s"}`);
+  }
+  if (tailCalls > 0) {
+    parts.push(`${tailCalls} tail call${tailCalls === 1 ? "" : "s"}`);
+  }
+
+  const missing = chain.programs.length - analyzed;
+  if (missing > 0) {
+    parts.push(`${missing} program${missing === 1 ? "" : "s"} not analyzed`);
+  }
+
+  return parts.length > 0 ? parts.join(", ") : "none";
 }
 
 export function chainTone(
