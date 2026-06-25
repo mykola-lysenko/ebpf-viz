@@ -87,6 +87,14 @@ function formatConfidence(prediction: PacketChainPrediction): string {
   return "Unknown: return analysis could not resolve enough behavior to predict the packet path.";
 }
 
+function formatChainSource(source: ProgramChain["chainSource"]): string {
+  if (source === "kernel-effective") return "kernel effective";
+  if (source === "inferred") return "inferred";
+  if (source === "tc-filter") return "tc filter";
+  if (source === "bpftool-net") return "bpftool net";
+  return source ?? "unknown source";
+}
+
 function EmptyLine({ children }: { children: ReactNode }) {
   return <div className="text-[11px] text-muted-foreground/60">{children}</div>;
 }
@@ -537,6 +545,11 @@ export function PacketChainDetailsSheet({
                 ? `/${chain.packetContext.direction}`
                 : ""}
             </Badge>
+            {chain?.chainSource && (
+              <Badge variant="outline" className="font-mono text-[10px]">
+                {formatChainSource(chain.chainSource)}
+              </Badge>
+            )}
             {prediction?.possibleOutcomes.map(outcome => (
               <span
                 key={outcome}

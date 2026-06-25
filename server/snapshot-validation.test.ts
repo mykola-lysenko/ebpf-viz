@@ -98,6 +98,60 @@ describe("snapshot upload validation", () => {
       result.snapshot.programChains[0].programs.map(program => program.id)
     ).toEqual([2, 1]);
   });
+
+  it("parses optional raw effective cgroup trees into chain metadata", async () => {
+    const caller = makeCaller();
+
+    const result = await caller.ebpf.parseSnapshot({
+      raw: {
+        progs: [
+          { id: 1, type: "cgroup_skb", name: "parent" },
+          { id: 2, type: "cgroup_skb", name: "child" },
+        ],
+        maps: [],
+        net: [],
+        cgroups: [
+          {
+            cgroup: "/sys/fs/cgroup",
+            programs: [
+              {
+                id: 1,
+                attach_type: "cgroup_inet_ingress",
+                attach_flags: "multi",
+              },
+            ],
+          },
+          {
+            cgroup: "/sys/fs/cgroup/test.slice",
+            programs: [
+              {
+                id: 2,
+                attach_type: "cgroup_inet_ingress",
+                attach_flags: "multi",
+              },
+            ],
+          },
+        ],
+        cgroupsEffective: [
+          {
+            cgroup: "/sys/fs/cgroup/test.slice",
+            programs: [
+              { id: 1, attach_type: "cgroup_inet_ingress" },
+              { id: 2, attach_type: "cgroup_inet_ingress" },
+            ],
+          },
+        ],
+      },
+    });
+
+    expect(result.snapshot.programChains[0]).toMatchObject({
+      chainSource: "kernel-effective",
+      programs: [
+        { id: 1, cgroup: { inherited: true } },
+        { id: 2, cgroup: { inherited: false } },
+      ],
+    });
+  });
 });
 
 describe("map dump upload validation", () => {

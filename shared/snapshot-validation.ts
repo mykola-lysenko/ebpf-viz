@@ -51,6 +51,10 @@ export const rawSnapshotPayloadSchema = z.object({
   net: z.array(rawNetSnapshotSchema).max(MAX_SNAPSHOT_NET_ENTRIES).optional(),
   tcFilters: z.array(z.unknown()).max(MAX_SNAPSHOT_NET_ENTRIES).optional(),
   cgroups: z.array(rawCgroupEntrySchema).max(MAX_SNAPSHOT_CGROUPS).optional(),
+  cgroupsEffective: z
+    .array(rawCgroupEntrySchema)
+    .max(MAX_SNAPSHOT_CGROUPS)
+    .optional(),
 });
 
 const bpfAttachmentSchema = z.object({
@@ -122,6 +126,9 @@ const programChainSchema = z.object({
     name: z.string(),
     attachFlags: z.string().optional(),
   }).catchall(z.unknown())),
+  chainSource: z
+    .enum(["kernel-effective", "inferred", "tc-filter", "bpftool-net"])
+    .optional(),
   canShortCircuit: z.boolean(),
   packetContext: z.object({
     family: z.enum(["xdp", "tc", "cgroup_skb", "cgroup_sock_addr", "cgroup_sock", "netfilter", "unknown"]),

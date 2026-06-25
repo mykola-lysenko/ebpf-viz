@@ -416,8 +416,12 @@ run_capture "$OUT/net-show.json" "$OUT/net-show.err" \
   "${SUDO_PREFIX[@]}" "$BPFTOOL" -jp net show
 run_capture "$OUT/cgroup-tree.json" "$OUT/cgroup-tree.err" \
   "${SUDO_PREFIX[@]}" "$BPFTOOL" -jp cgroup tree
+run_capture "$OUT/cgroup-tree-effective.json" "$OUT/cgroup-tree-effective.err" \
+  "${SUDO_PREFIX[@]}" "$BPFTOOL" -jp cgroup tree effective
 run_capture "$OUT/cgroup-tree.txt" "$OUT/cgroup-tree.txt.err" \
   "${SUDO_PREFIX[@]}" "$BPFTOOL" cgroup tree
+run_capture "$OUT/cgroup-tree-effective.txt" "$OUT/cgroup-tree-effective.txt.err" \
+  "${SUDO_PREFIX[@]}" "$BPFTOOL" cgroup tree effective
 dump_tc_filters
 
 refresh_state init

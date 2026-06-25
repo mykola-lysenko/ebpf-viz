@@ -180,18 +180,27 @@ async function fetchLiveData(): Promise<{
   progs: RawBpfProg[];
   net: RawNetSnapshot[];
   cgroups: RawCgroupEntry[];
+  cgroupsEffective: RawCgroupEntry[];
   rawMaps: RawBpfMap[];
 }> {
-  const [progOut, netOut, cgroupOut, mapOut] = await Promise.allSettled([
+  const [
+    progOut,
+    netOut,
+    cgroupOut,
+    cgroupEffectiveOut,
+    mapOut,
+  ] = await Promise.allSettled([
     runBpftool("prog list"),
     runBpftool("net"),
     runBpftool("cgroup tree"),
+    runBpftool("cgroup tree effective"),
     runBpftool("map list"),
   ]);
 
   let progs: RawBpfProg[] = [];
   let net: RawNetSnapshot[] = [];
   let cgroups: RawCgroupEntry[] = [];
+  let cgroupsEffective: RawCgroupEntry[] = [];
   let rawMaps: RawBpfMap[] = [];
 
   if (progOut.status === "fulfilled") {
@@ -202,6 +211,9 @@ async function fetchLiveData(): Promise<{
   }
   if (cgroupOut.status === "fulfilled") {
     try { cgroups = JSON.parse(stripNonJson(cgroupOut.value)); } catch { cgroups = []; }
+  }
+  if (cgroupEffectiveOut.status === "fulfilled") {
+    try { cgroupsEffective = JSON.parse(stripNonJson(cgroupEffectiveOut.value)); } catch { cgroupsEffective = []; }
   }
   if (mapOut.status === "fulfilled") {
     try { rawMaps = JSON.parse(stripNonJson(mapOut.value)); } catch { rawMaps = []; }
@@ -231,7 +243,7 @@ async function fetchLiveData(): Promise<{
     }
   }
 
-  return { progs, net, cgroups, rawMaps };
+  return { progs, net, cgroups, cgroupsEffective, rawMaps };
 }
 
 // ─── Poll ──────────────────────────────────────────────────────────────────
@@ -245,6 +257,7 @@ async function poll(): Promise<void> {
     let progs: RawBpfProg[];
     let net: RawNetSnapshot[];
     let cgroups: RawCgroupEntry[];
+    let cgroupsEffective: RawCgroupEntry[] = [];
 
     let rawMaps: RawBpfMap[] = [];
 
@@ -258,21 +271,29 @@ async function poll(): Promise<void> {
       }));
       net = MOCK_NET;
       cgroups = MOCK_CGROUPS;
+      cgroupsEffective = [];
       void now; // used implicitly via Date.now() in ingestSnapshot
     } else {
       const data = await fetchLiveData();
       progs = data.progs;
       net = data.net;
       cgroups = data.cgroups;
+      cgroupsEffective = data.cgroupsEffective;
       rawMaps = data.rawMaps;
     }
 
-    const snap = buildSnapshot(progs, net, cgroups, {
-      hostname: hostname(),
-      kernelVersion,
-      bpftoolVersion,
-      demoMode: config.demoMode,
-    });
+    const snap = buildSnapshot(
+      progs,
+      net,
+      cgroups,
+      {
+        hostname: hostname(),
+        kernelVersion,
+        bpftoolVersion,
+        demoMode: config.demoMode,
+      },
+      cgroupsEffective
+    );
 
     // ── Parse maps ─────────────────────────────────────────────────────────
     if (config.demoMode) {

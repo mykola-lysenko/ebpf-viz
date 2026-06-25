@@ -260,6 +260,9 @@ run_bpftool_to_file "$TMPDIR_SNAP/net.json" "net"
 log "Running: bpftool cgroup tree..."
 run_bpftool_to_file "$TMPDIR_SNAP/cgroups.json" "cgroup tree"
 
+log "Running: bpftool cgroup tree effective..."
+run_bpftool_to_file "$TMPDIR_SNAP/cgroups-effective.json" "cgroup tree effective"
+
 log "Running: tc filter show for detailed TC chain ordering..."
 collect_tc_filters_to_file "$TMPDIR_SNAP/tc-filters.json"
 
@@ -299,6 +302,8 @@ log "Writing snapshot to: $OUTPUT_FILE"
   cat "$TMPDIR_SNAP/tc-filters.json"
   printf ',\n    "cgroups": '
   cat "$TMPDIR_SNAP/cgroups.json"
+  printf ',\n    "cgroupsEffective": '
+  cat "$TMPDIR_SNAP/cgroups-effective.json"
   printf '\n  }\n'
   printf '}\n'
 } > "$OUTPUT_FILE"

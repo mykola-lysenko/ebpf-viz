@@ -1041,6 +1041,98 @@ describe("buildProgramChains", () => {
     });
   });
 
+  it("prefers kernel-reported effective cgroup chain order when available", () => {
+    const parentProg: RawBpfProg = {
+      ...cgroupSkbProg,
+      id: 191,
+      name: "root_ingress",
+    };
+    const childProg: RawBpfProg = {
+      ...cgroupSkbProg,
+      id: 192,
+      name: "child_ingress",
+    };
+    const progs = parseProgList([parentProg, childProg]);
+    const directCgroups: RawCgroupEntry[] = [
+      {
+        cgroup: "/sys/fs/cgroup",
+        programs: [
+          {
+            id: 191,
+            attach_type: "cgroup_inet_ingress",
+            attach_flags: "multi",
+          },
+        ],
+      },
+      {
+        cgroup: "/sys/fs/cgroup/test.slice",
+        programs: [
+          {
+            id: 192,
+            attach_type: "cgroup_inet_ingress",
+            attach_flags: "multi",
+          },
+        ],
+      },
+    ];
+    const effectiveCgroups: RawCgroupEntry[] = [
+      {
+        cgroup: "/sys/fs/cgroup",
+        programs: [
+          {
+            id: 191,
+            attach_type: "cgroup_inet_ingress",
+          },
+        ],
+      },
+      {
+        cgroup: "/sys/fs/cgroup/test.slice",
+        programs: [
+          {
+            id: 192,
+            attach_type: "cgroup_inet_ingress",
+          },
+          {
+            id: 191,
+            attach_type: "cgroup_inet_ingress",
+          },
+        ],
+      },
+    ];
+
+    const chains = buildProgramChains(
+      progs,
+      [],
+      directCgroups,
+      effectiveCgroups
+    );
+    expect(chains).toHaveLength(1);
+    expect(chains[0]).toMatchObject({
+      hookId: "cgroup:/sys/fs/cgroup/test.slice:cgroup_inet_ingress",
+      chainSource: "kernel-effective",
+      programs: [
+        {
+          id: 192,
+          position: 1,
+          cgroup: {
+            attachPath: "/sys/fs/cgroup/test.slice",
+            inherited: false,
+            attachFlags: "multi",
+          },
+        },
+        {
+          id: 191,
+          position: 2,
+          cgroup: {
+            attachPath: "/sys/fs/cgroup",
+            inherited: true,
+            attachFlags: "multi",
+          },
+        },
+      ],
+    });
+  });
+
   it("does not duplicate inherited-only cgroup chains for descendants", () => {
     const rootA: RawBpfProg = {
       ...cgroupSkbProg,

@@ -257,7 +257,8 @@ export const appRouter = router({
             kernelVersion: input.kernelVersion ?? "unknown",
             bpftoolVersion: input.bpftoolVersion ?? "unknown",
             demoMode: false,
-          }
+          },
+          (input.raw.cgroupsEffective ?? []) as RawCgroupEntry[]
         );
         // Preserve the original capture timestamp if provided
         if (input.timestamp !== undefined) snap.timestamp = input.timestamp;

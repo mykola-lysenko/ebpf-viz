@@ -70,6 +70,22 @@ function cgroupPathLabel(path: string): string {
   return parts[parts.length - 1] ?? path;
 }
 
+function chainSourceLabel(source: ProgramChain["chainSource"]): string {
+  if (source === "kernel-effective") return "kernel effective";
+  if (source === "inferred") return "inferred";
+  return source ?? "unknown source";
+}
+
+function chainSourceTitle(source: ProgramChain["chainSource"]): string {
+  if (source === "kernel-effective") {
+    return "Program order comes from bpftool cgroup tree effective.";
+  }
+  if (source === "inferred") {
+    return "Program order is inferred from direct cgroup attachments and attach flags because kernel-effective data is unavailable.";
+  }
+  return "Program-chain data source.";
+}
+
 /** Dot shown on a program chip when its tag is shared across multiple cgroup nodes */
 function SharedTagDot({
   tag,
@@ -363,6 +379,19 @@ function CgroupNodeRow({
                           {isChain && (
                             <span className="text-[9px] text-muted-foreground/60 flex items-center gap-0.5">
                               effective chain of {chain.programs.length}
+                              {chain.chainSource && (
+                                <span
+                                  className={cn(
+                                    "ml-1 rounded border px-1 py-0.5 font-mono",
+                                    chain.chainSource === "kernel-effective"
+                                      ? "border-emerald-500/25 bg-emerald-500/5 text-emerald-300/80"
+                                      : "border-amber-500/25 bg-amber-500/5 text-amber-300/80"
+                                  )}
+                                  title={chainSourceTitle(chain.chainSource)}
+                                >
+                                  {chainSourceLabel(chain.chainSource)}
+                                </span>
+                              )}
                               {chain.canShortCircuit && (
                                 <span className="text-amber-400/70 flex items-center gap-0.5 ml-1">
                                   <AlertTriangle size={8} />

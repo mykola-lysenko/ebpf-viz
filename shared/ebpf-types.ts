@@ -297,6 +297,8 @@ export interface ProgramChain {
       };
     };
   }>;
+  /** Data source used to build this chain. */
+  chainSource?: "kernel-effective" | "inferred" | "tc-filter" | "bpftool-net";
   /** Whether an early program can short-circuit (drop/reject) and prevent
    *  later programs from running. True for TC, cgroup networking hooks. */
   canShortCircuit: boolean;
