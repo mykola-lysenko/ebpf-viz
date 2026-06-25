@@ -438,14 +438,9 @@ function CgroupNodeRow({
                                 </span>
                               </>
                             ) : isSideEffectOnly ? (
-                              <>
-                                <span className="rounded border border-cyan-500/25 bg-cyan-500/5 px-1 py-0.5 text-cyan-300/80">
-                                  socket side-effect hook
-                                </span>
-                                <span className="rounded border border-amber-500/25 bg-amber-500/5 px-1 py-0.5 text-amber-300/80">
-                                  packet verdict not modeled
-                                </span>
-                              </>
+                              <span className="rounded border border-cyan-500/25 bg-cyan-500/5 px-1 py-0.5 text-cyan-300/80">
+                                socket state/options hook
+                              </span>
                             ) : (
                               <span className="rounded border border-amber-500/25 bg-amber-500/5 px-1 py-0.5 text-amber-300/80">
                                 packet verdict not modeled
@@ -495,8 +490,8 @@ function CgroupNodeRow({
                                       returns: {observedReturns}
                                     </span>
                                     <span className="opacity-75">
-                                      packet verdict not modeled for this socket
-                                      hook
+                                      socket state/options hook; returns shown
+                                      raw
                                     </span>
                                   </>
                                 ) : (
@@ -643,14 +638,6 @@ function CgroupNodeRow({
                                       {formatObservedReturnConstants(
                                         analysisResult?.returnAnalysis
                                       )}
-                                    </span>
-                                  )}
-                                  {predictionStep && isSideEffectOnly && (
-                                    <span
-                                      className="rounded border border-amber-500/25 bg-amber-500/5 px-1.5 py-0.5 text-[9px] font-mono text-amber-300/80"
-                                      title={chain.packetContext?.summary}
-                                    >
-                                      packet verdict not modeled
                                     </span>
                                   )}
                                   {predictionStep &&

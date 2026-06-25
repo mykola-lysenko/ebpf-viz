@@ -440,7 +440,7 @@ function StepDetails({
               className="rounded border border-amber-500/25 bg-amber-500/5 px-1.5 py-0.5 text-[10px] font-mono text-amber-300/80"
               title={step.title}
             >
-              packet verdict not modeled
+              raw returns only
             </span>
           </>
         ) : (
@@ -607,14 +607,9 @@ export function PacketChainDetailsSheet({
               </Badge>
             )}
             {sideEffectFirst ? (
-              <>
-                <span className="rounded border border-cyan-500/25 bg-cyan-500/5 px-1.5 py-0.5 text-[10px] font-mono text-cyan-300/80">
-                  socket side-effect hook
-                </span>
-                <span className="rounded border border-amber-500/25 bg-amber-500/5 px-1.5 py-0.5 text-[10px] font-mono text-amber-300/80">
-                  packet verdict not modeled
-                </span>
-              </>
+              <span className="rounded border border-cyan-500/25 bg-cyan-500/5 px-1.5 py-0.5 text-[10px] font-mono text-cyan-300/80">
+                socket state/options hook
+              </span>
             ) : (
               prediction?.possibleOutcomes.map(outcome => (
                 <span
@@ -654,8 +649,8 @@ export function PacketChainDetailsSheet({
                           returns: {observedReturns}
                         </div>
                         <div className="mt-1 text-xs text-amber-300/85">
-                          Packet allow/drop verdicts are not modeled for this
-                          socket hook.
+                          This is not a packet forwarding verdict hook; return
+                          values are shown raw.
                         </div>
                       </>
                     ) : (
@@ -679,10 +674,12 @@ export function PacketChainDetailsSheet({
                 <div className="rounded-lg border border-border/70 bg-card/40 p-3">
                   <div className="flex items-center gap-2 text-[10px] uppercase tracking-wider text-muted-foreground">
                     <ShieldCheck className="h-3.5 w-3.5" />
-                    {sideEffectFirst ? "Verdict Model" : "Confidence"}
+                    {sideEffectFirst ? "Hook Role" : "Confidence"}
                   </div>
                   <div className="mt-1 text-sm font-semibold">
-                    {sideEffectFirst ? "not modeled" : prediction.confidence}
+                    {sideEffectFirst
+                      ? "socket state/options"
+                      : prediction.confidence}
                   </div>
                 </div>
                 <div className="rounded-lg border border-border/70 bg-card/40 p-3">
