@@ -20,6 +20,21 @@ const EMPTY_SIDE_EFFECTS: XlatedSideEffectSummary = {
   hasSocketMutations: false,
 };
 
+const SOCKET_SIDE_EFFECTS: XlatedSideEffectSummary = {
+  ...EMPTY_SIDE_EFFECTS,
+  hasSideEffects: true,
+  labels: ["writes through pointer"],
+  effects: [
+    {
+      kind: "direct-memory-write",
+      label: "writes through pointer",
+      insnIndex: 4,
+      disasm: "(7b) *(u64 *)(r1 +0) = r2",
+    },
+  ],
+  hasDirectMemoryWrites: true,
+};
+
 function progArrayMap(id: number, name: string): BpfMap {
   return {
     id,
@@ -70,6 +85,35 @@ function tcChain(): ProgramChain {
   };
 }
 
+function cgroupSkbChain(): ProgramChain {
+  return {
+    hookId: "cgroup:/sys/fs/cgroup/test:cgroup_inet_egress",
+    hookLabel: "inet_egress",
+    hookType: "cgroup",
+    attachPoint: "/sys/fs/cgroup/test",
+    attachType: "cgroup_inet_egress",
+    canShortCircuit: true,
+    packetContext: {
+      family: "cgroup_skb",
+      direction: "egress",
+      summary:
+        "cgroup_skb hooks use integer allow/drop verdicts for packet ingress or egress.",
+      semantics: {
+        pass: ["1 (allow/pass)"],
+        passValues: [1],
+        drop: ["0 (drop/deny)"],
+        dropValues: [0],
+        redirect: [],
+        other: [],
+      },
+    },
+    programs: [
+      { id: 31, position: 1, name: "skb_policy_a" },
+      { id: 32, position: 2, name: "skb_policy_b" },
+    ],
+  };
+}
+
 function cgroupConnectChain(): ProgramChain {
   return {
     hookId: "cgroup:/sys/fs/cgroup/test:cgroup_inet6_connect",
@@ -107,7 +151,7 @@ function unmodeledSockoptChain(): ProgramChain {
     hookType: "cgroup",
     attachPoint: "/sys/fs/cgroup",
     attachType: "cgroup_setsockopt",
-    canShortCircuit: true,
+    canShortCircuit: false,
     packetContext: {
       family: "cgroup_sock",
       direction: "unknown",
@@ -167,6 +211,39 @@ function returnAnalysis(
 }
 
 describe("predictPacketChain", () => {
+  it("models cgroup_skb 0/1 returns as packet drop or pass", () => {
+    const analyses = new Map([
+      [31, returnAnalysis([0, 1])],
+      [32, returnAnalysis([1])],
+    ]);
+
+    const prediction = predictPacketChain(cgroupSkbChain(), id =>
+      analyses.get(id)
+    );
+
+    expect(prediction).toMatchObject({
+      possibleOutcomes: ["drop", "pass"],
+      alwaysPass: false,
+      hasUnknownBehavior: false,
+      confidence: "high",
+      summary: "Packets may pass or drop in this chain.",
+    });
+    expect(
+      prediction?.firstTerminalPrograms.map(program => program.progId)
+    ).toEqual([31]);
+    expect(
+      prediction?.steps.map(step => [
+        step.progId,
+        step.label,
+        step.reachability,
+        step.canTerminateChain,
+      ])
+    ).toEqual([
+      [31, "can drop", "always", true],
+      [32, "all exits pass", "conditional", false],
+    ]);
+  });
+
   it("models cgroup connect chains as allow or deny operations", () => {
     const analyses = new Map([
       [11, returnAnalysis([1])],
@@ -198,7 +275,7 @@ describe("predictPacketChain", () => {
 
   it("does not infer packet outcomes for cgroup hooks without modeled return semantics", () => {
     const analyses = new Map([
-      [21, returnAnalysis([0, 1])],
+      [21, returnAnalysis([0, 1], { sideEffects: SOCKET_SIDE_EFFECTS })],
       [22, returnAnalysis([1])],
     ]);
 
@@ -210,6 +287,8 @@ describe("predictPacketChain", () => {
       possibleOutcomes: ["unknown"],
       alwaysPass: false,
       hasUnknownBehavior: true,
+      hasSideEffects: true,
+      effectSummary: "writes through pointer",
       confidence: "unknown",
       summary:
         "This cgroup socket hook affects socket state/options rather than packet forwarding.",
@@ -225,6 +304,9 @@ describe("predictPacketChain", () => {
     ).toEqual([
       [21, "unknown verdict", "always", false],
       [22, "unknown verdict", "always", false],
+    ]);
+    expect(prediction?.steps[0].sideEffectLabels).toEqual([
+      "writes through pointer",
     ]);
   });
 

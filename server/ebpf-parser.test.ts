@@ -85,6 +85,9 @@ const cgroupSockoptProg: RawBpfProg = {
   bytes_memlock: 4096,
 };
 
+const CGROUP_SOCKET_SIDE_EFFECT_SUMMARY =
+  "This cgroup socket hook affects socket state/options rather than packet forwarding. eBPF Viz reports side effects but does not model its return value as a packet allow/drop verdict.";
+
 const kprobeProg: RawBpfProg = {
   id: 3,
   type: "kprobe",
@@ -208,7 +211,6 @@ describe("parseProgList", () => {
     ]);
     expect(map.size).toBe(4);
   });
-
 });
 
 // ─── enrichWithNetAttachments ─────────────────────────────────────────────────
@@ -700,6 +702,45 @@ describe("buildNetworkInterfaces", () => {
 // ─── buildProgramChains ───────────────────────────────────────────────────────
 
 describe("buildProgramChains", () => {
+  function syntheticCgroupProgram(
+    id: number,
+    type: string,
+    name: string
+  ): RawBpfProg {
+    return {
+      id,
+      type,
+      name,
+      tag: id.toString(16).padStart(16, "0"),
+      gpl_compatible: true,
+      loaded_at: 1700001000 + id,
+      orphaned: false,
+      bytes_xlated: 96,
+      jited: true,
+      bytes_memlock: 4096,
+    };
+  }
+
+  function buildSyntheticCgroupChain(attachType: string, programType: string) {
+    const progs = parseProgList([
+      syntheticCgroupProgram(900, programType, `${attachType}_a`),
+      syntheticCgroupProgram(901, programType, `${attachType}_b`),
+    ]);
+    const cgroups: RawCgroupEntry[] = [
+      {
+        cgroup: "/sys/fs/cgroup/synthetic.slice",
+        programs: [
+          { id: 900, attach_type: attachType, attach_flags: "multi" },
+          { id: 901, attach_type: attachType, attach_flags: "multi" },
+        ],
+      },
+    ];
+
+    const chains = buildProgramChains(progs, [], cgroups);
+    expect(chains).toHaveLength(1);
+    return chains[0];
+  }
+
   it("adds TC packet context and return semantics to chain metadata", () => {
     const tcA: RawBpfProg = {
       ...xdpProg,
@@ -937,12 +978,12 @@ describe("buildProgramChains", () => {
       "clsact/ingress",
       "clsact/egress",
     ]);
-    expect(chains.map(chain => chain.programs.map(program => program.id))).toEqual(
-      [
-        [80, 81],
-        [82, 83],
-      ]
-    );
+    expect(
+      chains.map(chain => chain.programs.map(program => program.id))
+    ).toEqual([
+      [80, 81],
+      [82, 83],
+    ]);
   });
 
   it("adds cgroup_skb packet context to ingress and egress chains", () => {
@@ -1313,6 +1354,141 @@ describe("buildProgramChains", () => {
     });
   });
 
+  it.each([
+    {
+      attachType: "cgroup_inet_ingress",
+      programType: "cgroup_skb",
+      expected: {
+        canShortCircuit: true,
+        family: "cgroup_skb",
+        direction: "ingress",
+        summary:
+          "cgroup_skb hooks use integer allow/drop verdicts for packet ingress or egress.",
+        pass: ["1 (allow/pass)"],
+        drop: ["0 (drop/deny)"],
+      },
+    },
+    {
+      attachType: "cgroup_inet_egress",
+      programType: "cgroup_skb",
+      expected: {
+        canShortCircuit: true,
+        family: "cgroup_skb",
+        direction: "egress",
+        summary:
+          "cgroup_skb hooks use integer allow/drop verdicts for packet ingress or egress.",
+        pass: ["1 (allow/pass)"],
+        drop: ["0 (drop/deny)"],
+      },
+    },
+    {
+      attachType: "cgroup_inet4_connect",
+      programType: "cgroup_sock_addr",
+      expected: {
+        canShortCircuit: true,
+        family: "cgroup_sock_addr",
+        direction: "unknown",
+        summary:
+          "cgroup socket-address hooks can allow or deny socket operations before packets are sent.",
+        pass: ["1 (allow)"],
+        drop: ["0 (deny)"],
+      },
+    },
+    {
+      attachType: "cgroup_inet6_bind",
+      programType: "cgroup_sock_addr",
+      expected: {
+        canShortCircuit: true,
+        family: "cgroup_sock_addr",
+        direction: "unknown",
+        summary:
+          "cgroup socket-address hooks can allow or deny socket operations before packets are sent.",
+        pass: ["1 (allow)"],
+        drop: ["0 (deny)"],
+      },
+    },
+    {
+      attachType: "cgroup_inet6_getpeername",
+      programType: "cgroup_sock_addr",
+      expected: {
+        canShortCircuit: true,
+        family: "cgroup_sock_addr",
+        direction: "unknown",
+        summary:
+          "cgroup socket-address hooks can allow or deny socket operations before packets are sent.",
+        pass: ["1 (allow)"],
+        drop: ["0 (deny)"],
+      },
+    },
+    {
+      attachType: "cgroup_setsockopt",
+      programType: "cgroup_sockopt",
+      expected: {
+        canShortCircuit: false,
+        family: "cgroup_sock",
+        direction: "unknown",
+        summary: CGROUP_SOCKET_SIDE_EFFECT_SUMMARY,
+        pass: [],
+        drop: [],
+      },
+    },
+    {
+      attachType: "cgroup_getsockopt",
+      programType: "cgroup_sockopt",
+      expected: {
+        canShortCircuit: false,
+        family: "cgroup_sock",
+        direction: "unknown",
+        summary: CGROUP_SOCKET_SIDE_EFFECT_SUMMARY,
+        pass: [],
+        drop: [],
+      },
+    },
+    {
+      attachType: "cgroup_sock_ops",
+      programType: "sock_ops",
+      expected: {
+        canShortCircuit: false,
+        family: "cgroup_sock",
+        direction: "unknown",
+        summary: CGROUP_SOCKET_SIDE_EFFECT_SUMMARY,
+        pass: [],
+        drop: [],
+      },
+    },
+    {
+      attachType: "cgroup_inet6_post_bind",
+      programType: "cgroup_sock",
+      expected: {
+        canShortCircuit: false,
+        family: "cgroup_sock",
+        direction: "unknown",
+        summary: CGROUP_SOCKET_SIDE_EFFECT_SUMMARY,
+        pass: [],
+        drop: [],
+      },
+    },
+  ])(
+    "classifies representative cgroup hook semantics for $attachType",
+    ({ attachType, programType, expected }) => {
+      const chain = buildSyntheticCgroupChain(attachType, programType);
+
+      expect(chain).toMatchObject({
+        attachType,
+        canShortCircuit: expected.canShortCircuit,
+        packetContext: {
+          family: expected.family,
+          direction: expected.direction,
+          summary: expected.summary,
+          semantics: {
+            pass: expected.pass,
+            drop: expected.drop,
+          },
+        },
+      });
+    }
+  );
+
   it("classifies cgroup post-bind chains as cgroup_sock, not socket-address hooks", () => {
     const postBindA: RawBpfProg = {
       ...cgroupSockProg,
@@ -1349,8 +1525,7 @@ describe("buildProgramChains", () => {
       canShortCircuit: false,
       packetContext: {
         family: "cgroup_sock",
-        summary:
-          "This cgroup socket hook affects socket state/options rather than packet forwarding. eBPF Viz reports side effects but does not model its return value as a packet allow/drop verdict.",
+        summary: CGROUP_SOCKET_SIDE_EFFECT_SUMMARY,
         semantics: {
           pass: [],
           drop: [],
@@ -1387,8 +1562,7 @@ describe("buildProgramChains", () => {
       canShortCircuit: false,
       packetContext: {
         family: "cgroup_sock",
-        summary:
-          "This cgroup socket hook affects socket state/options rather than packet forwarding. eBPF Viz reports side effects but does not model its return value as a packet allow/drop verdict.",
+        summary: CGROUP_SOCKET_SIDE_EFFECT_SUMMARY,
         semantics: {
           pass: [],
           drop: [],
