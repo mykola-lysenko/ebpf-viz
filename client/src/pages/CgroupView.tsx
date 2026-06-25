@@ -9,8 +9,14 @@ import {
   ChevronDown,
   ChevronRight,
   AlertTriangle,
+  Info,
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 import { usePacketChainAnalysis } from "@/hooks/usePacketChainAnalysis";
 import {
@@ -81,12 +87,52 @@ function chainSourceLabel(source: ProgramChain["chainSource"]): string {
 
 function chainSourceTitle(source: ProgramChain["chainSource"]): string {
   if (source === "kernel-effective") {
-    return "Program order comes from bpftool cgroup tree effective.";
+    return "Kernel effective: eBPF Viz is using bpftool cgroup tree /sys/fs/cgroup effective. This is the kernel-reported execution list for this cgroup and attach type, including inherited parent programs and direct programs in the order they run.";
   }
   if (source === "inferred") {
-    return "Program order is inferred from direct cgroup attachments and attach flags because kernel-effective data is unavailable.";
+    return "Inferred: kernel-effective data is unavailable, so eBPF Viz reconstructed this chain from direct cgroup attachments and attach flags. The order is best-effort.";
   }
   return "Program-chain data source.";
+}
+
+function cgroupAttachmentTitle(
+  cgroupMeta: NonNullable<ProgramChain["programs"][number]["cgroup"]>
+): string {
+  const flags = cgroupMeta.attachFlags ? ` [${cgroupMeta.attachFlags}]` : "";
+  if (cgroupMeta.inherited) {
+    return `Inherited: this program is attached at ${cgroupMeta.attachPath}${flags}, an ancestor cgroup. It appears here because cgroup hooks apply down the hierarchy.`;
+  }
+  return `Direct: this program is attached exactly at this cgroup path${flags}; it is not inherited from a parent cgroup.`;
+}
+
+function HelpBadge({
+  children,
+  className,
+  tooltip,
+}: {
+  children: React.ReactNode;
+  className?: string;
+  tooltip: string;
+}) {
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <span
+          tabIndex={0}
+          className={cn(
+            "inline-flex cursor-help items-center gap-1 rounded border focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50",
+            className
+          )}
+        >
+          {children}
+          <Info size={8} className="opacity-65" aria-hidden="true" />
+        </span>
+      </TooltipTrigger>
+      <TooltipContent side="top" className="max-w-80 text-left leading-relaxed">
+        {tooltip}
+      </TooltipContent>
+    </Tooltip>
+  );
 }
 
 /** Dot shown on a program chip when its tag is shared across multiple cgroup nodes */
@@ -391,17 +437,17 @@ function CgroupNodeRow({
                             <span className="text-[9px] text-muted-foreground/60 flex items-center gap-0.5">
                               effective chain of {chain.programs.length}
                               {chain.chainSource && (
-                                <span
+                                <HelpBadge
                                   className={cn(
-                                    "ml-1 rounded border px-1 py-0.5 font-mono",
+                                    "ml-1 px-1 py-0.5 font-mono",
                                     chain.chainSource === "kernel-effective"
                                       ? "border-emerald-500/25 bg-emerald-500/5 text-emerald-300/80"
                                       : "border-amber-500/25 bg-amber-500/5 text-amber-300/80"
                                   )}
-                                  title={chainSourceTitle(chain.chainSource)}
+                                  tooltip={chainSourceTitle(chain.chainSource)}
                                 >
                                   {chainSourceLabel(chain.chainSource)}
-                                </span>
+                                </HelpBadge>
                               )}
                               {chain.canShortCircuit && (
                                 <span className="text-amber-400/70 flex items-center gap-0.5 ml-1">
@@ -591,19 +637,21 @@ function CgroupNodeRow({
                                   )}
                                   <ProgBadge program={p} />
                                   {cgroupMeta && (
-                                    <span
+                                    <HelpBadge
                                       className={cn(
-                                        "rounded border px-1.5 py-0.5 text-[9px] font-mono",
+                                        "px-1.5 py-0.5 text-[9px] font-mono",
                                         cgroupMeta.inherited
                                           ? "border-blue-500/25 bg-blue-500/5 text-blue-300/80"
                                           : "border-emerald-500/20 bg-emerald-500/5 text-emerald-300/70"
                                       )}
-                                      title={`${cgroupMeta.inherited ? "Inherited" : "Direct"} cgroup attachment: ${cgroupMeta.attachPath}${cgroupMeta.attachFlags ? ` [${cgroupMeta.attachFlags}]` : ""}`}
+                                      tooltip={cgroupAttachmentTitle(
+                                        cgroupMeta
+                                      )}
                                     >
                                       {cgroupMeta.inherited
                                         ? `inherited from ${cgroupPathLabel(cgroupMeta.attachPath)}`
                                         : "direct"}
-                                    </span>
+                                    </HelpBadge>
                                   )}
                                   {predictionStep && !isSideEffectOnly && (
                                     <span
