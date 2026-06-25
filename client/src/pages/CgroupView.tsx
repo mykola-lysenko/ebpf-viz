@@ -64,6 +64,12 @@ function collectTagSiblings(
   }
 }
 
+function cgroupPathLabel(path: string): string {
+  if (path === "/sys/fs/cgroup") return "/";
+  const parts = path.split("/").filter(Boolean);
+  return parts[parts.length - 1] ?? path;
+}
+
 /** Dot shown on a program chip when its tag is shared across multiple cgroup nodes */
 function SharedTagDot({
   tag,
@@ -313,7 +319,10 @@ function CgroupNodeRow({
                     const isChain = chain && chain.programs.length >= 2;
                     const displayRows =
                       isChain && chain
-                        ? buildChainProgramRows(chain, g.progs)
+                        ? buildChainProgramRows(
+                            chain,
+                            snapshot?.programs ?? g.progs
+                          )
                         : g.progs.map(program => ({
                             program,
                             chainProgram: undefined,
@@ -353,7 +362,7 @@ function CgroupNodeRow({
                           />
                           {isChain && (
                             <span className="text-[9px] text-muted-foreground/60 flex items-center gap-0.5">
-                              chain of {chain.programs.length}
+                              effective chain of {chain.programs.length}
                               {chain.canShortCircuit && (
                                 <span className="text-amber-400/70 flex items-center gap-0.5 ml-1">
                                   <AlertTriangle size={8} />
@@ -454,6 +463,7 @@ function CgroupNodeRow({
                           {displayRows.map((row, pIdx) => {
                             const p = row.program;
                             const position = row.chainProgram?.position;
+                            const cgroupMeta = row.chainProgram?.cgroup;
                             const predictionStep =
                               position != null
                                 ? predictionStepsById.get(position)
@@ -505,6 +515,21 @@ function CgroupNodeRow({
                                     </span>
                                   )}
                                   <ProgBadge program={p} />
+                                  {cgroupMeta && (
+                                    <span
+                                      className={cn(
+                                        "rounded border px-1.5 py-0.5 text-[9px] font-mono",
+                                        cgroupMeta.inherited
+                                          ? "border-blue-500/25 bg-blue-500/5 text-blue-300/80"
+                                          : "border-emerald-500/20 bg-emerald-500/5 text-emerald-300/70"
+                                      )}
+                                      title={`${cgroupMeta.inherited ? "Inherited" : "Direct"} cgroup attachment: ${cgroupMeta.attachPath}${cgroupMeta.attachFlags ? ` [${cgroupMeta.attachFlags}]` : ""}`}
+                                    >
+                                      {cgroupMeta.inherited
+                                        ? `inherited from ${cgroupPathLabel(cgroupMeta.attachPath)}`
+                                        : "direct"}
+                                    </span>
+                                  )}
                                   {predictionStep && (
                                     <span
                                       className={cn(

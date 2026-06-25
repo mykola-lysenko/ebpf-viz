@@ -278,6 +278,11 @@ export interface ProgramChain {
     position: number;
     name: string;
     attachFlags?: string;
+    cgroup?: {
+      attachPath: string;
+      inherited: boolean;
+      attachFlags?: string;
+    };
     tc?: {
       protocol?: string;
       priority?: number;

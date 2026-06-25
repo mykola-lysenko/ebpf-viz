@@ -765,6 +765,187 @@ const CGROUP_SOCK_TYPES = new Set([
   "cgroup_setsockopt",
 ]);
 
+interface CgroupChainProgramEntry {
+  id: number;
+  name: string;
+  attachFlags?: string;
+  attachPath: string;
+}
+
+function cgroupDepth(path: string): number {
+  return path
+    .replace(/^\/sys\/fs\/cgroup/, "")
+    .split("/")
+    .filter(Boolean).length;
+}
+
+function parentCgroupPath(path: string): string | undefined {
+  if (path === "/sys/fs/cgroup") return undefined;
+  const parent = path.substring(0, path.lastIndexOf("/"));
+  return parent || undefined;
+}
+
+function nearestKnownParentPath(
+  path: string,
+  knownPaths: Set<string>
+): string | undefined {
+  let parent = parentCgroupPath(path);
+  while (parent) {
+    if (knownPaths.has(parent)) return parent;
+    parent = parentCgroupPath(parent);
+  }
+  return undefined;
+}
+
+function hasCgroupAttachFlag(
+  attachFlags: string | undefined,
+  flag: "multi" | "override"
+): boolean {
+  return new RegExp(`(^|[^a-z])${flag}([^a-z]|$)`).test(
+    attachFlags?.toLowerCase() ?? ""
+  );
+}
+
+function cloneCgroupEffectiveMap(
+  source?: Map<string, CgroupChainProgramEntry[]>
+): Map<string, CgroupChainProgramEntry[]> {
+  return new Map(
+    Array.from(source?.entries() ?? []).map(([attachType, entries]) => [
+      attachType,
+      [...entries],
+    ])
+  );
+}
+
+function cgroupProgramSequenceKey(
+  entries: CgroupChainProgramEntry[] | undefined
+): string {
+  return (entries ?? [])
+    .map(
+      entry =>
+        `${entry.attachPath}:${entry.id}:${entry.attachFlags ?? ""}`
+    )
+    .join("|");
+}
+
+function directCgroupProgramsByType(
+  progs: Map<number, BpfProgram>,
+  cg: RawCgroupEntry
+): Map<string, CgroupChainProgramEntry[]> {
+  const byType = new Map<string, CgroupChainProgramEntry[]>();
+  for (const cp of cg.programs ?? []) {
+    if (!progs.has(cp.id) || !cp.attach_type) continue;
+    if (!byType.has(cp.attach_type)) byType.set(cp.attach_type, []);
+    byType.get(cp.attach_type)!.push({
+      id: cp.id,
+      name: cp.name ?? progs.get(cp.id)!.name,
+      attachFlags: cp.attach_flags,
+      attachPath: cg.cgroup,
+    });
+  }
+  return byType;
+}
+
+function mergeEffectiveCgroupPrograms(
+  inherited: CgroupChainProgramEntry[],
+  direct: CgroupChainProgramEntry[]
+): CgroupChainProgramEntry[] {
+  if (inherited.length === 0) return [...direct];
+  if (direct.length === 0) return [...inherited];
+
+  const inheritedAllowsOverride = inherited.some(entry =>
+    hasCgroupAttachFlag(entry.attachFlags, "override")
+  );
+  const inheritedAllowsMulti = inherited.some(entry =>
+    hasCgroupAttachFlag(entry.attachFlags, "multi")
+  );
+  const directUsesMulti = direct.some(entry =>
+    hasCgroupAttachFlag(entry.attachFlags, "multi")
+  );
+
+  if (inheritedAllowsOverride && !inheritedAllowsMulti && !directUsesMulti) {
+    return [...direct];
+  }
+
+  return [...inherited, ...direct];
+}
+
+function buildCgroupProgramChains(
+  progs: Map<number, BpfProgram>,
+  rawCgroups: RawCgroupEntry[]
+): ProgramChain[] {
+  const chains: ProgramChain[] = [];
+  const knownPaths = new Set(rawCgroups.map(cg => cg.cgroup));
+  const effectiveByPath = new Map<
+    string,
+    Map<string, CgroupChainProgramEntry[]>
+  >();
+  const sortedCgroups = rawCgroups
+    .map((cg, index) => ({ cg, index }))
+    .sort(
+      (a, b) =>
+        cgroupDepth(a.cg.cgroup) - cgroupDepth(b.cg.cgroup) ||
+        a.index - b.index
+    );
+
+  for (const { cg } of sortedCgroups) {
+    const parentPath = nearestKnownParentPath(cg.cgroup, knownPaths);
+    const parentEffective = effectiveByPath.get(parentPath ?? "");
+    const effective = cloneCgroupEffectiveMap(parentEffective);
+    const directByType = directCgroupProgramsByType(progs, cg);
+
+    for (const [attachType, directPrograms] of Array.from(
+      directByType.entries()
+    )) {
+      effective.set(
+        attachType,
+        mergeEffectiveCgroupPrograms(
+          effective.get(attachType) ?? [],
+          directPrograms
+        )
+      );
+    }
+
+    effectiveByPath.set(cg.cgroup, effective);
+
+    for (const [attachType, effectivePrograms] of Array.from(
+      effective.entries()
+    )) {
+      if (effectivePrograms.length < 2) continue;
+
+      const inheritedPrograms = parentEffective?.get(attachType);
+      const changedFromParent =
+        cgroupProgramSequenceKey(inheritedPrograms) !==
+        cgroupProgramSequenceKey(effectivePrograms);
+      if (!directByType.has(attachType) && !changedFromParent) continue;
+
+      const shortName = attachType.replace(/^cgroup_/, "");
+      chains.push({
+        hookId: `cgroup:${cg.cgroup}:${attachType}`,
+        hookLabel: shortName,
+        hookType: "cgroup",
+        attachPoint: cg.cgroup,
+        attachType,
+        programs: effectivePrograms.map((program, i) => ({
+          id: program.id,
+          position: i + 1,
+          name: program.name,
+          attachFlags: program.attachFlags,
+          cgroup: {
+            attachPath: program.attachPath,
+            inherited: program.attachPath !== cg.cgroup,
+            attachFlags: program.attachFlags,
+          },
+        })),
+        canShortCircuit: CGROUP_SHORT_CIRCUIT_TYPES.has(attachType),
+        packetContext: buildCgroupPacketContext(attachType),
+      });
+    }
+  }
+
+  return chains;
+}
+
 function buildTcPacketContext(direction: PacketDirection): PacketChainContext {
   return {
     family: "tc",
@@ -849,50 +1030,7 @@ export function buildProgramChains(
   rawNet: RawNetSnapshot[],
   rawCgroups: RawCgroupEntry[]
 ): ProgramChain[] {
-  const chains: ProgramChain[] = [];
-
-  // ── Cgroup chains ──────────────────────────────────────────────────────
-  for (const cg of rawCgroups) {
-    // Group programs by attach_type, preserving order
-    const byType = new Map<
-      string,
-      Array<{ id: number; name: string; attachFlags?: string }>
-    >();
-    for (const cp of cg.programs ?? []) {
-      if (!progs.has(cp.id)) continue;
-      if (!byType.has(cp.attach_type)) byType.set(cp.attach_type, []);
-      byType.get(cp.attach_type)!.push({
-        id: cp.id,
-        name: cp.name ?? progs.get(cp.id)!.name,
-        attachFlags: cp.attach_flags,
-      });
-    }
-
-    for (const [attachType, progList] of Array.from(byType.entries())) {
-      if (progList.length < 2) continue; // only chains with 2+ programs are interesting
-      const shortName = attachType.replace(/^cgroup_/, "");
-      chains.push({
-        hookId: `cgroup:${cg.cgroup}:${attachType}`,
-        hookLabel: shortName,
-        hookType: "cgroup",
-        attachPoint: cg.cgroup,
-        attachType,
-        programs: progList.map(
-          (
-            p: { id: number; name: string; attachFlags?: string },
-            i: number
-          ) => ({
-            id: p.id,
-            position: i + 1,
-            name: p.name,
-            attachFlags: p.attachFlags,
-          })
-        ),
-        canShortCircuit: CGROUP_SHORT_CIRCUIT_TYPES.has(attachType),
-        packetContext: buildCgroupPacketContext(attachType),
-      });
-    }
-  }
+  const chains: ProgramChain[] = buildCgroupProgramChains(progs, rawCgroups);
 
   // ── TC chains ──────────────────────────────────────────────────────────
   const snapshot = rawNet[0] ?? {};
