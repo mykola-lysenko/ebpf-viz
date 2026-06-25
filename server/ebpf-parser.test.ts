@@ -1020,6 +1020,43 @@ describe("buildProgramChains", () => {
     });
   });
 
+  it("marks cgroup socket-address alias chains as short-circuiting", () => {
+    const connectA: RawBpfProg = {
+      ...cgroupSockAddrProg,
+      id: 184,
+      name: "connect4_a",
+    };
+    const connectB: RawBpfProg = {
+      ...cgroupSockAddrProg,
+      id: 185,
+      name: "connect4_b",
+    };
+    const progs = parseProgList([connectA, connectB]);
+    const cgroups: RawCgroupEntry[] = [
+      {
+        cgroup: "/sys/fs/cgroup/test.slice",
+        programs: [
+          { id: 184, attach_type: "cgroup_connect4", attach_flags: "multi" },
+          { id: 185, attach_type: "cgroup_connect4", attach_flags: "multi" },
+        ],
+      },
+    ];
+
+    const chains = buildProgramChains(progs, [], cgroups);
+    expect(chains).toHaveLength(1);
+    expect(chains[0]).toMatchObject({
+      attachType: "cgroup_connect4",
+      canShortCircuit: true,
+      packetContext: {
+        family: "cgroup_sock_addr",
+        semantics: {
+          pass: ["1 (allow)"],
+          drop: ["0 (deny)"],
+        },
+      },
+    });
+  });
+
   it("classifies cgroup post-bind chains as cgroup_sock, not socket-address hooks", () => {
     const postBindA: RawBpfProg = {
       ...cgroupSockProg,
