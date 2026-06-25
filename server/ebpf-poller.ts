@@ -193,7 +193,7 @@ async function fetchLiveData(): Promise<{
     runBpftool("prog list"),
     runBpftool("net"),
     runBpftool("cgroup tree"),
-    runBpftool("cgroup tree effective"),
+    runBpftool("cgroup tree /sys/fs/cgroup effective"),
     runBpftool("map list"),
   ]);
 

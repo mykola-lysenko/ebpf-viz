@@ -92,6 +92,72 @@ function directionFromText(value: string): TcDirection | undefined {
   return undefined;
 }
 
+function TcDirectionMismatchBadge({
+  attachType,
+  programName,
+  attachDirection,
+  title,
+}: {
+  attachType: string;
+  programName: string;
+  attachDirection?: TcDirection;
+  title?: string;
+}) {
+  const resolvedAttachDirection =
+    attachDirection ?? directionFromText(attachType);
+  const nameDirection = directionFromText(programName);
+  if (
+    !resolvedAttachDirection ||
+    !nameDirection ||
+    resolvedAttachDirection === nameDirection
+  ) {
+    return null;
+  }
+
+  return (
+    <span
+      className="inline-flex items-center gap-1 rounded border border-amber-500/30 bg-amber-500/5 px-1.5 py-0.5 text-[9px] font-mono text-amber-300/85"
+      title={
+        title ??
+        `Program name contains "${nameDirection}", but the attachment reports ${resolvedAttachDirection} (${attachType}). Program names are not authoritative for packet direction.`
+      }
+    >
+      <AlertTriangle size={8} />
+      name says {nameDirection}
+    </span>
+  );
+}
+
+function TcAttachmentDirectionWarning({
+  program,
+  ifaceName,
+}: {
+  program: BpfProgram;
+  ifaceName: string;
+}) {
+  const attachment = program.attachments.find(att => {
+    if (att.kind !== "tc" && att.kind !== "tcx") return false;
+    if (att.ifname !== ifaceName) return false;
+    const attachDirection = att.direction ?? directionFromText(att.detail);
+    const nameDirection = directionFromText(program.name);
+    return (
+      attachDirection !== undefined &&
+      nameDirection !== undefined &&
+      attachDirection !== nameDirection
+    );
+  });
+
+  if (!attachment) return null;
+
+  return (
+    <TcDirectionMismatchBadge
+      attachType={attachment.detail}
+      programName={program.name}
+      attachDirection={attachment.direction}
+    />
+  );
+}
+
 function TcFilterMetadata({
   attachType,
   programName,
@@ -126,15 +192,12 @@ function TcFilterMetadata({
 
   return (
     <>
-      {directionMismatch && (
-        <span
-          className="inline-flex items-center gap-1 rounded border border-amber-500/30 bg-amber-500/5 px-1.5 py-0.5 text-[9px] font-mono text-amber-300/85"
-          title={title}
-        >
-          <AlertTriangle size={8} />
-          name says {nameDirection}
-        </span>
-      )}
+      <TcDirectionMismatchBadge
+        attachType={attachType}
+        programName={programName}
+        attachDirection={attachDirection}
+        title={directionMismatch ? title : undefined}
+      />
       {tc.priority != null && (
         <span
           className="rounded border border-violet-500/25 bg-violet-500/5 px-1.5 py-0.5 text-[9px] font-mono text-violet-300/80"
@@ -181,6 +244,7 @@ function TcFilterMetadata({
 
 function OsiLayerRow({
   layerDef,
+  ifaceName,
   programs,
   chains,
   returnAnalysisById,
@@ -188,6 +252,7 @@ function OsiLayerRow({
   progArrayTargets,
 }: {
   layerDef: (typeof OSI_LAYERS)[0];
+  ifaceName: string;
   programs: NetworkInterface["layers"]["L2"];
   chains?: ProgramChain[];
   returnAnalysisById: Map<number, ProgramReturnAnalysisResult>;
@@ -517,7 +582,16 @@ function OsiLayerRow({
               {unchained.length > 0 && (
                 <div className="flex flex-wrap gap-1.5">
                   {unchained.map(p => (
-                    <ProgBadge key={p.id} program={p} />
+                    <span
+                      key={p.id}
+                      className="inline-flex items-center gap-1.5 flex-wrap"
+                    >
+                      <ProgBadge program={p} />
+                      <TcAttachmentDirectionWarning
+                        program={p}
+                        ifaceName={ifaceName}
+                      />
+                    </span>
                   ))}
                 </div>
               )}
@@ -669,6 +743,7 @@ function InterfaceCard({
               <OsiLayerRow
                 key={layerDef.key}
                 layerDef={layerDef}
+                ifaceName={iface.name}
                 programs={iface.layers[layerDef.key]}
                 chains={layerDef.key === "L3" ? ifaceChains : undefined}
                 returnAnalysisById={returnAnalysisById}
