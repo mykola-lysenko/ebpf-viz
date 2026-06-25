@@ -762,7 +762,10 @@ function summarizeChain(
 
   if (!semantics || !hasModeledActionSemantics(semantics)) {
     const family = chain.packetContext?.family ?? chain.hookType;
-    return `Return-value semantics for this ${family} hook are not modeled yet.`;
+    return (
+      chain.packetContext?.summary ??
+      `Return-value semantics for this ${family} hook are not modeled yet.`
+    );
   }
 
   const subject =

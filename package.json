@@ -13,7 +13,8 @@
     "lint": "eslint .",
     "smoke:standalone": "bash scripts/standalone-smoke.sh",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "analyze:cgroup-archive": "tsx scripts/analyze-cgroup-archive.ts"
   },
   "dependencies": {
     "@hookform/resolvers": "^5.2.2",

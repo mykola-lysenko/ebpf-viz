@@ -1349,7 +1349,8 @@ describe("buildProgramChains", () => {
       canShortCircuit: false,
       packetContext: {
         family: "cgroup_sock",
-        summary: "Return-value semantics for this hook are not modeled yet.",
+        summary:
+          "This cgroup socket hook affects socket state/options rather than packet forwarding. eBPF Viz reports side effects but does not model its return value as a packet allow/drop verdict.",
         semantics: {
           pass: [],
           drop: [],
@@ -1386,7 +1387,8 @@ describe("buildProgramChains", () => {
       canShortCircuit: false,
       packetContext: {
         family: "cgroup_sock",
-        summary: "Return-value semantics for this hook are not modeled yet.",
+        summary:
+          "This cgroup socket hook affects socket state/options rather than packet forwarding. eBPF Viz reports side effects but does not model its return value as a packet allow/drop verdict.",
         semantics: {
           pass: [],
           drop: [],

@@ -111,7 +111,8 @@ function unmodeledSockoptChain(): ProgramChain {
     packetContext: {
       family: "cgroup_sock",
       direction: "unknown",
-      summary: "Return-value semantics for this hook are not modeled yet.",
+      summary:
+        "This cgroup socket hook affects socket state/options rather than packet forwarding.",
       semantics: {
         pass: [],
         drop: [],
@@ -211,7 +212,7 @@ describe("predictPacketChain", () => {
       hasUnknownBehavior: true,
       confidence: "unknown",
       summary:
-        "Return-value semantics for this cgroup_sock hook are not modeled yet.",
+        "This cgroup socket hook affects socket state/options rather than packet forwarding.",
       firstTerminalPrograms: [],
     });
     expect(

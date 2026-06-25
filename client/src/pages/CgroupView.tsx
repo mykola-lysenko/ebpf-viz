@@ -428,7 +428,7 @@ function CgroupNodeRow({
                               </>
                             ) : (
                               <span className="rounded border border-amber-500/25 bg-amber-500/5 px-1 py-0.5 text-amber-300/80">
-                                return semantics not modeled
+                                packet verdict not modeled
                               </span>
                             )}
                           </div>

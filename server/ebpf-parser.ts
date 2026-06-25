@@ -765,6 +765,9 @@ const CGROUP_SOCK_TYPES = new Set([
   "cgroup_setsockopt",
 ]);
 
+const CGROUP_SOCKET_SIDE_EFFECT_SUMMARY =
+  "This cgroup socket hook affects socket state/options rather than packet forwarding. eBPF Viz reports side effects but does not model its return value as a packet allow/drop verdict.";
+
 interface CgroupChainProgramEntry {
   id: number;
   name: string;
@@ -1132,7 +1135,10 @@ function buildCgroupPacketContext(attachType: string): PacketChainContext {
         ? "cgroup_sock"
         : "unknown",
     direction: "unknown",
-    summary: "Return-value semantics for this hook are not modeled yet.",
+    summary:
+      CGROUP_SOCK_TYPES.has(attachType) || attachType.includes("sock")
+        ? CGROUP_SOCKET_SIDE_EFFECT_SUMMARY
+        : "Return-value semantics for this hook are not modeled yet.",
     semantics: {
       pass: [],
       drop: [],
