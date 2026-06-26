@@ -10,6 +10,7 @@ DEVVM=""
 TARGET=""
 OUTPUT=""
 REMOTE_SCRIPT="/tmp/ebpf-viz-prod-collector-$$.sh"
+TARGET_CONTROL_PATH="/tmp/evz-tgt-$$.ssh"
 COLLECTOR_MODE="${COLLECTOR_MODE:-analysis}"
 PROFILE="${PROFILE:-network}"
 TIMEOUT_SECONDS="${TIMEOUT_SECONDS:-20}"
@@ -43,6 +44,8 @@ Collects BPF data from a target host by SSHing to a dev VM first, then SSHing
 from the dev VM to the target. The final archive is streamed back through the
 dev VM, so no manual SCP from the target host is required. Target collection
 uses non-interactive sudo by default (`sudo -n`) to avoid password prompts.
+If target SSH requires interactive authentication, one target SSH prompt may
+appear after the dev VM connection opens.
 
 Options:
   --devvm HOST               Dev VM SSH destination.
@@ -119,6 +122,11 @@ cleanup() {
     rm -rf "$TMP_EXTRACT" 2>/dev/null || true
   fi
   if [ -n "$DEVVM" ] && [ -n "$SSH_CONTROL_PATH" ] && [ -S "$SSH_CONTROL_PATH" ]; then
+    if [ -n "$TARGET" ] && [ -n "$TARGET_CONTROL_PATH" ]; then
+      ssh -o BatchMode=yes "${SSH_COMMON_ARGS[@]}" "$DEVVM" \
+        "ssh -o BatchMode=yes -o ControlPath=$(shell_quote "$TARGET_CONTROL_PATH") -O exit $(shell_quote "$TARGET") >/dev/null 2>&1 || true; rm -f $(shell_quote "$TARGET_CONTROL_PATH")" \
+        >/dev/null 2>&1 || true
+    fi
     ssh -o BatchMode=yes "${SSH_COMMON_ARGS[@]}" "$DEVVM" "rm -f $(shell_quote "$REMOTE_SCRIPT")" >/dev/null 2>&1 || true
     ssh -o BatchMode=yes "${SSH_COMMON_ARGS[@]}" -O exit "$DEVVM" >/dev/null 2>&1 || true
   fi
@@ -352,6 +360,20 @@ echo "=== Uploading collector to dev VM ==="
 scp "${SCP_COMMON_ARGS[@]}" "$COLLECTOR" "$DEVVM:$REMOTE_SCRIPT"
 
 echo ""
+echo "=== Opening target SSH connection from dev VM ==="
+echo "One target SSH auth prompt may appear here if the target requires it."
+TARGET_OPEN_COMMAND="$(
+  printf 'ssh -o ControlMaster=auto -o ControlPath=%s -o ControlPersist=10m -o LogLevel=ERROR -fN %s' \
+    "$(shell_quote "$TARGET_CONTROL_PATH")" \
+    "$(shell_quote "$TARGET")"
+)"
+SSH_TTY_ARGS=()
+if [ -t 0 ]; then
+  SSH_TTY_ARGS=(-tt)
+fi
+ssh "${SSH_COMMON_ARGS[@]}" ${SSH_TTY_ARGS[@]+"${SSH_TTY_ARGS[@]}"} "$DEVVM" "$TARGET_OPEN_COMMAND"
+
+echo ""
 echo "=== Collecting from target through dev VM ==="
 echo "Dev VM: $DEVVM"
 echo "Target: $TARGET"
@@ -378,6 +400,7 @@ TMP_OUTPUT="${OUTPUT}.tmp.$$"
 RELAY_ARGS=(
   "$REMOTE_SCRIPT"
   "$COLLECTOR_MODE"
+  "$TARGET_CONTROL_PATH"
   "$TARGET"
   "$PROFILE"
   "$TIMEOUT_SECONDS"
@@ -405,28 +428,28 @@ set -euo pipefail
 
 REMOTE_SCRIPT="$1"
 COLLECTOR_MODE="$2"
-TARGET="$3"
-PROFILE="$4"
-TIMEOUT_SECONDS="$5"
-MAX_TAIL_CALL_DEPTH="$6"
-MAX_PROGRAMS="$7"
-MAX_PROG_ARRAY_MAPS="$8"
-MAX_TC_DEVS="$9"
-BPFTOOL_VALUE="${10}"
-SUDO_VALUE="${11}"
-INCLUDE_XLATED="${12}"
-INCLUDE_TEXT="${13}"
-INCLUDE_JITED="${14}"
-DUMP_PROG_ARRAY_MAPS="${15}"
-SNAPSHOT_DUMP_MAPS="${16}"
-SNAPSHOT_MAX_MAPS="${17}"
-KEEP_REMOTE="${18}"
+TARGET_CONTROL_PATH="$3"
+TARGET="$4"
+PROFILE="$5"
+TIMEOUT_SECONDS="$6"
+MAX_TAIL_CALL_DEPTH="$7"
+MAX_PROGRAMS="$8"
+MAX_PROG_ARRAY_MAPS="$9"
+MAX_TC_DEVS="${10}"
+BPFTOOL_VALUE="${11}"
+SUDO_VALUE="${12}"
+INCLUDE_XLATED="${13}"
+INCLUDE_TEXT="${14}"
+INCLUDE_JITED="${15}"
+DUMP_PROG_ARRAY_MAPS="${16}"
+SNAPSHOT_DUMP_MAPS="${17}"
+SNAPSHOT_MAX_MAPS="${18}"
+KEEP_REMOTE="${19}"
 
 q() {
   printf "%q" "$1"
 }
 
-TARGET_CONTROL_PATH="/tmp/evz-tgt-$$.ssh"
 TARGET_SCRIPT="/tmp/ebpf-viz-prod-collector-$$.sh"
 TARGET_OUT="/tmp/ebpf-viz-prod-capture-$$"
 TARGET_ARCHIVE="/tmp/ebpf-viz-prod-capture-$$.tar.gz"
@@ -435,16 +458,19 @@ SSH_TARGET_ARGS=(
   -o ControlPath="$TARGET_CONTROL_PATH"
   -o ControlPersist=10m
   -o LogLevel=ERROR
+  -o BatchMode=yes
 )
 
 cleanup_target_mux() {
-  ssh "${SSH_TARGET_ARGS[@]}" -O exit "$TARGET" >/dev/null 2>&1 || true
+  if [ -S "$TARGET_CONTROL_PATH" ]; then
+    ssh "${SSH_TARGET_ARGS[@]}" -O exit "$TARGET" >/dev/null 2>&1 || true
+  fi
   rm -f "$TARGET_CONTROL_PATH" 2>/dev/null || true
 }
 trap cleanup_target_mux EXIT
 
-echo "Opening target SSH connection from dev VM..." >&2
-ssh "${SSH_TARGET_ARGS[@]}" -fN "$TARGET" 1>&2
+echo "Checking pre-opened target SSH connection..." >&2
+ssh "${SSH_TARGET_ARGS[@]}" -O check "$TARGET" 1>&2
 
 echo "Uploading collector to target /tmp..." >&2
 ssh "${SSH_TARGET_ARGS[@]}" "$TARGET" \
