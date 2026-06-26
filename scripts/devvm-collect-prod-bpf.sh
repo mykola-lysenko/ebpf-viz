@@ -102,8 +102,8 @@ cleanup() {
     rm -f "$TMP_OUTPUT" 2>/dev/null || true
   fi
   if [ -n "$DEVVM" ] && [ -n "$SSH_CONTROL_PATH" ] && [ -S "$SSH_CONTROL_PATH" ]; then
-    ssh "${SSH_COMMON_ARGS[@]}" "$DEVVM" "rm -f $(shell_quote "$REMOTE_SCRIPT")" >/dev/null 2>&1 || true
-    ssh "${SSH_COMMON_ARGS[@]}" -O exit "$DEVVM" >/dev/null 2>&1 || true
+    ssh -o BatchMode=yes "${SSH_COMMON_ARGS[@]}" "$DEVVM" "rm -f $(shell_quote "$REMOTE_SCRIPT")" >/dev/null 2>&1 || true
+    ssh -o BatchMode=yes "${SSH_COMMON_ARGS[@]}" -O exit "$DEVVM" >/dev/null 2>&1 || true
   fi
   if [ -n "$SSH_CONTROL_PATH" ]; then
     rm -f "$SSH_CONTROL_PATH" 2>/dev/null || true
@@ -296,22 +296,29 @@ else
 fi
 
 TMP_OUTPUT="${OUTPUT}.tmp.$$"
-if ssh "${SSH_COMMON_ARGS[@]}" "$DEVVM" bash -s -- \
-  "$REMOTE_SCRIPT" \
-  "$TARGET" \
-  "$PROFILE" \
-  "$TIMEOUT_SECONDS" \
-  "$MAX_TAIL_CALL_DEPTH" \
-  "$MAX_PROGRAMS" \
-  "$MAX_PROG_ARRAY_MAPS" \
-  "$MAX_TC_DEVS" \
-  "$BPFTOOL_VALUE" \
-  "$SUDO_VALUE" \
-  "$INCLUDE_XLATED" \
-  "$INCLUDE_TEXT" \
-  "$INCLUDE_JITED" \
-  "$DUMP_PROG_ARRAY_MAPS" \
-  "$KEEP_REMOTE" >"$TMP_OUTPUT" <<'REMOTE_RELAY'
+RELAY_ARGS=(
+  "$REMOTE_SCRIPT"
+  "$TARGET"
+  "$PROFILE"
+  "$TIMEOUT_SECONDS"
+  "$MAX_TAIL_CALL_DEPTH"
+  "$MAX_PROGRAMS"
+  "$MAX_PROG_ARRAY_MAPS"
+  "$MAX_TC_DEVS"
+  "$BPFTOOL_VALUE"
+  "$SUDO_VALUE"
+  "$INCLUDE_XLATED"
+  "$INCLUDE_TEXT"
+  "$INCLUDE_JITED"
+  "$DUMP_PROG_ARRAY_MAPS"
+  "$KEEP_REMOTE"
+)
+RELAY_COMMAND="bash -s --"
+for arg in "${RELAY_ARGS[@]}"; do
+  RELAY_COMMAND+=" $(shell_quote "$arg")"
+done
+
+if ssh "${SSH_COMMON_ARGS[@]}" "$DEVVM" "$RELAY_COMMAND" >"$TMP_OUTPUT" <<'REMOTE_RELAY'
 set -euo pipefail
 
 REMOTE_SCRIPT="$1"
