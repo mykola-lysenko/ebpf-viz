@@ -28,7 +28,7 @@ The visualizer provides seven distinct views, each designed to answer a differen
 |------|-------------|-------------|
 | **Live** | Polls `bpftool` every 5 s via Server-Sent Events | Running directly on the target Linux host |
 | **Demo** | Synthetic mock data with 26 realistic programs | Exploring the UI without a Linux host |
-| **Snapshot** | Uploaded JSON file captured by `capture-snapshot.sh` | Inspecting production data on a local machine |
+| **Snapshot** | Uploaded JSON file captured by `scripts/capture-snapshot.sh` | Inspecting production data on a local machine |
 
 ---
 
@@ -189,40 +189,39 @@ The snapshot workflow lets you capture a point-in-time view of BPF programs from
 
 ### Step 1 — Capture
 
-Copy `capture-snapshot.sh` to the production server and run it as root. The script requires only `bash` and `bpftool` — no `jq`, Python, or Node.js.
+Use the dev VM relay to run `scripts/capture-snapshot.sh` on the production server and stream the result back locally. The target-side script requires only `bash` and `bpftool` — no `jq`, Python, or Node.js.
 
 ```bash
 # Basic snapshot (programs, maps, network, cgroups)
-sudo bash capture-snapshot.sh
+scripts/devvm-collect-prod-bpf.sh <devvm> <prod-host> --snapshot
 
 # With map contents (larger file, requires bpftool map dump)
-sudo bash capture-snapshot.sh --dump-maps
+scripts/devvm-collect-prod-bpf.sh <devvm> <prod-host> --snapshot --dump-maps
 ```
 
-The script outputs two files:
+The relay writes files under `captures/` by default:
 
-- `ebpf-snapshot-<hostname>-<YYYYMMDD-HHMMSS>.json` — topology snapshot (~0.3 MB typical)
-- `ebpf-mapdumps-<hostname>-<YYYYMMDD-HHMMSS>.json` — map entry contents (size varies; only with `--dump-maps`)
+- `<target>-snapshot-<YYYYMMDD-HHMMSS>.json` — topology snapshot (~0.3 MB typical)
+- `<target>-snapshot-<YYYYMMDD-HHMMSS>-mapdumps.json` — map entry contents (size varies; only with `--dump-maps`)
 
 Map dump files preserve raw map entries when feasible; unsupported map types are
 skipped, and the UI displays up to 1000 entries per map while preserving total
 entry counts.
 
-### Step 2 — Transfer
+### Step 2 — Locate Files
 
 ```bash
-scp user@myserver:/path/to/ebpf-snapshot-myserver-20260312-151100.json ~/Downloads/
-# Optionally also transfer the map dumps file
-scp user@myserver:/path/to/ebpf-mapdumps-myserver-20260312-151100.json ~/Downloads/
+ls captures/*snapshot*.json
+# Optional map dumps are written next to the snapshot as *-mapdumps.json.
 ```
 
 ### Step 3 — Load in the UI
 
 1. Open eBPF Viz in your browser.
 2. Click **Load Snapshot** (folder icon) in the top-right toolbar.
-3. Select the `ebpf-snapshot-*.json` file.
+3. Select the `*snapshot*.json` file.
 4. The UI switches to **Snapshot mode** — a `SNAPSHOT` badge appears with the capture timestamp and hostname.
-5. Optionally, click **Load Map Dumps** to load the companion `ebpf-mapdumps-*.json` file, which enables the **Dump Entries** button on each map card.
+5. Optionally, click **Load Map Dumps** to load the companion `*-mapdumps.json` file, which enables the **Dump Entries** button on each map card.
 
 ### Snapshot File Format
 
@@ -301,7 +300,8 @@ server/
   routers.ts       <- tRPC procedures (snapshot, maps, programs, etc.)
 shared/
   ebpf-types.ts    <- Shared TypeScript types
-capture-snapshot.sh <- Production snapshot capture script
+scripts/
+  capture-snapshot.sh <- Production snapshot capture script
 build-standalone.sh <- Standalone tarball builder
 ```
 
@@ -346,4 +346,4 @@ The server must run as root or with `CAP_BPF + CAP_SYS_ADMIN`. Use `sudo ./start
 
 **"Not a valid eBPF Viz snapshot file" error**
 
-The uploaded file must have `"_ebpfVizSnapshot": true` at the top level. Use `capture-snapshot.sh` to generate the file, or export a topology from the OS Map's Download button.
+The uploaded file must have `"_ebpfVizSnapshot": true` at the top level. Use `scripts/capture-snapshot.sh` to generate the file, or export a topology from the OS Map's Download button.

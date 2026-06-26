@@ -35,6 +35,7 @@ CMD_TIMEOUT=30        # seconds per bpftool command
 MAP_DUMP_TIMEOUT=10   # seconds per map dump command
 MAP_DUMP_DELAY=0.05   # seconds between map dumps to reduce lock contention
 MAP_DUMP_DISPLAY_LIMIT=1000  # entries displayed per map after upload
+SUDO_CMD="${SUDO-sudo}"
 
 # ── Argument parsing ──────────────────────────────────────────────────────────
 while [[ $# -gt 0 ]]; do
@@ -135,12 +136,14 @@ elif command -v gtimeout &>/dev/null; then
 fi
 
 # ── Build sudo prefix ─────────────────────────────────────────────────────────
-SUDO_PREFIX=""
+SUDO_PREFIX=()
 if [[ $USE_SUDO -eq 1 ]]; then
-  if command -v sudo &>/dev/null; then
-    SUDO_PREFIX="sudo"
+  read -r -a SUDO_PREFIX <<< "$SUDO_CMD"
+  if [[ ${#SUDO_PREFIX[@]} -gt 0 ]] && command -v "${SUDO_PREFIX[0]}" &>/dev/null; then
+    :
   else
-    log "Warning: sudo not found, running without it"
+    log "Warning: ${SUDO_PREFIX[0]:-sudo} not found, running without it"
+    SUDO_PREFIX=()
   fi
 fi
 
@@ -157,8 +160,8 @@ run_bpftool_to_file() {
   if [[ -n "$TIMEOUT_CMD" ]]; then
     cmd_parts+=("$TIMEOUT_CMD" "$tout")
   fi
-  if [[ -n "$SUDO_PREFIX" ]]; then
-    cmd_parts+=("$SUDO_PREFIX")
+  if [[ ${#SUDO_PREFIX[@]} -gt 0 ]]; then
+    cmd_parts+=("${SUDO_PREFIX[@]}")
   fi
   cmd_parts+=("$BPFTOOL" -j)
   # Split args on whitespace into separate arguments
@@ -206,8 +209,8 @@ collect_tc_filters_to_file() {
       if [[ -n "$TIMEOUT_CMD" ]]; then
         cmd_parts+=("$TIMEOUT_CMD" "$CMD_TIMEOUT")
       fi
-      if [[ -n "$SUDO_PREFIX" ]]; then
-        cmd_parts+=("$SUDO_PREFIX")
+      if [[ ${#SUDO_PREFIX[@]} -gt 0 ]]; then
+        cmd_parts+=("${SUDO_PREFIX[@]}")
       fi
       cmd_parts+=(tc -s -d -j filter show dev "$dev" "$direction")
 
@@ -239,8 +242,8 @@ TIMESTAMP_MS=$(date +%s)000  # milliseconds
 CAPTURE_DATE=$(date -u +"%Y-%m-%dT%H:%M:%SZ" 2>/dev/null || date +"%Y-%m-%dT%H:%M:%SZ")
 
 BPFTOOL_VERSION_RAW=""
-if [[ -n "$SUDO_PREFIX" ]]; then
-  BPFTOOL_VERSION_RAW=$($SUDO_PREFIX "$BPFTOOL" version 2>/dev/null | head -1 || echo "unknown")
+if [[ ${#SUDO_PREFIX[@]} -gt 0 ]]; then
+  BPFTOOL_VERSION_RAW=$("${SUDO_PREFIX[@]}" "$BPFTOOL" version 2>/dev/null | head -1 || echo "unknown")
 else
   BPFTOOL_VERSION_RAW=$("$BPFTOOL" version 2>/dev/null | head -1 || echo "unknown")
 fi
@@ -366,8 +369,8 @@ if [[ $DUMP_MAPS -eq 1 ]]; then
     if [[ -n "$TIMEOUT_CMD" ]]; then
       dump_cmd_parts+=("$TIMEOUT_CMD" "$MAP_DUMP_TIMEOUT")
     fi
-    if [[ -n "$SUDO_PREFIX" ]]; then
-      dump_cmd_parts+=("$SUDO_PREFIX")
+    if [[ ${#SUDO_PREFIX[@]} -gt 0 ]]; then
+      dump_cmd_parts+=("${SUDO_PREFIX[@]}")
     fi
     dump_cmd_parts+=("$BPFTOOL" -j map dump id "$MAP_ID")
 

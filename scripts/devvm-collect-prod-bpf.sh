@@ -3,12 +3,14 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-COLLECTOR="$ROOT_DIR/scripts/collect-l3-bpf.sh"
+ANALYSIS_COLLECTOR="$ROOT_DIR/scripts/collect-l3-bpf.sh"
+SNAPSHOT_COLLECTOR="$ROOT_DIR/scripts/capture-snapshot.sh"
 
 DEVVM=""
 TARGET=""
 OUTPUT=""
 REMOTE_SCRIPT="/tmp/ebpf-viz-prod-collector-$$.sh"
+COLLECTOR_MODE="${COLLECTOR_MODE:-analysis}"
 PROFILE="${PROFILE:-network}"
 TIMEOUT_SECONDS="${TIMEOUT_SECONDS:-20}"
 MAX_TAIL_CALL_DEPTH="${MAX_TAIL_CALL_DEPTH:-4}"
@@ -22,8 +24,12 @@ INCLUDE_TEXT="${INCLUDE_TEXT:-0}"
 INCLUDE_JITED="${INCLUDE_JITED:-0}"
 DUMP_PROG_ARRAY_MAPS="${DUMP_PROG_ARRAY_MAPS:-1}"
 KEEP_REMOTE="${KEEP_REMOTE:-0}"
+SNAPSHOT_DUMP_MAPS="${SNAPSHOT_DUMP_MAPS:-0}"
+SNAPSHOT_MAX_MAPS="${SNAPSHOT_MAX_MAPS:-500}"
+MAP_OUTPUT=""
 SSH_CONTROL_PATH=""
 TMP_OUTPUT=""
+TMP_EXTRACT=""
 SSH_COMMON_ARGS=()
 SCP_COMMON_ARGS=()
 
@@ -41,7 +47,10 @@ uses non-interactive sudo by default (`sudo -n`) to avoid password prompts.
 Options:
   --devvm HOST               Dev VM SSH destination.
   --target HOST              Final target SSH destination reachable from dev VM.
-  --output PATH              Local tarball path (default: ./captures/<target>-<profile>-<ts>.tar.gz)
+  --output PATH              Local output path. Analysis mode writes .tar.gz;
+                             snapshot mode writes .json.
+  --analysis                 Collect analysis archive via collect-l3-bpf.sh (default).
+  --snapshot                 Collect UI snapshot JSON via capture-snapshot.sh.
   --profile NAME             inventory, network, cgroup, or all (default: network)
   --timeout SECONDS          Per-command timeout on target (default: 20)
   --max-depth N              Tail-call discovery depth (default: 4)
@@ -54,12 +63,17 @@ Options:
   --include-text             Include text disassembly dumps; disabled by default
   --no-xlated                Skip xlated bytecode dumps
   --no-prog-array-dumps      Skip prog-array map dumps and tail-call target expansion
+  --dump-maps                Snapshot mode only: also collect map entry dump JSON
+  --map-output PATH          Local map dump JSON path for --snapshot --dump-maps
+  --max-maps N               Snapshot mode map dump limit (default: 500)
   --keep-remote              Keep target /tmp collection files for debugging
   -h, --help                 Show this help
 
 Examples:
   scripts/devvm-collect-prod-bpf.sh --devvm devvm.example.com --target edge.example.com
   scripts/devvm-collect-prod-bpf.sh devvm.example.com edge.example.com --profile inventory
+  scripts/devvm-collect-prod-bpf.sh devvm.example.com edge.example.com --snapshot
+  scripts/devvm-collect-prod-bpf.sh devvm.example.com edge.example.com --snapshot --dump-maps
 USAGE
 }
 
@@ -101,6 +115,9 @@ cleanup() {
   if [ -n "$TMP_OUTPUT" ]; then
     rm -f "$TMP_OUTPUT" 2>/dev/null || true
   fi
+  if [ -n "$TMP_EXTRACT" ]; then
+    rm -rf "$TMP_EXTRACT" 2>/dev/null || true
+  fi
   if [ -n "$DEVVM" ] && [ -n "$SSH_CONTROL_PATH" ] && [ -S "$SSH_CONTROL_PATH" ]; then
     ssh -o BatchMode=yes "${SSH_COMMON_ARGS[@]}" "$DEVVM" "rm -f $(shell_quote "$REMOTE_SCRIPT")" >/dev/null 2>&1 || true
     ssh -o BatchMode=yes "${SSH_COMMON_ARGS[@]}" -O exit "$DEVVM" >/dev/null 2>&1 || true
@@ -127,6 +144,14 @@ while [ "$#" -gt 0 ]; do
       require_arg "$1" "${2:-}"
       OUTPUT="$2"
       shift 2
+      ;;
+    --analysis)
+      COLLECTOR_MODE="analysis"
+      shift
+      ;;
+    --snapshot)
+      COLLECTOR_MODE="snapshot"
+      shift
       ;;
     --profile)
       require_arg "$1" "${2:-}"
@@ -183,6 +208,20 @@ while [ "$#" -gt 0 ]; do
       DUMP_PROG_ARRAY_MAPS=0
       shift
       ;;
+    --dump-maps)
+      SNAPSHOT_DUMP_MAPS=1
+      shift
+      ;;
+    --map-output)
+      require_arg "$1" "${2:-}"
+      MAP_OUTPUT="$2"
+      shift 2
+      ;;
+    --max-maps)
+      require_arg "$1" "${2:-}"
+      SNAPSHOT_MAX_MAPS="$2"
+      shift 2
+      ;;
     --keep-remote)
       KEEP_REMOTE=1
       shift
@@ -227,6 +266,16 @@ if [ -z "$DEVVM" ] || [ -z "$TARGET" ]; then
   exit 2
 fi
 
+case "$COLLECTOR_MODE" in
+  analysis|snapshot)
+    ;;
+  *)
+    echo "Unsupported collector mode: $COLLECTOR_MODE" >&2
+    usage >&2
+    exit 2
+    ;;
+esac
+
 case "$PROFILE" in
   inventory|network|l3|cgroup|all)
     ;;
@@ -237,7 +286,7 @@ case "$PROFILE" in
     ;;
 esac
 
-for numeric_value in TIMEOUT_SECONDS MAX_TAIL_CALL_DEPTH MAX_PROGRAMS MAX_PROG_ARRAY_MAPS MAX_TC_DEVS; do
+for numeric_value in TIMEOUT_SECONDS MAX_TAIL_CALL_DEPTH MAX_PROGRAMS MAX_PROG_ARRAY_MAPS MAX_TC_DEVS SNAPSHOT_MAX_MAPS; do
   value="${!numeric_value}"
   if ! [[ "$value" =~ ^[0-9]+$ ]]; then
     echo "$numeric_value must be numeric, got: $value" >&2
@@ -245,13 +294,19 @@ for numeric_value in TIMEOUT_SECONDS MAX_TAIL_CALL_DEPTH MAX_PROGRAMS MAX_PROG_A
   fi
 done
 
-for bool_value in INCLUDE_XLATED INCLUDE_TEXT INCLUDE_JITED DUMP_PROG_ARRAY_MAPS KEEP_REMOTE; do
+for bool_value in INCLUDE_XLATED INCLUDE_TEXT INCLUDE_JITED DUMP_PROG_ARRAY_MAPS KEEP_REMOTE SNAPSHOT_DUMP_MAPS; do
   value="${!bool_value}"
   if [ "$value" != "0" ] && [ "$value" != "1" ]; then
     echo "$bool_value must be 0 or 1, got: $value" >&2
     exit 2
   fi
 done
+
+if [ "$COLLECTOR_MODE" = "snapshot" ]; then
+  COLLECTOR="$SNAPSHOT_COLLECTOR"
+else
+  COLLECTOR="$ANALYSIS_COLLECTOR"
+fi
 
 if [ ! -f "$COLLECTOR" ]; then
   echo "Missing collector script: $COLLECTOR" >&2
@@ -265,12 +320,26 @@ for tool in ssh scp; do
   fi
 done
 
+TS="$(date +%Y%m%d-%H%M%S)"
+SAFE_TARGET="$(safe_name "$TARGET")"
 if [ -z "$OUTPUT" ]; then
-  TS="$(date +%Y%m%d-%H%M%S)"
-  OUTPUT="$ROOT_DIR/captures/$(safe_name "$TARGET")-${PROFILE}-${TS}.tar.gz"
+  if [ "$COLLECTOR_MODE" = "snapshot" ]; then
+    OUTPUT="$ROOT_DIR/captures/${SAFE_TARGET}-snapshot-${TS}.json"
+  else
+    OUTPUT="$ROOT_DIR/captures/${SAFE_TARGET}-${PROFILE}-${TS}.tar.gz"
+  fi
+fi
+if [ "$COLLECTOR_MODE" = "snapshot" ] && [ "$SNAPSHOT_DUMP_MAPS" = "1" ] && [ -z "$MAP_OUTPUT" ]; then
+  output_dir="$(dirname "$OUTPUT")"
+  output_base="$(basename "$OUTPUT")"
+  output_stem="${output_base%.*}"
+  MAP_OUTPUT="$output_dir/${output_stem}-mapdumps.json"
 fi
 
 mkdir -p "$(dirname "$OUTPUT")"
+if [ -n "$MAP_OUTPUT" ]; then
+  mkdir -p "$(dirname "$MAP_OUTPUT")"
+fi
 setup_ssh_mux
 trap cleanup EXIT
 
@@ -286,18 +355,29 @@ echo ""
 echo "=== Collecting from target through dev VM ==="
 echo "Dev VM: $DEVVM"
 echo "Target: $TARGET"
+echo "Collector: $COLLECTOR_MODE"
 echo "Profile: $PROFILE"
 echo "Local output: $OUTPUT"
-echo "Limits: programs=$MAX_PROGRAMS prog-array-maps=$MAX_PROG_ARRAY_MAPS tc-devices=$MAX_TC_DEVS"
-if [ "$INCLUDE_JITED" = "0" ]; then
-  echo "JIT dumps: disabled"
+if [ "$COLLECTOR_MODE" = "snapshot" ]; then
+  if [ "$SNAPSHOT_DUMP_MAPS" = "1" ]; then
+    echo "Map dump output: $MAP_OUTPUT"
+    echo "Snapshot map dump limit: $SNAPSHOT_MAX_MAPS"
+  else
+    echo "Map dumps: disabled"
+  fi
 else
-  echo "JIT dumps: enabled"
+  echo "Limits: programs=$MAX_PROGRAMS prog-array-maps=$MAX_PROG_ARRAY_MAPS tc-devices=$MAX_TC_DEVS"
+  if [ "$INCLUDE_JITED" = "0" ]; then
+    echo "JIT dumps: disabled"
+  else
+    echo "JIT dumps: enabled"
+  fi
 fi
 
 TMP_OUTPUT="${OUTPUT}.tmp.$$"
 RELAY_ARGS=(
   "$REMOTE_SCRIPT"
+  "$COLLECTOR_MODE"
   "$TARGET"
   "$PROFILE"
   "$TIMEOUT_SECONDS"
@@ -311,6 +391,8 @@ RELAY_ARGS=(
   "$INCLUDE_TEXT"
   "$INCLUDE_JITED"
   "$DUMP_PROG_ARRAY_MAPS"
+  "$SNAPSHOT_DUMP_MAPS"
+  "$SNAPSHOT_MAX_MAPS"
   "$KEEP_REMOTE"
 )
 RELAY_COMMAND="bash -s --"
@@ -322,20 +404,23 @@ if ssh "${SSH_COMMON_ARGS[@]}" "$DEVVM" "$RELAY_COMMAND" >"$TMP_OUTPUT" <<'REMOT
 set -euo pipefail
 
 REMOTE_SCRIPT="$1"
-TARGET="$2"
-PROFILE="$3"
-TIMEOUT_SECONDS="$4"
-MAX_TAIL_CALL_DEPTH="$5"
-MAX_PROGRAMS="$6"
-MAX_PROG_ARRAY_MAPS="$7"
-MAX_TC_DEVS="$8"
-BPFTOOL_VALUE="$9"
-SUDO_VALUE="${10}"
-INCLUDE_XLATED="${11}"
-INCLUDE_TEXT="${12}"
-INCLUDE_JITED="${13}"
-DUMP_PROG_ARRAY_MAPS="${14}"
-KEEP_REMOTE="${15}"
+COLLECTOR_MODE="$2"
+TARGET="$3"
+PROFILE="$4"
+TIMEOUT_SECONDS="$5"
+MAX_TAIL_CALL_DEPTH="$6"
+MAX_PROGRAMS="$7"
+MAX_PROG_ARRAY_MAPS="$8"
+MAX_TC_DEVS="$9"
+BPFTOOL_VALUE="${10}"
+SUDO_VALUE="${11}"
+INCLUDE_XLATED="${12}"
+INCLUDE_TEXT="${13}"
+INCLUDE_JITED="${14}"
+DUMP_PROG_ARRAY_MAPS="${15}"
+SNAPSHOT_DUMP_MAPS="${16}"
+SNAPSHOT_MAX_MAPS="${17}"
+KEEP_REMOTE="${18}"
 
 q() {
   printf "%q" "$1"
@@ -367,6 +452,10 @@ ssh "${SSH_TARGET_ARGS[@]}" "$TARGET" \
   <"$REMOTE_SCRIPT" 1>&2
 
 echo "Running target collector and streaming archive back..." >&2
+SNAPSHOT_NO_SUDO_ARG=""
+if [ -z "$SUDO_VALUE" ]; then
+  SNAPSHOT_NO_SUDO_ARG="--no-sudo"
+fi
 TARGET_COMMAND="$(cat <<EOF
 set -uo pipefail
 cleanup() {
@@ -379,27 +468,54 @@ cleanup() {
   fi
 }
 trap cleanup EXIT
-OUT=$(q "$TARGET_OUT")
-ARCHIVE=$(q "$TARGET_ARCHIVE")
-PROFILE=$(q "$PROFILE")
-TIMEOUT_SECONDS=$(q "$TIMEOUT_SECONDS")
-MAX_TAIL_CALL_DEPTH=$(q "$MAX_TAIL_CALL_DEPTH")
-MAX_PROGRAMS=$(q "$MAX_PROGRAMS")
-MAX_PROG_ARRAY_MAPS=$(q "$MAX_PROG_ARRAY_MAPS")
-MAX_TC_DEVS=$(q "$MAX_TC_DEVS")
-BPFTOOL=$(q "$BPFTOOL_VALUE")
-SUDO=$(q "$SUDO_VALUE")
-INCLUDE_XLATED=$(q "$INCLUDE_XLATED")
-INCLUDE_TEXT=$(q "$INCLUDE_TEXT")
-INCLUDE_JITED=$(q "$INCLUDE_JITED")
-DUMP_PROG_ARRAY_MAPS=$(q "$DUMP_PROG_ARRAY_MAPS")
-RUN_NICE=1
-RUN_IONICE=1
-export OUT ARCHIVE PROFILE TIMEOUT_SECONDS MAX_TAIL_CALL_DEPTH MAX_PROGRAMS
-export MAX_PROG_ARRAY_MAPS MAX_TC_DEVS BPFTOOL SUDO INCLUDE_XLATED
-export INCLUDE_TEXT INCLUDE_JITED DUMP_PROG_ARRAY_MAPS RUN_NICE RUN_IONICE
-bash $(q "$TARGET_SCRIPT") >&2
-status=\$?
+mkdir -p $(q "$TARGET_OUT")
+if [ "$(q "$COLLECTOR_MODE")" = "snapshot" ]; then
+  SNAPSHOT_ARGS="-o $(q "$TARGET_OUT/snapshot.json")"
+  SNAPSHOT_NO_SUDO_ARG=$(q "$SNAPSHOT_NO_SUDO_ARG")
+  if [ -n "\$SNAPSHOT_NO_SUDO_ARG" ]; then
+    SNAPSHOT_ARGS="\$SNAPSHOT_ARGS \$SNAPSHOT_NO_SUDO_ARG"
+  fi
+  if [ "$(q "$SNAPSHOT_DUMP_MAPS")" = "1" ]; then
+    SNAPSHOT_ARGS="\$SNAPSHOT_ARGS --dump-maps --dump-output $(q "$TARGET_OUT/mapdumps.json") --max-maps $(q "$SNAPSHOT_MAX_MAPS")"
+  fi
+  BPFTOOL_PATH=$(q "$BPFTOOL_VALUE") SUDO=$(q "$SUDO_VALUE") bash $(q "$TARGET_SCRIPT") \$SNAPSHOT_ARGS >&2
+  status=\$?
+  if [ "\$status" -ne 0 ]; then
+    echo "Target collector failed with status \$status" >&2
+    exit "\$status"
+  fi
+  if [ ! -s $(q "$TARGET_OUT/snapshot.json") ]; then
+    echo "Target snapshot collector did not create snapshot.json" >&2
+    exit 1
+  fi
+  if [ "$(q "$SNAPSHOT_DUMP_MAPS")" = "1" ] && [ -s $(q "$TARGET_OUT/mapdumps.json") ]; then
+    tar -C $(q "$TARGET_OUT") -czf $(q "$TARGET_ARCHIVE") snapshot.json mapdumps.json
+  else
+    tar -C $(q "$TARGET_OUT") -czf $(q "$TARGET_ARCHIVE") snapshot.json
+  fi
+else
+  OUT=$(q "$TARGET_OUT")
+  ARCHIVE=$(q "$TARGET_ARCHIVE")
+  PROFILE=$(q "$PROFILE")
+  TIMEOUT_SECONDS=$(q "$TIMEOUT_SECONDS")
+  MAX_TAIL_CALL_DEPTH=$(q "$MAX_TAIL_CALL_DEPTH")
+  MAX_PROGRAMS=$(q "$MAX_PROGRAMS")
+  MAX_PROG_ARRAY_MAPS=$(q "$MAX_PROG_ARRAY_MAPS")
+  MAX_TC_DEVS=$(q "$MAX_TC_DEVS")
+  BPFTOOL=$(q "$BPFTOOL_VALUE")
+  SUDO=$(q "$SUDO_VALUE")
+  INCLUDE_XLATED=$(q "$INCLUDE_XLATED")
+  INCLUDE_TEXT=$(q "$INCLUDE_TEXT")
+  INCLUDE_JITED=$(q "$INCLUDE_JITED")
+  DUMP_PROG_ARRAY_MAPS=$(q "$DUMP_PROG_ARRAY_MAPS")
+  RUN_NICE=1
+  RUN_IONICE=1
+  export OUT ARCHIVE PROFILE TIMEOUT_SECONDS MAX_TAIL_CALL_DEPTH MAX_PROGRAMS
+  export MAX_PROG_ARRAY_MAPS MAX_TC_DEVS BPFTOOL SUDO INCLUDE_XLATED
+  export INCLUDE_TEXT INCLUDE_JITED DUMP_PROG_ARRAY_MAPS RUN_NICE RUN_IONICE
+  bash $(q "$TARGET_SCRIPT") >&2
+  status=\$?
+fi
 if [ "\$status" -ne 0 ]; then
   echo "Target collector failed with status \$status" >&2
   exit "\$status"
@@ -415,8 +531,29 @@ EOF
 ssh "${SSH_TARGET_ARGS[@]}" "$TARGET" "$TARGET_COMMAND"
 REMOTE_RELAY
 then
-  mv "$TMP_OUTPUT" "$OUTPUT"
-  TMP_OUTPUT=""
+  if [ "$COLLECTOR_MODE" = "snapshot" ]; then
+    TMP_EXTRACT="$(mktemp -d "${TMPDIR:-/tmp}/evz-snapshot.XXXXXX")"
+    tar -xzf "$TMP_OUTPUT" -C "$TMP_EXTRACT"
+    if [ ! -s "$TMP_EXTRACT/snapshot.json" ]; then
+      echo "Collection failed: streamed archive did not contain snapshot.json." >&2
+      exit 1
+    fi
+    mv "$TMP_EXTRACT/snapshot.json" "$OUTPUT"
+    if [ "$SNAPSHOT_DUMP_MAPS" = "1" ]; then
+      if [ -s "$TMP_EXTRACT/mapdumps.json" ]; then
+        mv "$TMP_EXTRACT/mapdumps.json" "$MAP_OUTPUT"
+      else
+        echo "Warning: snapshot map dumps were requested, but mapdumps.json was not produced." >&2
+      fi
+    fi
+    rm -rf "$TMP_EXTRACT"
+    TMP_EXTRACT=""
+    rm -f "$TMP_OUTPUT"
+    TMP_OUTPUT=""
+  else
+    mv "$TMP_OUTPUT" "$OUTPUT"
+    TMP_OUTPUT=""
+  fi
 else
   rm -f "$TMP_OUTPUT" 2>/dev/null || true
   TMP_OUTPUT=""
@@ -428,4 +565,7 @@ echo ""
 echo "Downloaded: $OUTPUT"
 if command -v du >/dev/null 2>&1; then
   du -h "$OUTPUT" 2>/dev/null || true
+  if [ -n "$MAP_OUTPUT" ] && [ -f "$MAP_OUTPUT" ]; then
+    du -h "$MAP_OUTPUT" 2>/dev/null || true
+  fi
 fi

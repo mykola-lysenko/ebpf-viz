@@ -2,7 +2,7 @@
 set -uo pipefail
 
 BPFTOOL="${BPFTOOL:-bpftool}"
-SUDO_CMD="${SUDO:-sudo}"
+SUDO_CMD="${SUDO-sudo}"
 PROFILE="${PROFILE:-network}"
 TIMEOUT_SECONDS="${TIMEOUT_SECONDS:-45}"
 MAX_TAIL_CALL_DEPTH="${MAX_TAIL_CALL_DEPTH:-8}"
@@ -407,23 +407,23 @@ dump_programs() {
     echo "Dumping program $id ($type $name, $relation)"
 
     run_capture "$prefix.show.json" "$prefix.show.err" \
-      "${SUDO_PREFIX[@]}" "$BPFTOOL" -jp prog show id "$id"
+      ${SUDO_PREFIX[@]+"${SUDO_PREFIX[@]}"} "$BPFTOOL" -jp prog show id "$id"
     if [ "$INCLUDE_XLATED" = "1" ]; then
       run_capture "$prefix.xlated-linum.json" "$prefix.xlated-linum.err" \
-        "${SUDO_PREFIX[@]}" "$BPFTOOL" -jp prog dump xlated id "$id" linum
+        ${SUDO_PREFIX[@]+"${SUDO_PREFIX[@]}"} "$BPFTOOL" -jp prog dump xlated id "$id" linum
       run_capture "$prefix.xlated.json" "$prefix.xlated.err" \
-        "${SUDO_PREFIX[@]}" "$BPFTOOL" -jp prog dump xlated id "$id"
+        ${SUDO_PREFIX[@]+"${SUDO_PREFIX[@]}"} "$BPFTOOL" -jp prog dump xlated id "$id"
       if [ "$INCLUDE_TEXT" = "1" ]; then
         run_capture "$prefix.xlated-linum.txt" "$prefix.xlated-linum.txt.err" \
-          "${SUDO_PREFIX[@]}" "$BPFTOOL" prog dump xlated id "$id" linum
+          ${SUDO_PREFIX[@]+"${SUDO_PREFIX[@]}"} "$BPFTOOL" prog dump xlated id "$id" linum
       fi
     fi
     if [ "$INCLUDE_JITED" = "1" ]; then
       run_capture "$prefix.jited.json" "$prefix.jited.err" \
-        "${SUDO_PREFIX[@]}" "$BPFTOOL" -jp prog dump jited id "$id"
+        ${SUDO_PREFIX[@]+"${SUDO_PREFIX[@]}"} "$BPFTOOL" -jp prog dump jited id "$id"
       if [ "$INCLUDE_TEXT" = "1" ]; then
         run_capture "$prefix.jited.txt" "$prefix.jited.txt.err" \
-          "${SUDO_PREFIX[@]}" "$BPFTOOL" prog dump jited id "$id"
+          ${SUDO_PREFIX[@]+"${SUDO_PREFIX[@]}"} "$BPFTOOL" prog dump jited id "$id"
       fi
     fi
 
@@ -448,9 +448,9 @@ dump_prog_array_maps() {
     echo "Dumping prog-array map $id ($name)"
 
     run_capture "$prefix.show.json" "$prefix.show.err" \
-      "${SUDO_PREFIX[@]}" "$BPFTOOL" -jp map show id "$id"
+      ${SUDO_PREFIX[@]+"${SUDO_PREFIX[@]}"} "$BPFTOOL" -jp map show id "$id"
     run_capture "$prefix.dump.json" "$prefix.dump.err" \
-      "${SUDO_PREFIX[@]}" "$BPFTOOL" -jp map dump id "$id"
+      ${SUDO_PREFIX[@]+"${SUDO_PREFIX[@]}"} "$BPFTOOL" -jp map dump id "$id"
 
     record_dumped "$id" "$OUT/dumped-map-ids.txt"
   done < "$OUT/prog-array-maps.tsv"
@@ -474,9 +474,9 @@ dump_tc_filters() {
       local safe
       safe="$(safe_name "$dev")"
       run_capture "$OUT/tc/${safe}.ingress.json" "$OUT/tc/${safe}.ingress.err" \
-        "${SUDO_PREFIX[@]}" tc -s -d -j filter show dev "$dev" ingress
+        ${SUDO_PREFIX[@]+"${SUDO_PREFIX[@]}"} tc -s -d -j filter show dev "$dev" ingress
       run_capture "$OUT/tc/${safe}.egress.json" "$OUT/tc/${safe}.egress.err" \
-        "${SUDO_PREFIX[@]}" tc -s -d -j filter show dev "$dev" egress
+        ${SUDO_PREFIX[@]+"${SUDO_PREFIX[@]}"} tc -s -d -j filter show dev "$dev" egress
     done
 }
 
@@ -508,19 +508,19 @@ echo "Collecting eBPF BPF program data into $OUT (profile: $PROFILE)"
 } >"$OUT/collection-config.txt"
 
 run_capture "$OUT/prog-show.json" "$OUT/prog-show.err" \
-  "${SUDO_PREFIX[@]}" "$BPFTOOL" -jp prog show
+  ${SUDO_PREFIX[@]+"${SUDO_PREFIX[@]}"} "$BPFTOOL" -jp prog show
 run_capture "$OUT/map-show.json" "$OUT/map-show.err" \
-  "${SUDO_PREFIX[@]}" "$BPFTOOL" -jp map show
+  ${SUDO_PREFIX[@]+"${SUDO_PREFIX[@]}"} "$BPFTOOL" -jp map show
 run_capture "$OUT/net-show.json" "$OUT/net-show.err" \
-  "${SUDO_PREFIX[@]}" "$BPFTOOL" -jp net show
+  ${SUDO_PREFIX[@]+"${SUDO_PREFIX[@]}"} "$BPFTOOL" -jp net show
 run_capture "$OUT/cgroup-tree.json" "$OUT/cgroup-tree.err" \
-  "${SUDO_PREFIX[@]}" "$BPFTOOL" -jp cgroup tree
+  ${SUDO_PREFIX[@]+"${SUDO_PREFIX[@]}"} "$BPFTOOL" -jp cgroup tree
 run_capture "$OUT/cgroup-tree-effective.json" "$OUT/cgroup-tree-effective.err" \
-  "${SUDO_PREFIX[@]}" "$BPFTOOL" -jp cgroup tree /sys/fs/cgroup effective
+  ${SUDO_PREFIX[@]+"${SUDO_PREFIX[@]}"} "$BPFTOOL" -jp cgroup tree /sys/fs/cgroup effective
 run_capture "$OUT/cgroup-tree.txt" "$OUT/cgroup-tree.txt.err" \
-  "${SUDO_PREFIX[@]}" "$BPFTOOL" cgroup tree
+  ${SUDO_PREFIX[@]+"${SUDO_PREFIX[@]}"} "$BPFTOOL" cgroup tree
 run_capture "$OUT/cgroup-tree-effective.txt" "$OUT/cgroup-tree-effective.txt.err" \
-  "${SUDO_PREFIX[@]}" "$BPFTOOL" cgroup tree /sys/fs/cgroup effective
+  ${SUDO_PREFIX[@]+"${SUDO_PREFIX[@]}"} "$BPFTOOL" cgroup tree /sys/fs/cgroup effective
 dump_tc_filters
 
 refresh_state init
