@@ -3,14 +3,50 @@ set -uo pipefail
 
 BPFTOOL="${BPFTOOL:-bpftool}"
 SUDO_CMD="${SUDO:-sudo}"
+PROFILE="${PROFILE:-network}"
 TIMEOUT_SECONDS="${TIMEOUT_SECONDS:-45}"
 MAX_TAIL_CALL_DEPTH="${MAX_TAIL_CALL_DEPTH:-8}"
+MAX_PROGRAMS="${MAX_PROGRAMS:-0}"
+MAX_PROG_ARRAY_MAPS="${MAX_PROG_ARRAY_MAPS:-0}"
+MAX_TC_DEVS="${MAX_TC_DEVS:-0}"
+INCLUDE_XLATED="${INCLUDE_XLATED:-1}"
+INCLUDE_TEXT="${INCLUDE_TEXT:-1}"
+INCLUDE_JITED="${INCLUDE_JITED:-1}"
+DUMP_PROG_ARRAY_MAPS="${DUMP_PROG_ARRAY_MAPS:-1}"
+RUN_NICE="${RUN_NICE:-1}"
+NICE_VALUE="${NICE_VALUE:-10}"
+RUN_IONICE="${RUN_IONICE:-1}"
 TS="$(date +%Y%m%d-%H%M%S)"
 OUT="${OUT:-/tmp/ebpf-viz-l3-capture-${TS}}"
 ARCHIVE="${ARCHIVE:-/tmp/ebpf-viz-l3-latest.tar.gz}"
 
+case "$PROFILE" in
+  inventory|network|l3|cgroup|all)
+    ;;
+  *)
+    echo "Unsupported PROFILE=$PROFILE. Use inventory, network, cgroup, or all." >&2
+    exit 2
+    ;;
+esac
+
+for numeric_value in TIMEOUT_SECONDS MAX_TAIL_CALL_DEPTH MAX_PROGRAMS MAX_PROG_ARRAY_MAPS MAX_TC_DEVS NICE_VALUE; do
+  value="${!numeric_value}"
+  if ! [[ "$value" =~ ^[0-9]+$ ]]; then
+    echo "$numeric_value must be numeric, got: $value" >&2
+    exit 2
+  fi
+done
+
+for bool_value in INCLUDE_XLATED INCLUDE_TEXT INCLUDE_JITED DUMP_PROG_ARRAY_MAPS RUN_NICE RUN_IONICE; do
+  value="${!bool_value}"
+  if [ "$value" != "0" ] && [ "$value" != "1" ]; then
+    echo "$bool_value must be 0 or 1, got: $value" >&2
+    exit 2
+  fi
+done
+
 if [ -n "$SUDO_CMD" ]; then
-  SUDO_PREFIX=("$SUDO_CMD")
+  read -r -a SUDO_PREFIX <<< "$SUDO_CMD"
 else
   SUDO_PREFIX=()
 fi
@@ -23,10 +59,18 @@ run_capture() {
   local stderr="$2"
   shift 2
 
+  local cmd=("$@")
+  if [ "$RUN_NICE" = "1" ] && command -v nice >/dev/null 2>&1; then
+    cmd=(nice -n "$NICE_VALUE" "${cmd[@]}")
+  fi
+  if [ "$RUN_IONICE" = "1" ] && command -v ionice >/dev/null 2>&1; then
+    cmd=(ionice -c3 "${cmd[@]}")
+  fi
+
   if command -v timeout >/dev/null 2>&1; then
-    timeout "$TIMEOUT_SECONDS" "$@" >"$stdout" 2>"$stderr" || true
+    timeout "$TIMEOUT_SECONDS" "${cmd[@]}" >"$stdout" 2>"$stderr" || true
   else
-    "$@" >"$stdout" 2>"$stderr" || true
+    "${cmd[@]}" >"$stdout" 2>"$stderr" || true
   fi
 }
 
@@ -50,13 +94,16 @@ record_dumped() {
 
 refresh_state() {
   local mode="$1"
-  python3 - "$OUT" "$mode" <<'PY'
+  python3 - "$OUT" "$mode" "$PROFILE" "$MAX_PROGRAMS" "$MAX_PROG_ARRAY_MAPS" <<'PY'
 import json
 import pathlib
 import sys
 
 out = pathlib.Path(sys.argv[1])
 mode = sys.argv[2]
+profile = sys.argv[3]
+max_programs = int(sys.argv[4])
+max_prog_array_maps = int(sys.argv[5])
 L3_TYPES = {"sched_cls", "sched_act", "netfilter", "flow_dissector"}
 CGROUP_TYPES = {
     "cgroup_skb",
@@ -230,7 +277,14 @@ for cg in cgroups:
         if pid is not None and attach_type in CGROUP_NETWORK_ATTACH_TYPES:
             cgroup_seed_ids.add(pid)
 previous_ids = read_ids("all-program-ids.txt")
-initial_seed_ids = seed_ids | cgroup_seed_ids
+if profile == "inventory":
+    initial_seed_ids = set()
+elif profile == "cgroup":
+    initial_seed_ids = cgroup_seed_ids
+elif profile == "all":
+    initial_seed_ids = set(prog_by_id)
+else:
+    initial_seed_ids = seed_ids | cgroup_seed_ids
 all_ids = set(previous_ids or initial_seed_ids)
 
 targets = []
@@ -255,6 +309,9 @@ for dump_path in sorted((out / "map").glob("*.dump.json")):
 if mode in {"targets", "summary"}:
     all_ids |= target_ids
 
+if max_programs > 0 and len(all_ids) > max_programs:
+    all_ids = set(sorted(all_ids)[:max_programs])
+
 prog_array_map_ids = set()
 for pid in all_ids:
     prog = prog_by_id.get(pid)
@@ -264,6 +321,9 @@ for pid in all_ids:
         map_obj = map_by_id.get(mid)
         if map_obj and map_type(map_obj) == "prog_array":
             prog_array_map_ids.add(mid)
+
+if max_prog_array_maps > 0 and len(prog_array_map_ids) > max_prog_array_maps:
+    prog_array_map_ids = set(sorted(prog_array_map_ids)[:max_prog_array_maps])
 
 def prog_row(pid, relation):
     prog = prog_by_id.get(pid, {})
@@ -318,11 +378,14 @@ changed = all_ids != previous_ids
 if mode == "summary":
     summary = [
         f"Output directory: {out}",
+        f"Profile: {profile}",
         f"L3 seed programs: {len(seed_ids)}",
         f"Cgroup networking seed programs: {len(cgroup_seed_ids)}",
         f"All collected programs: {len(all_ids)}",
         f"Prog-array maps: {len(prog_array_map_ids)}",
         f"Resolved tail-call entries: {len(targets)}",
+        f"Max programs: {max_programs or 'unbounded'}",
+        f"Max prog-array maps: {max_prog_array_maps or 'unbounded'}",
         "",
         "L3 program types: sched_cls, sched_act, netfilter, flow_dissector",
         "Cgroup attach types: inet ingress/egress, bind/connect, sendmsg/recvmsg, sockops, sockopt",
@@ -345,22 +408,34 @@ dump_programs() {
 
     run_capture "$prefix.show.json" "$prefix.show.err" \
       "${SUDO_PREFIX[@]}" "$BPFTOOL" -jp prog show id "$id"
-    run_capture "$prefix.xlated-linum.json" "$prefix.xlated-linum.err" \
-      "${SUDO_PREFIX[@]}" "$BPFTOOL" -jp prog dump xlated id "$id" linum
-    run_capture "$prefix.xlated.json" "$prefix.xlated.err" \
-      "${SUDO_PREFIX[@]}" "$BPFTOOL" -jp prog dump xlated id "$id"
-    run_capture "$prefix.xlated-linum.txt" "$prefix.xlated-linum.txt.err" \
-      "${SUDO_PREFIX[@]}" "$BPFTOOL" prog dump xlated id "$id" linum
-    run_capture "$prefix.jited.json" "$prefix.jited.err" \
-      "${SUDO_PREFIX[@]}" "$BPFTOOL" -jp prog dump jited id "$id"
-    run_capture "$prefix.jited.txt" "$prefix.jited.txt.err" \
-      "${SUDO_PREFIX[@]}" "$BPFTOOL" prog dump jited id "$id"
+    if [ "$INCLUDE_XLATED" = "1" ]; then
+      run_capture "$prefix.xlated-linum.json" "$prefix.xlated-linum.err" \
+        "${SUDO_PREFIX[@]}" "$BPFTOOL" -jp prog dump xlated id "$id" linum
+      run_capture "$prefix.xlated.json" "$prefix.xlated.err" \
+        "${SUDO_PREFIX[@]}" "$BPFTOOL" -jp prog dump xlated id "$id"
+      if [ "$INCLUDE_TEXT" = "1" ]; then
+        run_capture "$prefix.xlated-linum.txt" "$prefix.xlated-linum.txt.err" \
+          "${SUDO_PREFIX[@]}" "$BPFTOOL" prog dump xlated id "$id" linum
+      fi
+    fi
+    if [ "$INCLUDE_JITED" = "1" ]; then
+      run_capture "$prefix.jited.json" "$prefix.jited.err" \
+        "${SUDO_PREFIX[@]}" "$BPFTOOL" -jp prog dump jited id "$id"
+      if [ "$INCLUDE_TEXT" = "1" ]; then
+        run_capture "$prefix.jited.txt" "$prefix.jited.txt.err" \
+          "${SUDO_PREFIX[@]}" "$BPFTOOL" prog dump jited id "$id"
+      fi
+    fi
 
     record_dumped "$id" "$OUT/dumped-program-ids.txt"
   done < "$OUT/all-programs.tsv"
 }
 
 dump_prog_array_maps() {
+  if [ "$DUMP_PROG_ARRAY_MAPS" != "1" ]; then
+    return
+  fi
+
   while IFS=$'\t' read -r id type name; do
     [ -n "${id:-}" ] || continue
     if already_dumped "$id" "$OUT/dumped-map-ids.txt"; then
@@ -386,10 +461,16 @@ dump_tc_filters() {
     return
   fi
 
+  local count=0
   ip -json link show >"$OUT/ip-link.json" 2>"$OUT/ip-link.err" || true
   ip -o link show 2>/dev/null | awk -F': ' '{print $2}' | cut -d@ -f1 | sort -u |
     while IFS= read -r dev; do
       [ -n "$dev" ] || continue
+      count=$((count + 1))
+      if [ "$MAX_TC_DEVS" -gt 0 ] && [ "$count" -gt "$MAX_TC_DEVS" ]; then
+        printf '%s\n' "$dev" >> "$OUT/tc/skipped-devices.txt"
+        continue
+      fi
       local safe
       safe="$(safe_name "$dev")"
       run_capture "$OUT/tc/${safe}.ingress.json" "$OUT/tc/${safe}.ingress.err" \
@@ -399,7 +480,7 @@ dump_tc_filters() {
     done
 }
 
-echo "Collecting eBPF L3/cgroup networking program data into $OUT"
+echo "Collecting eBPF BPF program data into $OUT (profile: $PROFILE)"
 {
   date
   uname -srmo
@@ -407,6 +488,24 @@ echo "Collecting eBPF L3/cgroup networking program data into $OUT"
   ip -V 2>/dev/null || true
   tc -V 2>/dev/null || true
 } >"$OUT/environment.txt" 2>"$OUT/environment.err"
+
+{
+  printf 'BPFTOOL=%s\n' "$BPFTOOL"
+  printf 'SUDO=%s\n' "$SUDO_CMD"
+  printf 'PROFILE=%s\n' "$PROFILE"
+  printf 'TIMEOUT_SECONDS=%s\n' "$TIMEOUT_SECONDS"
+  printf 'MAX_TAIL_CALL_DEPTH=%s\n' "$MAX_TAIL_CALL_DEPTH"
+  printf 'MAX_PROGRAMS=%s\n' "$MAX_PROGRAMS"
+  printf 'MAX_PROG_ARRAY_MAPS=%s\n' "$MAX_PROG_ARRAY_MAPS"
+  printf 'MAX_TC_DEVS=%s\n' "$MAX_TC_DEVS"
+  printf 'INCLUDE_XLATED=%s\n' "$INCLUDE_XLATED"
+  printf 'INCLUDE_TEXT=%s\n' "$INCLUDE_TEXT"
+  printf 'INCLUDE_JITED=%s\n' "$INCLUDE_JITED"
+  printf 'DUMP_PROG_ARRAY_MAPS=%s\n' "$DUMP_PROG_ARRAY_MAPS"
+  printf 'RUN_NICE=%s\n' "$RUN_NICE"
+  printf 'NICE_VALUE=%s\n' "$NICE_VALUE"
+  printf 'RUN_IONICE=%s\n' "$RUN_IONICE"
+} >"$OUT/collection-config.txt"
 
 run_capture "$OUT/prog-show.json" "$OUT/prog-show.err" \
   "${SUDO_PREFIX[@]}" "$BPFTOOL" -jp prog show
@@ -425,19 +524,26 @@ run_capture "$OUT/cgroup-tree-effective.txt" "$OUT/cgroup-tree-effective.txt.err
 dump_tc_filters
 
 refresh_state init
-for depth in $(seq 1 "$MAX_TAIL_CALL_DEPTH"); do
-  echo "Discovery pass $depth/$MAX_TAIL_CALL_DEPTH"
-  dump_programs
-  refresh_state maps
-  dump_prog_array_maps
-  refresh_state targets
-  if [ "$(cat "$OUT/state-changed" 2>/dev/null || echo 0)" = "0" ]; then
-    break
+if [ "$PROFILE" != "inventory" ]; then
+  if [ "$MAX_TAIL_CALL_DEPTH" -gt 0 ]; then
+    for depth in $(seq 1 "$MAX_TAIL_CALL_DEPTH"); do
+      echo "Discovery pass $depth/$MAX_TAIL_CALL_DEPTH"
+      dump_programs
+      refresh_state maps
+      dump_prog_array_maps
+      refresh_state targets
+      if [ "$(cat "$OUT/state-changed" 2>/dev/null || echo 0)" = "0" ]; then
+        break
+      fi
+    done
   fi
-done
-dump_programs
+  dump_programs
+fi
 refresh_state summary
 
-tar -C "$(dirname "$OUT")" -czf "$ARCHIVE" "$(basename "$OUT")"
+if ! tar -C "$(dirname "$OUT")" -czf "$ARCHIVE" "$(basename "$OUT")"; then
+  echo "Failed to create archive: $ARCHIVE" >&2
+  exit 1
+fi
 echo "Created: $ARCHIVE"
 cat "$OUT/collection-summary.txt"
