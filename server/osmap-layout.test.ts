@@ -476,6 +476,66 @@ describe("buildOsMapLayout", () => {
     expect(badEdge).toBeUndefined();
   });
 
+  it("routes unattached TC program map edges through Other instead of TC ingress", () => {
+    const snap = makeSnapshot();
+    const tcProg = {
+      ...snap.programs[2],
+      id: 4,
+      type: "sched_cls",
+      rawType: "sched_cls",
+      name: "loaded_tc_only",
+      mapIds: [10],
+      attachments: [],
+      color: "#7c3aed",
+    } as any;
+    snap.programs = [tcProg];
+    snap.networkInterfaces[0].allPrograms = [];
+    snap.kernelZones = [
+      {
+        zone: "other",
+        label: "Other",
+        description: "Other BPF programs",
+        programs: [tcProg],
+        osiLayer: "kernel",
+      },
+    ];
+    snap.stats = {
+      total: 1,
+      byType: { sched_cls: 1 },
+      jited: 1,
+      orphaned: 0,
+    };
+
+    const maps = [
+      {
+        id: 10,
+        type: "hash",
+        rawType: "hash",
+        name: "tc_map",
+        flags: 0,
+        bytesKey: 4,
+        bytesValue: 8,
+        maxEntries: 128,
+        bytesMemlock: 4096,
+        frozen: false,
+        pinnedPaths: [],
+        btfId: null,
+        usedByProgIds: [4],
+        color: "#a78bfa",
+        category: "data",
+      },
+    ];
+
+    const layout = buildOsMapLayout(snap, maps as any, "compact", undefined, [4]);
+
+    expect(
+      layout.edges.find(e => e.source === "zone-other" && e.target === "map-10")
+    ).toBeDefined();
+    expect(
+      layout.edges.find(e => e.source === "zone-tc_ingress" && e.target === "map-10")
+    ).toBeUndefined();
+  });
+
   // ── Dynamic network band height ───────────────────────────────────────────────
 
   it("network band bottom edge is below all interface nodes (no overlap)", () => {

@@ -285,7 +285,7 @@ function getKernelZone(type: BpfProgType): KernelZone {
       return "xdp";
     case "sched_cls":
     case "sched_act":
-      return "tc_ingress"; // will be refined by attachment info
+      return "other"; // TC direction is only known from attachment info.
     case "socket_filter":
     case "sk_skb":
     case "sk_msg":
@@ -319,6 +319,24 @@ function getKernelZone(type: BpfProgType): KernelZone {
     default:
       return "other";
   }
+}
+
+function tcAttachmentZone(program: BpfProgram): KernelZone | undefined {
+  const tcAttachments = program.attachments.filter(
+    attachment => attachment.kind === "tc" || attachment.kind === "tcx"
+  );
+  const isEgress = (attachment: BpfAttachment) =>
+    attachment.direction === "egress" ||
+    attachment.detail.toLowerCase().includes("egress");
+  const isIngress = (attachment: BpfAttachment) =>
+    attachment.direction === "ingress" ||
+    attachment.detail.toLowerCase().includes("ingress");
+
+  // Preserve the previous egress preference for the rare case where one
+  // program ID is attached at both directions.
+  if (tcAttachments.some(isEgress)) return "tc_egress";
+  if (tcAttachments.some(isIngress)) return "tc_ingress";
+  return undefined;
 }
 
 // ─── Parse raw prog list ───────────────────────────────────────────────────
@@ -654,15 +672,10 @@ export function buildKernelZones(
   const zoneMap = new Map<KernelZone, BpfProgram[]>();
 
   for (const p of Array.from(progs.values())) {
-    let zone = getKernelZone(p.type);
-
-    // Refine TC direction from attachment info
-    if (zone === "tc_ingress") {
-      const hasEgress = p.attachments.some(a =>
-        a.detail.toLowerCase().includes("egress")
-      );
-      if (hasEgress) zone = "tc_egress";
-    }
+    const zone =
+      p.type === "sched_cls" || p.type === "sched_act"
+        ? (tcAttachmentZone(p) ?? "other")
+        : getKernelZone(p.type);
 
     if (!zoneMap.has(zone)) zoneMap.set(zone, []);
     zoneMap.get(zone)!.push(p);

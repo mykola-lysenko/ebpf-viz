@@ -531,7 +531,7 @@ export function buildOsMapLayout(
     proc.programIds.forEach(progId => {
       const prog = progById.get(progId);
       if (!prog) return;
-      const zoneKey = progTypeToZone(prog.rawType);
+      const zoneKey = progZoneForLayout(prog, snapshot);
 
       if (NIC_ZONE_KEYS.has(zoneKey)) {
         // Find the interface this program is attached to
@@ -664,7 +664,7 @@ export function buildOsMapLayout(
       progIds.forEach(progId => {
         const prog = progById.get(progId);
         if (!prog) return;
-        const zoneKey = progTypeToZone(prog.rawType);
+        const zoneKey = progZoneForLayout(prog, snapshot);
 
         let sourceNodeId = `zone-${zoneKey}`;
         if (NIC_ZONE_KEYS.has(zoneKey)) {
@@ -734,7 +734,7 @@ export function buildOsMapLayout(
       map.usedByProgIds.forEach(progId => {
         const prog = progById.get(progId);
         if (!prog) return;
-        const zoneKey = progTypeToZone(prog.rawType);
+        const zoneKey = progZoneForLayout(prog, snapshot);
 
         let sourceNodeId = `zone-${zoneKey}`;
         if (NIC_ZONE_KEYS.has(zoneKey)) {
@@ -808,6 +808,19 @@ function progTypeToZone(rawType: string): KernelZone {
   if (rawType === "sock_ops" || rawType === "sk_ops") return "sk_ops";
   if (rawType === "socket_filter") return "socket_filter";
   return "other";
+}
+
+function progZoneForLayout(
+  prog: BpfProgram,
+  snapshot: EbpfSnapshot
+): KernelZone {
+  const zone = progTypeToZone(prog.rawType);
+  if (zone !== "tc_ingress" && zone !== "tc_egress") return zone;
+
+  const isAttachedToInterface = snapshot.networkInterfaces.some(iface =>
+    iface.allPrograms.some(attached => attached.id === prog.id)
+  );
+  return isAttachedToInterface ? zone : "other";
 }
 
 /** Derive the LOD tier from a raw zoom value — mirrors the thresholds in OsMapNodes.tsx */

@@ -1899,6 +1899,56 @@ describe("buildKernelZones", () => {
     expect(cgroupZone!.programs).toHaveLength(1);
   });
 
+  it("does not count unattached TC programs as TC ingress", () => {
+    const progs = parseProgList([
+      { ...orphanedProg, id: 20, name: "loaded_tc_only" },
+    ]);
+    const zones = buildKernelZones(progs);
+
+    expect(zones.find(z => z.zone === "tc_ingress")).toBeUndefined();
+    expect(zones.find(z => z.zone === "tc_egress")).toBeUndefined();
+    expect(zones.find(z => z.zone === "other")?.programs.map(p => p.id)).toEqual([
+      20,
+    ]);
+  });
+
+  it("classifies attached TC programs by attachment direction", () => {
+    const progs = parseProgList([
+      { ...orphanedProg, id: 20, name: "attached_ingress" },
+      { ...orphanedProg, id: 21, name: "attached_egress" },
+    ]);
+    enrichWithNetAttachments(progs, [
+      {
+        tc: [
+          {
+            devname: "eth0",
+            ifindex: 2,
+            id: 20,
+            name: "attached_ingress",
+            kind: "clsact/ingress",
+          },
+          {
+            devname: "eth0",
+            ifindex: 2,
+            id: 21,
+            name: "attached_egress",
+            kind: "clsact/egress",
+          },
+        ],
+      },
+    ]);
+
+    const zones = buildKernelZones(progs);
+
+    expect(zones.find(z => z.zone === "tc_ingress")?.programs.map(p => p.id)).toEqual([
+      20,
+    ]);
+    expect(zones.find(z => z.zone === "tc_egress")?.programs.map(p => p.id)).toEqual([
+      21,
+    ]);
+    expect(zones.find(z => z.zone === "other")).toBeUndefined();
+  });
+
   it("only includes zones with programs", () => {
     const progs = parseProgList([xdpProg]);
     const zones = buildKernelZones(progs);
