@@ -38,22 +38,11 @@ import {
   type CfgBasicBlockSummary,
   type CfgBlockSearchResult,
 } from "@/lib/cfg-summary";
-import type { Viz } from "@viz-js/viz";
 import type {
   BpfProgram,
   XlatedInsn,
   JitedInsn,
 } from "../../../shared/ebpf-types";
-
-// ─── Viz.js lazy loader ───────────────────────────────────────────────────────
-
-let vizInstance: Viz | null = null;
-async function getViz(): Promise<Viz> {
-  if (vizInstance) return vizInstance;
-  const { instance } = await import("@viz-js/viz");
-  vizInstance = await instance();
-  return vizInstance;
-}
 
 function errorMessage(error: unknown, fallback: string): string {
   return error instanceof Error ? error.message : fallback;
@@ -350,6 +339,136 @@ function BytecodeTab({
 
 const CFG_BLOCK_ROW_HEIGHT = 82;
 const CFG_BLOCK_OVERSCAN = 6;
+const CFG_RENDER_TIMEOUT_MS = 30_000;
+
+type CfgRenderWorkerRequest = {
+  id: number;
+  dot: string;
+};
+
+type CfgRenderWorkerResponse =
+  | {
+      id: number;
+      ok: true;
+      svg: string;
+    }
+  | {
+      id: number;
+      ok: false;
+      error: string;
+    };
+
+let cfgRenderRequestId = 0;
+
+function renderCfgDotInWorker(
+  dot: string,
+  timeoutMs = CFG_RENDER_TIMEOUT_MS
+): {
+  promise: Promise<string>;
+  cancel: () => void;
+} {
+  const worker = new Worker(
+    new URL("../workers/cfg-render.worker.ts", import.meta.url),
+    { type: "module" }
+  );
+  const id = ++cfgRenderRequestId;
+  let timeoutId: number | undefined;
+  let settled = false;
+  let rejectRender: ((error: Error) => void) | null = null;
+
+  const finish = (callback: () => void) => {
+    if (settled) return;
+    settled = true;
+    if (timeoutId !== undefined) window.clearTimeout(timeoutId);
+    worker.terminate();
+    callback();
+  };
+
+  const promise = new Promise<string>((resolve, reject) => {
+    rejectRender = reject;
+    timeoutId = window.setTimeout(() => {
+      finish(() =>
+        reject(
+          new Error(
+            `CFG rendering timed out after ${Math.round(timeoutMs / 1000)}s`
+          )
+        )
+      );
+    }, timeoutMs);
+
+    worker.onmessage = (event: MessageEvent<CfgRenderWorkerResponse>) => {
+      const response = event.data;
+      if (response.id !== id) return;
+      finish(() => {
+        if (response.ok) {
+          resolve(response.svg);
+        } else {
+          reject(new Error(response.error));
+        }
+      });
+    };
+
+    worker.onerror = event => {
+      finish(() =>
+        reject(new Error(event.message || "CFG render worker failed"))
+      );
+    };
+
+    try {
+      worker.postMessage({ id, dot } satisfies CfgRenderWorkerRequest);
+    } catch (error) {
+      finish(() =>
+        reject(new Error(errorMessage(error, "Failed to start CFG renderer")))
+      );
+    }
+  });
+
+  return {
+    promise,
+    cancel: () => {
+      finish(() => rejectRender?.(new Error("CFG render cancelled")));
+    },
+  };
+}
+
+function styleCfgSvg(svgText: string): string {
+  const doc = new DOMParser().parseFromString(svgText, "image/svg+xml");
+  const parseError = doc.querySelector("parsererror");
+  if (parseError) {
+    throw new Error(
+      parseError.textContent?.trim() || "Graphviz returned invalid SVG"
+    );
+  }
+
+  const svg = doc.documentElement as unknown as SVGSVGElement;
+  if (svg.nodeName.toLowerCase() !== "svg") {
+    throw new Error("Graphviz returned an unexpected document");
+  }
+
+  // Style the Graphviz SVG for the existing dark inspector theme.
+  svg.style.maxWidth = "100%";
+  svg.style.height = "auto";
+  svg.querySelectorAll("text").forEach(el => {
+    const text = el as SVGElement;
+    text.style.fill = "#cbd5e1";
+    text.style.fontFamily = "monospace";
+    text.style.fontSize = "10px";
+  });
+  svg.querySelectorAll("polygon, path").forEach(el => {
+    const shape = el as SVGElement;
+    const fill = shape.getAttribute("fill");
+    const stroke = shape.getAttribute("stroke");
+    if (fill && fill !== "none") shape.setAttribute("fill", "#0f172a");
+    if (stroke && stroke !== "none") shape.setAttribute("stroke", "#334155");
+  });
+  svg.querySelectorAll("ellipse").forEach(el => {
+    const ellipse = el as SVGElement;
+    ellipse.setAttribute("fill", "#1e293b");
+    ellipse.setAttribute("stroke", "#3b82f6");
+  });
+
+  return svg.outerHTML;
+}
 
 function downloadTextFile(filename: string, text: string) {
   const blob = new Blob([text], { type: "text/vnd.graphviz;charset=utf-8" });
@@ -700,48 +819,28 @@ function CfgTab({
     setLoading(true);
     setError("");
 
-    getViz()
-      .then(viz => {
+    const render = renderCfgDotInWorker(dot);
+    render.promise
+      .then(svgText => {
         if (cancelled) return;
         try {
-          const svg = viz.renderSVGElement(dot);
-          // Style the SVG for dark theme
-          svg.style.maxWidth = "100%";
-          svg.style.height = "auto";
-          svg.querySelectorAll("text").forEach((t: SVGTextElement) => {
-            t.style.fill = "#cbd5e1";
-            t.style.fontFamily = "monospace";
-            t.style.fontSize = "10px";
-          });
-          svg.querySelectorAll("polygon, path").forEach((el: Element) => {
-            const e = el as SVGElement;
-            const fill = e.getAttribute("fill");
-            const stroke = e.getAttribute("stroke");
-            if (fill && fill !== "none") e.setAttribute("fill", "#0f172a");
-            if (stroke && stroke !== "none")
-              e.setAttribute("stroke", "#334155");
-          });
-          svg.querySelectorAll("ellipse").forEach((el: Element) => {
-            const e = el as SVGElement;
-            e.setAttribute("fill", "#1e293b");
-            e.setAttribute("stroke", "#3b82f6");
-          });
-          setSvgContent(svg.outerHTML);
+          setSvgContent(styleCfgSvg(svgText));
         } catch (e: unknown) {
           setError(errorMessage(e, "Failed to render CFG"));
-        } finally {
-          setLoading(false);
         }
       })
       .catch((e: unknown) => {
         if (!cancelled) {
-          setError(errorMessage(e, "Failed to load Graphviz"));
-          setLoading(false);
+          setError(errorMessage(e, "Failed to render CFG"));
         }
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
       });
 
     return () => {
       cancelled = true;
+      render.cancel();
     };
   }, [dot, shouldRenderGraph]);
 
@@ -765,7 +864,8 @@ function CfgTab({
       <div className="flex items-center justify-center h-full gap-2 text-slate-400">
         <Loader2 size={16} className="animate-spin" />
         <span className="text-sm">
-          Rendering control-flow graph{forceRender ? " anyway" : ""}…
+          Rendering control-flow graph in the background
+          {forceRender ? " anyway" : ""}…
         </span>
       </div>
     );
