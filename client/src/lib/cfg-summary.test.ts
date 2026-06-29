@@ -4,6 +4,7 @@ import {
   analyzeCfgRender,
   buildCfgBasicBlocks,
   CFG_AUTO_RENDER_LIMITS,
+  searchCfgBlocks,
 } from "./cfg-summary";
 
 function insns(lines: string[]): XlatedInsn[] {
@@ -63,5 +64,38 @@ describe("cfg-summary helpers", () => {
 
     expect(analysis.shouldAutoRender).toBe(false);
     expect(analysis.reasons.some(reason => reason.includes("DOT characters"))).toBe(true);
+  });
+
+  it("searches blocks by instruction, target, helper, terminal instruction, and source", () => {
+    const blocks = buildCfgBasicBlocks([
+      { index: 0, disasm: "(b7) r0 = 0", source: "int allowed = 0;" },
+      { index: 1, disasm: "(15) if r1 == 0x0 goto pc+2" },
+      { index: 2, disasm: "(85) call bpf_map_lookup_elem#1" },
+      { index: 3, disasm: "(05) goto pc+1" },
+      { index: 4, disasm: "(b7) r0 = 2", source: "return TC_ACT_SHOT;" },
+      { index: 5, disasm: "(95) exit" },
+    ]);
+
+    expect(searchCfgBlocks(blocks, "insn:2").map(result => result.block.start)).toEqual([
+      2,
+    ]);
+    expect(searchCfgBlocks(blocks, "2").map(result => result.block.start)).toEqual([
+      0,
+      2,
+      4,
+    ]);
+    expect(searchCfgBlocks(blocks, "4").map(result => result.block.start)).toEqual([
+      0,
+      4,
+    ]);
+    expect(searchCfgBlocks(blocks, "map_lookup").map(result => result.block.start)).toEqual([
+      2,
+    ]);
+    expect(searchCfgBlocks(blocks, "exit").map(result => result.block.start)).toEqual([
+      5,
+    ]);
+    expect(searchCfgBlocks(blocks, "TC_ACT_SHOT").map(result => result.block.start)).toEqual([
+      4,
+    ]);
   });
 });

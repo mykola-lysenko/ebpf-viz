@@ -29,6 +29,11 @@ export interface CfgRenderAnalysis {
   reasons: string[];
 }
 
+export interface CfgBlockSearchResult {
+  block: CfgBasicBlockSummary;
+  matchReason: string;
+}
+
 function parseJumpTarget(insn: XlatedInsn): number | null {
   const match = insn.disasm.match(/\bgoto pc([+-]\d+)/);
   if (!match) return null;
@@ -185,4 +190,64 @@ export function analyzeCfgRender(
     shouldAutoRender: reasons.length === 0,
     reasons,
   };
+}
+
+export function searchCfgBlocks(
+  blocks: CfgBasicBlockSummary[],
+  rawQuery: string
+): CfgBlockSearchResult[] {
+  const query = rawQuery.trim().toLowerCase();
+  if (!query) {
+    return blocks.map(block => ({ block, matchReason: "all blocks" }));
+  }
+
+  const strictInstructionMatch = query.match(/^(?:#|insn:|pc:|bb:)\s*(\d+)$/);
+  const numericMatch = strictInstructionMatch ?? query.match(/^(\d+)$/);
+  const numericQuery = numericMatch ? Number.parseInt(numericMatch[1], 10) : null;
+
+  return blocks.flatMap(block => {
+    if (numericQuery !== null) {
+      if (block.start <= numericQuery && numericQuery <= block.end) {
+        return [{ block, matchReason: `contains instruction ${numericQuery}` }];
+      }
+      if (strictInstructionMatch) return [];
+      if (block.branchTargets.includes(numericQuery)) {
+        return [{ block, matchReason: `branches to ${numericQuery}` }];
+      }
+      if (block.fallthroughTarget === numericQuery) {
+        return [{ block, matchReason: `falls through to ${numericQuery}` }];
+      }
+    }
+
+    const call = block.calls.find(value => value.toLowerCase().includes(query));
+    if (call) {
+      return [{ block, matchReason: `helper call: ${call}` }];
+    }
+
+    if (block.terminalDisasm.toLowerCase().includes(query)) {
+      return [{ block, matchReason: "terminal instruction" }];
+    }
+
+    const source = block.sourceSnippets.find(value =>
+      value.toLowerCase().includes(query)
+    );
+    if (source) {
+      return [{ block, matchReason: `source: ${source}` }];
+    }
+
+    const branchText = [
+      ...block.branchTargets.map(target => `branch ${target}`),
+      block.fallthroughTarget === undefined
+        ? undefined
+        : `fallthrough ${block.fallthroughTarget}`,
+    ]
+      .filter((value): value is string => Boolean(value))
+      .join(" ");
+
+    if (branchText.toLowerCase().includes(query)) {
+      return [{ block, matchReason: "branch target" }];
+    }
+
+    return [];
+  });
 }

@@ -28,12 +28,15 @@ import {
   Cpu,
   FileCode,
   Download,
+  Search,
 } from "lucide-react";
 import { trpc } from "@/lib/trpc";
 import {
   analyzeCfgRender,
   buildCfgBasicBlocks,
+  searchCfgBlocks,
   type CfgBasicBlockSummary,
+  type CfgBlockSearchResult,
 } from "@/lib/cfg-summary";
 import type { Viz } from "@viz-js/viz";
 import type {
@@ -378,12 +381,13 @@ function CfgMetric({
 }
 
 function CfgBlockRow({
-  block,
+  result,
   onOpenBytecode,
 }: {
-  block: CfgBasicBlockSummary;
+  result: CfgBlockSearchResult;
   onOpenBytecode: (instruction?: number) => void;
 }) {
+  const { block, matchReason } = result;
   const targets = [
     ...block.branchTargets.map(target => `branch → ${target}`),
     ...(block.fallthroughTarget !== undefined
@@ -405,6 +409,9 @@ function CfgBlockRow({
         </div>
         <div className="mt-1 text-[11px] text-slate-500">
           {block.instructionCount} insns
+        </div>
+        <div className="mt-1 truncate text-[10px] uppercase tracking-wide text-cyan-400/70">
+          {matchReason}
         </div>
       </div>
       <div className="min-w-0">
@@ -452,25 +459,25 @@ function CfgBlockRow({
 }
 
 function CfgBlockList({
-  blocks,
+  results,
   onOpenBytecode,
 }: {
-  blocks: CfgBasicBlockSummary[];
+  results: CfgBlockSearchResult[];
   onOpenBytecode: (instruction?: number) => void;
 }) {
   const [scrollTop, setScrollTop] = useState(0);
-  const totalHeight = blocks.length * CFG_BLOCK_ROW_HEIGHT;
+  const totalHeight = results.length * CFG_BLOCK_ROW_HEIGHT;
   const start = Math.max(
     0,
     Math.floor(scrollTop / CFG_BLOCK_ROW_HEIGHT) - CFG_BLOCK_OVERSCAN
   );
   const visibleCount = 20 + CFG_BLOCK_OVERSCAN * 2;
-  const visibleBlocks = blocks.slice(start, start + visibleCount);
+  const visibleResults = results.slice(start, start + visibleCount);
 
-  if (blocks.length === 0) {
+  if (results.length === 0) {
     return (
       <div className="flex h-full items-center justify-center text-sm text-slate-500">
-        No basic blocks found.
+        No matching basic blocks.
       </div>
     );
   }
@@ -486,10 +493,10 @@ function CfgBlockList({
             transform: `translateY(${start * CFG_BLOCK_ROW_HEIGHT}px)`,
           }}
         >
-          {visibleBlocks.map(block => (
+          {visibleResults.map(result => (
             <CfgBlockRow
-              key={block.id}
-              block={block}
+              key={result.block.id}
+              result={result}
               onOpenBytecode={onOpenBytecode}
             />
           ))}
@@ -518,6 +525,10 @@ function CfgLargeFallback({
   analysis: ReturnType<typeof analyzeCfgRender>;
   blocks: CfgBasicBlockSummary[];
 }) {
+  const [query, setQuery] = useState("");
+  const results = useMemo(() => searchCfgBlocks(blocks, query), [blocks, query]);
+  const firstMatch = results[0]?.block.start;
+
   return (
     <div className="flex h-full flex-col">
       <div className="border-b border-white/5 bg-slate-950/40 px-4 py-3">
@@ -591,8 +602,53 @@ function CfgLargeFallback({
           />
         </div>
       </div>
+      <div className="border-b border-white/5 px-4 py-3">
+        <div className="flex flex-wrap items-center gap-2">
+          <div className="relative min-w-[260px] flex-1">
+            <Search
+              size={13}
+              className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-500"
+            />
+            <input
+              value={query}
+              onChange={event => setQuery(event.target.value)}
+              onKeyDown={event => {
+                if (event.key === "Enter" && firstMatch !== undefined) {
+                  onOpenBytecode(firstMatch);
+                }
+              }}
+              placeholder="Search instruction #, helper, branch target, source, or disasm"
+              className="w-full rounded-lg border border-white/8 bg-slate-950/70 py-1.5 pl-8 pr-3 text-xs text-slate-200 outline-none transition-colors placeholder:text-slate-600 focus:border-cyan-500/40"
+            />
+          </div>
+          <div className="font-mono text-xs text-slate-500">
+            {results.length.toLocaleString()} / {blocks.length.toLocaleString()} blocks
+          </div>
+          {query && (
+            <button
+              onClick={() => setQuery("")}
+              className="rounded border border-white/8 px-2 py-1 text-xs text-slate-400 transition-colors hover:border-cyan-500/40 hover:text-cyan-200"
+            >
+              Clear
+            </button>
+          )}
+          <button
+            disabled={firstMatch === undefined}
+            onClick={() => onOpenBytecode(firstMatch)}
+            className="rounded border border-white/8 px-2 py-1 text-xs text-slate-400 transition-colors enabled:hover:border-cyan-500/40 enabled:hover:text-cyan-200 disabled:cursor-not-allowed disabled:opacity-40"
+          >
+            Jump to first match
+          </button>
+        </div>
+        <div className="mt-2 text-[11px] text-slate-600">
+          Examples: <span className="font-mono text-slate-500">42</span>,{" "}
+          <span className="font-mono text-slate-500">map_lookup</span>,{" "}
+          <span className="font-mono text-slate-500">branch 128</span>,{" "}
+          <span className="font-mono text-slate-500">exit</span>
+        </div>
+      </div>
       <div className="min-h-0 flex-1 p-4">
-        <CfgBlockList blocks={blocks} onOpenBytecode={onOpenBytecode} />
+        <CfgBlockList results={results} onOpenBytecode={onOpenBytecode} />
       </div>
     </div>
   );
