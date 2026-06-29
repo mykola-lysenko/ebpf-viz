@@ -35,3 +35,7 @@ Plan:
 - Use source annotations as supporting evidence when available, but treat bytecode return semantics as the source of truth.
 
 Important constraint: the first version should answer "can this program drop?" or "all observed exits pass" rather than "this specific packet will be dropped." Packet fate is data-dependent.
+
+Status: packet-chain prediction is implemented for TC, cgroup_skb, and cgroup socket-address allow/deny hooks. `pnpm audit:packet-verdicts -- <capture.tar.gz|dir>` now audits dumped xlated programs and groups remaining unknown/not-modeled verdict cases by hook family, program type, and issue reason.
+
+Next data requirement: collect a network/cgroup/all capture with xlated dumps included; inventory-only captures do not contain enough bytecode to audit verdict gaps.

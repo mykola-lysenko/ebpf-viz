@@ -13,6 +13,7 @@
     "lint": "eslint .",
     "smoke:standalone": "bash scripts/standalone-smoke.sh",
     "test": "vitest run",
+    "audit:packet-verdicts": "tsx scripts/audit-packet-verdicts.ts",
     "test:watch": "vitest",
     "analyze:cgroup-archive": "tsx scripts/analyze-cgroup-archive.ts"
   },
