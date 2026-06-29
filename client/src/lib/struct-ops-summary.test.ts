@@ -34,6 +34,9 @@ describe("struct ops summary helpers", () => {
       kindLabel: "TCP congestion control",
       algorithm: "D2TCP",
       callback: "ssthresh",
+      confidence: "high",
+      sourceLabel: "struct_ops map",
+      sourceDetail: "tcp_d2tcp_ops · BTF id 10",
     });
 
     expect(
@@ -45,6 +48,8 @@ describe("struct ops summary helpers", () => {
       kind: "tcp_congestion_ops",
       algorithm: "DCTCP",
       callback: "set_state",
+      confidence: "high",
+      sourceLabel: "struct_ops map",
     });
   });
 
@@ -59,6 +64,8 @@ describe("struct ops summary helpers", () => {
       kind: "tcp_congestion_ops",
       algorithm: "TCP",
       callback: "init",
+      confidence: "low",
+      sourceLabel: "program name",
     });
 
     expect(
@@ -71,6 +78,8 @@ describe("struct ops summary helpers", () => {
       kind: "tcp_congestion_ops",
       algorithm: "TCP Reno",
       callback: "cong_avoid",
+      confidence: "medium",
+      sourceLabel: "program name",
     });
 
     expect(
@@ -83,6 +92,8 @@ describe("struct ops summary helpers", () => {
       kind: "tcp_congestion_ops",
       algorithm: "DCTCP",
       callback: "update_alpha",
+      confidence: "medium",
+      sourceLabel: "program name",
     });
   });
 
@@ -115,17 +126,26 @@ describe("struct ops summary helpers", () => {
         algorithm: algorithm.algorithm,
         count: algorithm.count,
         examples: algorithm.examples,
+        confidence: algorithm.confidence,
+        sourceLabel: algorithm.sourceLabel,
+        btfIds: algorithm.btfIds,
       }))
     ).toEqual([
       {
         algorithm: "D2TCP",
         count: 2,
         examples: ["ssthresh", "acked"],
+        confidence: "high",
+        sourceLabel: "struct_ops map",
+        btfIds: [10],
       },
       {
         algorithm: "DCTCP",
         count: 1,
         examples: ["update alpha"],
+        confidence: "high",
+        sourceLabel: "struct_ops map",
+        btfIds: [11],
       },
     ]);
   });

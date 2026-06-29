@@ -634,6 +634,17 @@ function OsiLayerRow({
   );
 }
 
+function confidenceClasses(confidence: StructOpsAlgorithmSummary["confidence"]) {
+  switch (confidence) {
+    case "high":
+      return "border-emerald-500/25 bg-emerald-500/5 text-emerald-300/80";
+    case "medium":
+      return "border-amber-500/25 bg-amber-500/5 text-amber-300/80";
+    case "low":
+      return "border-slate-500/25 bg-slate-500/5 text-slate-300/80";
+  }
+}
+
 function TcpCongestionControlStructOpsCard({
   algorithms,
   historyMap,
@@ -707,16 +718,34 @@ function TcpCongestionControlStructOpsCard({
           >
             <div className="flex items-start justify-between gap-3 mb-2">
               <div className="min-w-0">
-                <div className="text-sm font-semibold text-foreground">
-                  {algorithm.algorithm}
+                <div className="flex flex-wrap items-center gap-1.5">
+                  <span className="text-sm font-semibold text-foreground">
+                    {algorithm.algorithm}
+                  </span>
+                  <span
+                    className={cn(
+                      "rounded border px-1.5 py-0.5 text-[9px] font-mono",
+                      confidenceClasses(algorithm.confidence)
+                    )}
+                    title={`Inference confidence: ${algorithm.confidence}. Source: ${algorithm.sourceLabel} (${algorithm.sourceDetail}).`}
+                  >
+                    {algorithm.confidence}
+                  </span>
                 </div>
                 <div
                   className="text-[10px] text-muted-foreground truncate"
-                  title={algorithm.mapNames.join(", ") || algorithm.kindDescription}
+                  title={[
+                    `source: ${algorithm.sourceLabel}`,
+                    algorithm.sourceDetail,
+                    algorithm.btfIds.length > 0
+                      ? `BTF id${algorithm.btfIds.length === 1 ? "" : "s"}: ${algorithm.btfIds.join(", ")}`
+                      : null,
+                  ]
+                    .filter(Boolean)
+                    .join("\n")}
                 >
-                  {algorithm.mapNames.length > 0
-                    ? algorithm.mapNames.join(", ")
-                    : algorithm.kindLabel}
+                  source: {algorithm.sourceLabel}
+                  {algorithm.sourceDetail ? ` · ${algorithm.sourceDetail}` : ""}
                 </div>
               </div>
               <div className="text-right shrink-0">
@@ -742,7 +771,10 @@ function TcpCongestionControlStructOpsCard({
                     history={historyMap.get(callback.program.id)}
                     compact
                   />
-                  <span className="text-[10px] text-muted-foreground truncate">
+                  <span
+                    className="text-[10px] text-muted-foreground truncate"
+                    title={`callback: ${callback.descriptor.callback}\nsource: ${callback.descriptor.sourceLabel} (${callback.descriptor.sourceDetail})\nconfidence: ${callback.descriptor.confidence}`}
+                  >
                     {callback.descriptor.callbackLabel}
                   </span>
                   <span className="ml-auto text-[10px] font-mono text-muted-foreground/70 shrink-0">

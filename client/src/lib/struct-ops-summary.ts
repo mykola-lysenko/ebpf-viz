@@ -5,6 +5,13 @@ export type StructOpsKind =
   | "sched_ext_ops"
   | "unknown";
 
+export type StructOpsInferenceConfidence = "high" | "medium" | "low";
+
+export type StructOpsInferenceSource =
+  | "struct_ops_map"
+  | "program_name"
+  | "callback_role";
+
 export interface StructOpsProgramDescriptor {
   kind: StructOpsKind;
   kindLabel: string;
@@ -14,6 +21,11 @@ export interface StructOpsProgramDescriptor {
   callback: string;
   callbackLabel: string;
   mapNames: string[];
+  btfId?: number;
+  confidence: StructOpsInferenceConfidence;
+  source: StructOpsInferenceSource;
+  sourceLabel: string;
+  sourceDetail: string;
 }
 
 export interface StructOpsCallbackSummary<
@@ -39,6 +51,10 @@ export interface StructOpsAlgorithmSummary<
   callbacks: StructOpsCallbackSummary<TProgram>[];
   examples: string[];
   mapNames: string[];
+  btfIds: number[];
+  confidence: StructOpsInferenceConfidence;
+  sourceLabel: string;
+  sourceDetail: string;
 }
 
 export interface StructOpsKindSummary<
@@ -61,6 +77,14 @@ export type StructOpsProgram = Pick<
 >;
 
 type StructOpsMap = Pick<BpfMap, "type" | "rawType" | "name" | "btfId">;
+
+interface AlgorithmInference {
+  algorithm: string;
+  confidence: StructOpsInferenceConfidence;
+  source: StructOpsInferenceSource;
+  sourceLabel: string;
+  sourceDetail: string;
+}
 
 const KNOWN_TCP_ALGORITHMS: Array<[RegExp, string]> = [
   [/\bd2tcp\b/, "D2TCP"],
@@ -150,12 +174,21 @@ function structOpsMapsByBtfId(maps: StructOpsMap[]): Map<number, string[]> {
 
 function inferTcpAlgorithm(
   programName: string,
-  mapNames: string[]
-): string | null {
-  for (const name of [...mapNames, programName]) {
+  mapNames: string[],
+  btfId?: number
+): AlgorithmInference | null {
+  for (const name of mapNames) {
     const normalized = compactName(name);
     for (const [pattern, label] of KNOWN_TCP_ALGORITHMS) {
-      if (pattern.test(normalized)) return label;
+      if (pattern.test(normalized)) {
+        return {
+          algorithm: label,
+          confidence: "high",
+          source: "struct_ops_map",
+          sourceLabel: "struct_ops map",
+          sourceDetail: `${name}${btfId != null ? ` · BTF id ${btfId}` : ""}`,
+        };
+      }
     }
   }
 
@@ -170,10 +203,39 @@ function inferTcpAlgorithm(
       .replace(/_?ops$/, "")
       .replace(/[0-9]+$/, "");
 
-    return candidate ? titleCase(candidate).toUpperCase() : "TCP";
+    return {
+      algorithm: candidate ? titleCase(candidate).toUpperCase() : "TCP",
+      confidence: "high",
+      source: "struct_ops_map",
+      sourceLabel: "struct_ops map",
+      sourceDetail: `${mapName}${btfId != null ? ` · BTF id ${btfId}` : ""}`,
+    };
   }
 
-  return normalizeName(programName).startsWith("tcp_") ? "TCP" : null;
+  const normalizedProgramName = compactName(programName);
+  for (const [pattern, label] of KNOWN_TCP_ALGORITHMS) {
+    if (pattern.test(normalizedProgramName)) {
+      return {
+        algorithm: label,
+        confidence: "medium",
+        source: "program_name",
+        sourceLabel: "program name",
+        sourceDetail: programName,
+      };
+    }
+  }
+
+  if (normalizeName(programName).startsWith("tcp_")) {
+    return {
+      algorithm: "TCP",
+      confidence: "low",
+      source: "program_name",
+      sourceLabel: "program name",
+      sourceDetail: programName,
+    };
+  }
+
+  return null;
 }
 
 function inferCallback(programName: string, algorithm: string): string {
@@ -201,7 +263,7 @@ function inferKind(
   programName: string,
   mapNames: string[],
   callback: string,
-  algorithm: string | null
+  algorithm: AlgorithmInference | null
 ): StructOpsKind {
   const names = [programName, ...mapNames].map(normalizeName);
   if (
@@ -217,16 +279,49 @@ function inferKind(
   return "unknown";
 }
 
+function callbackRoleInference(
+  callback: string
+): AlgorithmInference {
+  return {
+    algorithm: "TCP",
+    confidence: "low",
+    source: "callback_role",
+    sourceLabel: "callback role",
+    sourceDetail: callback.replace(/_/g, " "),
+  };
+}
+
+function confidenceRank(confidence: StructOpsInferenceConfidence): number {
+  switch (confidence) {
+    case "high":
+      return 3;
+    case "medium":
+      return 2;
+    case "low":
+      return 1;
+  }
+}
+
 export function describeStructOpsProgram(
   program: StructOpsProgram,
   maps: StructOpsMap[] = []
 ): StructOpsProgramDescriptor {
   const byBtfId = structOpsMapsByBtfId(maps);
   const mapNames = program.btfId == null ? [] : byBtfId.get(program.btfId) ?? [];
-  const inferredAlgorithm = inferTcpAlgorithm(program.name, mapNames);
-  const callback = inferCallback(program.name, inferredAlgorithm ?? "Unknown");
+  const inferredAlgorithm = inferTcpAlgorithm(
+    program.name,
+    mapNames,
+    program.btfId
+  );
+  const callback = inferCallback(
+    program.name,
+    inferredAlgorithm?.algorithm ?? "Unknown"
+  );
   const kind = inferKind(program.name, mapNames, callback, inferredAlgorithm);
   const meta = STRUCT_OPS_KIND_META[kind];
+  const inference =
+    inferredAlgorithm ??
+    (kind === "tcp_congestion_ops" ? callbackRoleInference(callback) : null);
 
   return {
     kind,
@@ -234,10 +329,17 @@ export function describeStructOpsProgram(
     kindDescription: meta.description,
     networkRelated: meta.networkRelated,
     algorithm:
-      kind === "tcp_congestion_ops" ? (inferredAlgorithm ?? "TCP") : "Unknown",
+      kind === "tcp_congestion_ops"
+        ? (inference?.algorithm ?? "TCP")
+        : "Unknown",
     callback,
     callbackLabel: callback.replace(/_/g, " "),
     mapNames,
+    btfId: program.btfId,
+    confidence: inference?.confidence ?? "low",
+    source: inference?.source ?? "program_name",
+    sourceLabel: inference?.sourceLabel ?? "program name",
+    sourceDetail: inference?.sourceDetail ?? program.name,
   };
 }
 
@@ -283,6 +385,10 @@ export function buildStructOpsKindSummaries<
         callbacks: [],
         examples: [],
         mapNames: [],
+        btfIds: [],
+        confidence: descriptor.confidence,
+        sourceLabel: descriptor.sourceLabel,
+        sourceDetail: descriptor.sourceDetail,
       } satisfies StructOpsAlgorithmSummary<TProgram>);
     const callsPerSec = callsPerSecById.get(program.id) ?? 0;
 
@@ -303,6 +409,20 @@ export function buildStructOpsKindSummaries<
     }
     for (const mapName of descriptor.mapNames) {
       if (!algorithm.mapNames.includes(mapName)) algorithm.mapNames.push(mapName);
+    }
+    if (
+      descriptor.btfId != null &&
+      !algorithm.btfIds.includes(descriptor.btfId)
+    ) {
+      algorithm.btfIds.push(descriptor.btfId);
+    }
+    if (
+      confidenceRank(descriptor.confidence) >
+      confidenceRank(algorithm.confidence)
+    ) {
+      algorithm.confidence = descriptor.confidence;
+      algorithm.sourceLabel = descriptor.sourceLabel;
+      algorithm.sourceDetail = descriptor.sourceDetail;
     }
     algorithm.callbacks.push({ program, descriptor, callsPerSec });
 
