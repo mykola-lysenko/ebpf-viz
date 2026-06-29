@@ -1130,12 +1130,6 @@ export default function NetworkView() {
         </div>
       </div>
 
-      <TcpCongestionControlStructOpsCard
-        algorithms={tcpCongestionAlgorithms}
-        historyMap={historyMap}
-        statsEnabled={statsEnabled}
-      />
-
       {/* ── NIC section ─────────────────────────────────────────────────── */}
       <InterfaceSection
         title="Network Interfaces"
@@ -1182,6 +1176,12 @@ export default function NetworkView() {
           }
         />
       )}
+
+      <TcpCongestionControlStructOpsCard
+        algorithms={tcpCongestionAlgorithms}
+        historyMap={historyMap}
+        statsEnabled={statsEnabled}
+      />
 
       {/* Fallback when everything is empty and not searching */}
       {interfaces.length === 0 &&
