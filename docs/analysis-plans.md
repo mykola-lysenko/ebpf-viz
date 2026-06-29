@@ -1,6 +1,6 @@
 # Analysis Plans
 
-Last updated: 2026-06-19
+Last updated: 2026-06-29
 
 ## Large Control Flow View
 
@@ -15,7 +15,9 @@ Plan:
 - Add search and navigation for instruction number, source location, helper calls, and branch targets.
 - Cache server-computed CFG summaries per program dump so large program navigation does not recompute on every tab switch.
 
-Recommended first implementation: add the render gate plus a virtualized basic-block fallback.
+Status: the first implementation is done. The UI now gates automatic Graphviz rendering for large CFGs and shows a virtualized basic-block fallback with DOT export and explicit "render anyway" controls.
+
+Remaining work: move full Graphviz rendering to a Web Worker, add search/navigation inside the fallback, and cache server-computed CFG summaries per program dump.
 
 ## Packet Chain Awareness
 

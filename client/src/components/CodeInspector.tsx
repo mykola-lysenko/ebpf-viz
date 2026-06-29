@@ -27,8 +27,14 @@ import {
   GitBranch,
   Cpu,
   FileCode,
+  Download,
 } from "lucide-react";
 import { trpc } from "@/lib/trpc";
+import {
+  analyzeCfgRender,
+  buildCfgBasicBlocks,
+  type CfgBasicBlockSummary,
+} from "@/lib/cfg-summary";
 import type { Viz } from "@viz-js/viz";
 import type {
   BpfProgram,
@@ -219,7 +225,13 @@ function buildJumpMap(insns: XlatedInsn[]): Map<number, number[]> {
 
 // ─── Bytecode tab ─────────────────────────────────────────────────────────────
 
-function BytecodeTab({ insns }: { insns: XlatedInsn[] }) {
+function BytecodeTab({
+  insns,
+  focusInstruction,
+}: {
+  insns: XlatedInsn[];
+  focusInstruction?: number | null;
+}) {
   const [highlightedLine, setHighlightedLine] = useState<number | null>(null);
   const lineRefs = useRef<Map<number, HTMLTableRowElement>>(new Map());
   const jumpMap = useMemo(() => buildJumpMap(insns), [insns]);
@@ -233,6 +245,12 @@ function BytecodeTab({ insns }: { insns: XlatedInsn[] }) {
       setTimeout(() => setHighlightedLine(null), 1500);
     }
   }, []);
+
+  useEffect(() => {
+    if (focusInstruction == null) return;
+    const handle = window.setTimeout(() => scrollToLine(focusInstruction), 0);
+    return () => window.clearTimeout(handle);
+  }, [focusInstruction, scrollToLine]);
 
   const copyAll = useCallback(() => {
     const text = insns
@@ -327,15 +345,302 @@ function BytecodeTab({ insns }: { insns: XlatedInsn[] }) {
 
 // ─── CFG tab ──────────────────────────────────────────────────────────────────
 
-function CfgTab({ dot }: { dot: string }) {
+const CFG_BLOCK_ROW_HEIGHT = 82;
+const CFG_BLOCK_OVERSCAN = 6;
+
+function downloadTextFile(filename: string, text: string) {
+  const blob = new Blob([text], { type: "text/vnd.graphviz;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
+}
+
+function CfgMetric({
+  label,
+  value,
+}: {
+  label: string;
+  value: string | number;
+}) {
+  return (
+    <div className="rounded-lg border border-white/8 bg-slate-950/50 px-3 py-2">
+      <div className="text-[10px] uppercase tracking-wide text-slate-500">
+        {label}
+      </div>
+      <div className="mt-1 font-mono text-sm text-slate-200">{value}</div>
+    </div>
+  );
+}
+
+function CfgBlockRow({
+  block,
+  onOpenBytecode,
+}: {
+  block: CfgBasicBlockSummary;
+  onOpenBytecode: (instruction?: number) => void;
+}) {
+  const targets = [
+    ...block.branchTargets.map(target => `branch → ${target}`),
+    ...(block.fallthroughTarget !== undefined
+      ? [`fallthrough → ${block.fallthroughTarget}`]
+      : []),
+  ];
+
+  return (
+    <div
+      className="grid grid-cols-[120px_minmax(0,1fr)_120px] gap-3 border-b border-white/5 px-3 py-2 text-xs"
+      style={{ height: CFG_BLOCK_ROW_HEIGHT }}
+    >
+      <div className="font-mono text-slate-300">
+        <div>
+          bb_{block.start}
+          <span className="ml-1 text-slate-600">
+            {block.start}-{block.end}
+          </span>
+        </div>
+        <div className="mt-1 text-[11px] text-slate-500">
+          {block.instructionCount} insns
+        </div>
+      </div>
+      <div className="min-w-0">
+        <div className="truncate font-mono text-slate-400">
+          {block.terminalDisasm}
+        </div>
+        <div className="mt-1 flex flex-wrap gap-1">
+          {targets.length > 0 ? (
+            targets.map(target => (
+              <span
+                key={target}
+                className="rounded border border-cyan-500/20 bg-cyan-500/10 px-1.5 py-0.5 font-mono text-[11px] text-cyan-300"
+              >
+                {target}
+              </span>
+            ))
+          ) : (
+            <span className="text-[11px] text-slate-600">no outgoing edge</span>
+          )}
+          {block.calls.map(call => (
+            <span
+              key={call}
+              className="rounded border border-amber-500/20 bg-amber-500/10 px-1.5 py-0.5 font-mono text-[11px] text-amber-300"
+            >
+              call {call}
+            </span>
+          ))}
+        </div>
+        {block.sourceSnippets[0] && (
+          <div className="mt-1 truncate text-[11px] text-emerald-400/70">
+            {block.sourceSnippets[0]}
+          </div>
+        )}
+      </div>
+      <div className="flex items-start justify-end">
+        <button
+          onClick={() => onOpenBytecode(block.start)}
+          className="rounded border border-white/8 px-2 py-1 text-[11px] text-slate-400 transition-colors hover:border-cyan-500/40 hover:text-cyan-200"
+        >
+          Bytecode
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function CfgBlockList({
+  blocks,
+  onOpenBytecode,
+}: {
+  blocks: CfgBasicBlockSummary[];
+  onOpenBytecode: (instruction?: number) => void;
+}) {
+  const [scrollTop, setScrollTop] = useState(0);
+  const totalHeight = blocks.length * CFG_BLOCK_ROW_HEIGHT;
+  const start = Math.max(
+    0,
+    Math.floor(scrollTop / CFG_BLOCK_ROW_HEIGHT) - CFG_BLOCK_OVERSCAN
+  );
+  const visibleCount = 20 + CFG_BLOCK_OVERSCAN * 2;
+  const visibleBlocks = blocks.slice(start, start + visibleCount);
+
+  if (blocks.length === 0) {
+    return (
+      <div className="flex h-full items-center justify-center text-sm text-slate-500">
+        No basic blocks found.
+      </div>
+    );
+  }
+
+  return (
+    <div
+      className="h-full overflow-auto rounded-lg border border-white/8 bg-slate-950/40"
+      onScroll={event => setScrollTop(event.currentTarget.scrollTop)}
+    >
+      <div style={{ height: totalHeight, position: "relative" }}>
+        <div
+          style={{
+            transform: `translateY(${start * CFG_BLOCK_ROW_HEIGHT}px)`,
+          }}
+        >
+          {visibleBlocks.map(block => (
+            <CfgBlockRow
+              key={block.id}
+              block={block}
+              onOpenBytecode={onOpenBytecode}
+            />
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function CfgLargeFallback({
+  dot,
+  filename,
+  onRenderAnyway,
+  onOpenBytecode,
+  copied,
+  onCopyDot,
+  analysis,
+  blocks,
+}: {
+  dot: string;
+  filename: string;
+  onRenderAnyway: () => void;
+  onOpenBytecode: (instruction?: number) => void;
+  copied: boolean;
+  onCopyDot: () => void;
+  analysis: ReturnType<typeof analyzeCfgRender>;
+  blocks: CfgBasicBlockSummary[];
+}) {
+  return (
+    <div className="flex h-full flex-col">
+      <div className="border-b border-white/5 bg-slate-950/40 px-4 py-3">
+        <div className="flex items-start gap-3">
+          <div className="mt-0.5 rounded-full bg-amber-500/10 p-2 text-amber-300">
+            <AlertTriangle size={16} />
+          </div>
+          <div className="min-w-0 flex-1">
+            <div className="text-sm font-medium text-slate-100">
+              Large control-flow graph was not rendered automatically
+            </div>
+            <div className="mt-1 max-w-3xl text-xs leading-relaxed text-slate-400">
+              Graphviz layout can freeze the browser for very large BPF
+              programs. Use the basic-block summary below, or explicitly render
+              the full graph if you need the SVG.
+            </div>
+            <div className="mt-2 space-y-1">
+              {analysis.reasons.map(reason => (
+                <div key={reason} className="text-xs text-amber-300/90">
+                  {reason}
+                </div>
+              ))}
+            </div>
+          </div>
+          <div className="flex shrink-0 flex-wrap justify-end gap-2">
+            <button
+              onClick={onRenderAnyway}
+              className="rounded-lg bg-amber-500/15 px-3 py-1.5 text-xs font-medium text-amber-200 transition-colors hover:bg-amber-500/25"
+            >
+              Render anyway
+            </button>
+            <button
+              onClick={() => downloadTextFile(filename, dot)}
+              className="flex items-center gap-1.5 rounded-lg border border-white/8 px-3 py-1.5 text-xs text-slate-300 transition-colors hover:border-cyan-500/40 hover:text-cyan-200"
+            >
+              <Download size={12} />
+              DOT
+            </button>
+            <button
+              onClick={onCopyDot}
+              className="flex items-center gap-1.5 rounded-lg border border-white/8 px-3 py-1.5 text-xs text-slate-300 transition-colors hover:border-cyan-500/40 hover:text-cyan-200"
+            >
+              {copied ? <Check size={12} /> : <Copy size={12} />}
+              {copied ? "Copied" : "Copy DOT"}
+            </button>
+            <button
+              onClick={() => onOpenBytecode(blocks[0]?.start)}
+              className="rounded-lg border border-white/8 px-3 py-1.5 text-xs text-slate-300 transition-colors hover:border-cyan-500/40 hover:text-cyan-200"
+            >
+              Open bytecode
+            </button>
+          </div>
+        </div>
+        <div className="mt-3 grid grid-cols-2 gap-2 md:grid-cols-5">
+          <CfgMetric
+            label="Instructions"
+            value={analysis.instructionCount.toLocaleString()}
+          />
+          <CfgMetric label="Blocks" value={analysis.blockCount.toLocaleString()} />
+          <CfgMetric
+            label="DOT chars"
+            value={analysis.dotChars.toLocaleString()}
+          />
+          <CfgMetric
+            label="Nodes"
+            value={analysis.estimatedNodeCount.toLocaleString()}
+          />
+          <CfgMetric
+            label="Edges"
+            value={analysis.estimatedEdgeCount.toLocaleString()}
+          />
+        </div>
+      </div>
+      <div className="min-h-0 flex-1 p-4">
+        <CfgBlockList blocks={blocks} onOpenBytecode={onOpenBytecode} />
+      </div>
+    </div>
+  );
+}
+
+function CfgTab({
+  dot,
+  insns,
+  filename,
+  onOpenBytecode,
+}: {
+  dot: string;
+  insns: XlatedInsn[];
+  filename: string;
+  onOpenBytecode: (instruction?: number) => void;
+}) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [svgContent, setSvgContent] = useState<string>("");
   const [error, setError] = useState<string>("");
   const [loading, setLoading] = useState(true);
   const [scale, setScale] = useState(1);
+  const [forceRender, setForceRender] = useState(false);
+  const [copiedDot, setCopiedDot] = useState(false);
+  const analysis = useMemo(() => analyzeCfgRender(dot, insns), [dot, insns]);
+  const blocks = useMemo(() => buildCfgBasicBlocks(insns), [insns]);
+  const shouldRenderGraph = forceRender || analysis.shouldAutoRender;
+
+  const copyDot = useCallback(() => {
+    navigator.clipboard.writeText(dot);
+    setCopiedDot(true);
+    window.setTimeout(() => setCopiedDot(false), 2000);
+  }, [dot]);
+
+  useEffect(() => {
+    setForceRender(false);
+  }, [dot]);
 
   useEffect(() => {
     let cancelled = false;
+    if (!shouldRenderGraph) {
+      setLoading(false);
+      setError("");
+      setSvgContent("");
+      return () => {
+        cancelled = true;
+      };
+    }
+
     setLoading(true);
     setError("");
 
@@ -382,13 +687,30 @@ function CfgTab({ dot }: { dot: string }) {
     return () => {
       cancelled = true;
     };
-  }, [dot]);
+  }, [dot, shouldRenderGraph]);
+
+  if (!shouldRenderGraph) {
+    return (
+      <CfgLargeFallback
+        dot={dot}
+        filename={filename}
+        onRenderAnyway={() => setForceRender(true)}
+        onOpenBytecode={onOpenBytecode}
+        copied={copiedDot}
+        onCopyDot={copyDot}
+        analysis={analysis}
+        blocks={blocks}
+      />
+    );
+  }
 
   if (loading) {
     return (
       <div className="flex items-center justify-center h-full gap-2 text-slate-400">
         <Loader2 size={16} className="animate-spin" />
-        <span className="text-sm">Rendering control-flow graph…</span>
+        <span className="text-sm">
+          Rendering control-flow graph{forceRender ? " anyway" : ""}…
+        </span>
       </div>
     );
   }
@@ -406,6 +728,13 @@ function CfgTab({ dot }: { dot: string }) {
             {dot}
           </pre>
         </details>
+        <button
+          onClick={() => downloadTextFile(filename, dot)}
+          className="flex items-center gap-1.5 rounded-lg border border-white/8 px-3 py-1.5 text-xs text-slate-300 transition-colors hover:border-cyan-500/40 hover:text-cyan-200"
+        >
+          <Download size={12} />
+          Download DOT
+        </button>
       </div>
     );
   }
@@ -416,7 +745,19 @@ function CfgTab({ dot }: { dot: string }) {
         <span className="text-xs text-slate-400">
           Control-flow graph — basic blocks with branch edges
         </span>
+        {!analysis.shouldAutoRender && (
+          <span className="rounded border border-amber-500/25 bg-amber-500/10 px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-amber-300">
+            forced large render
+          </span>
+        )}
         <div className="ml-auto flex items-center gap-1">
+          <button
+            onClick={() => downloadTextFile(filename, dot)}
+            className="flex items-center gap-1 px-2 py-0.5 text-xs text-slate-400 hover:text-white hover:bg-white/5 rounded"
+          >
+            <Download size={12} />
+            DOT
+          </button>
           <button
             onClick={() => setScale(s => Math.max(0.3, s - 0.1))}
             className="px-2 py-0.5 text-xs text-slate-400 hover:text-white hover:bg-white/5 rounded"
@@ -662,6 +1003,7 @@ interface CodeInspectorProps {
 
 export function CodeInspector({ program, onClose }: CodeInspectorProps) {
   const [activeTab, setActiveTab] = useState<Tab>("bytecode");
+  const [bytecodeFocus, setBytecodeFocus] = useState<number | null>(null);
 
   const {
     data: dump,
@@ -680,6 +1022,11 @@ export function CodeInspector({ program, onClose }: CodeInspectorProps) {
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
   }, [onClose]);
+
+  const openBytecodeAt = useCallback((instruction?: number) => {
+    setBytecodeFocus(instruction ?? null);
+    setActiveTab("bytecode");
+  }, []);
 
   const tabs: Array<{
     id: Tab;
@@ -826,8 +1173,20 @@ export function CodeInspector({ program, onClose }: CodeInspectorProps) {
                   <span className="text-xs text-amber-300">{dump.error}</span>
                 </div>
               )}
-              {activeTab === "bytecode" && <BytecodeTab insns={dump.xlated} />}
-              {activeTab === "cfg" && <CfgTab dot={dump.cfgDot} />}
+              {activeTab === "bytecode" && (
+                <BytecodeTab
+                  insns={dump.xlated}
+                  focusInstruction={bytecodeFocus}
+                />
+              )}
+              {activeTab === "cfg" && (
+                <CfgTab
+                  dot={dump.cfgDot}
+                  insns={dump.xlated}
+                  filename={`bpf-prog-${program.id}-cfg.dot`}
+                  onOpenBytecode={openBytecodeAt}
+                />
+              )}
               {activeTab === "jit" && (
                 <JitTab
                   insns={dump.jited}
