@@ -32,14 +32,15 @@ import {
 } from "lucide-react";
 import { trpc } from "@/lib/trpc";
 import {
-  analyzeCfgRender,
-  buildCfgBasicBlocks,
   searchCfgBlocks,
   type CfgBasicBlockSummary,
   type CfgBlockSearchResult,
+  type CfgSummary,
 } from "@/lib/cfg-summary";
+import { getCachedCfgSummary } from "@/lib/cfg-summary-cache";
 import type {
   BpfProgram,
+  ProgDump,
   XlatedInsn,
   JitedInsn,
 } from "../../../shared/ebpf-types";
@@ -641,7 +642,7 @@ function CfgLargeFallback({
   onOpenBytecode: (instruction?: number) => void;
   copied: boolean;
   onCopyDot: () => void;
-  analysis: ReturnType<typeof analyzeCfgRender>;
+  analysis: CfgSummary["analysis"];
   blocks: CfgBasicBlockSummary[];
 }) {
   const [query, setQuery] = useState("");
@@ -774,13 +775,11 @@ function CfgLargeFallback({
 }
 
 function CfgTab({
-  dot,
-  insns,
+  dump,
   filename,
   onOpenBytecode,
 }: {
-  dot: string;
-  insns: XlatedInsn[];
+  dump: ProgDump;
   filename: string;
   onOpenBytecode: (instruction?: number) => void;
 }) {
@@ -791,8 +790,10 @@ function CfgTab({
   const [scale, setScale] = useState(1);
   const [forceRender, setForceRender] = useState(false);
   const [copiedDot, setCopiedDot] = useState(false);
-  const analysis = useMemo(() => analyzeCfgRender(dot, insns), [dot, insns]);
-  const blocks = useMemo(() => buildCfgBasicBlocks(insns), [insns]);
+  const summary = useMemo(() => getCachedCfgSummary(dump), [dump]);
+  const { analysis, blocks } = summary;
+  const summaryFingerprint = summary.fingerprint;
+  const dot = dump.cfgDot;
   const shouldRenderGraph = forceRender || analysis.shouldAutoRender;
 
   const copyDot = useCallback(() => {
@@ -803,7 +804,7 @@ function CfgTab({
 
   useEffect(() => {
     setForceRender(false);
-  }, [dot]);
+  }, [summaryFingerprint]);
 
   useEffect(() => {
     let cancelled = false;
@@ -1337,8 +1338,7 @@ export function CodeInspector({ program, onClose }: CodeInspectorProps) {
               )}
               {activeTab === "cfg" && (
                 <CfgTab
-                  dot={dump.cfgDot}
-                  insns={dump.xlated}
+                  dump={dump}
                   filename={`bpf-prog-${program.id}-cfg.dot`}
                   onOpenBytecode={openBytecodeAt}
                 />

@@ -10,6 +10,7 @@
  */
 
 import type { ProgDump, XlatedInsn } from "../shared/ebpf-types";
+import { buildCfgSummary } from "../shared/cfg-summary";
 import { analyzeXlatedReturns } from "./xlated-return-analysis";
 
 // ─── Instruction templates ────────────────────────────────────────────────────
@@ -361,6 +362,7 @@ export function buildMockProgDump(
     progId,
     xlated,
     cfgDot,
+    cfgSummary: buildCfgSummary(cfgDot, xlated),
     jited,
     jitedUnavailableReason,
     hasLineInfo: hasBtf,

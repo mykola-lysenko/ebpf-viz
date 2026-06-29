@@ -15,9 +15,9 @@ Plan:
 - Add search and navigation for instruction number, source location, helper calls, and branch targets.
 - Cache server-computed CFG summaries per program dump so large program navigation does not recompute on every tab switch.
 
-Status: the first implementation is done. The UI now gates automatic Graphviz rendering for large CFGs, renders full Graphviz layouts in a background Web Worker, and shows a searchable, virtualized basic-block fallback with DOT export and explicit "render anyway" controls.
+Status: the first implementation is done. The UI now gates automatic Graphviz rendering for large CFGs, renders full Graphviz layouts in a background Web Worker, and shows a searchable, virtualized basic-block fallback with DOT export and explicit "render anyway" controls. CFG summaries are computed on the server and cached by program dump fingerprint, with a client cache fallback for older dump payloads.
 
-Remaining work: cache server-computed CFG summaries per program dump.
+Remaining work: validate thresholds against more large-program captures and tune the fallback row density if needed.
 
 ## Packet Chain Awareness
 

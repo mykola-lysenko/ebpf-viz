@@ -2,8 +2,10 @@ import { describe, expect, it } from "vitest";
 import type { XlatedInsn } from "../../../shared/ebpf-types";
 import {
   analyzeCfgRender,
+  buildCfgSummary,
   buildCfgBasicBlocks,
   CFG_AUTO_RENDER_LIMITS,
+  computeCfgSummaryFingerprint,
   searchCfgBlocks,
 } from "./cfg-summary";
 
@@ -97,5 +99,34 @@ describe("cfg-summary helpers", () => {
     expect(searchCfgBlocks(blocks, "TC_ACT_SHOT").map(result => result.block.start)).toEqual([
       4,
     ]);
+  });
+
+  it("builds one reusable summary without rebuilding blocks for analysis", () => {
+    const dot = `digraph "BPF CFG" {\n  bb_0 [label="0"];\n  bb_0 -> bb_2;\n}`;
+    const summary = buildCfgSummary(
+      dot,
+      insns(["(15) if r1 == 0x0 goto pc+1", "(b7) r0 = 0", "(95) exit"])
+    );
+
+    expect(summary.fingerprint).toMatch(/^3:\d+:[0-9a-f]{8}$/);
+    expect(summary.blocks.map(block => block.id)).toEqual(["bb_0", "bb_1", "bb_2"]);
+    expect(summary.analysis.blockCount).toBe(summary.blocks.length);
+  });
+
+  it("changes the summary fingerprint when bytecode or source annotations change", () => {
+    const dot = "digraph {}";
+    const base = insns(["(b7) r0 = 0", "(95) exit"]);
+    const changedBytecode = insns(["(b7) r0 = 1", "(95) exit"]);
+    const changedSource = [
+      { index: 0, disasm: "(b7) r0 = 0", source: "return allow;" },
+      { index: 1, disasm: "(95) exit" },
+    ];
+
+    expect(computeCfgSummaryFingerprint(dot, base)).not.toBe(
+      computeCfgSummaryFingerprint(dot, changedBytecode)
+    );
+    expect(computeCfgSummaryFingerprint(dot, base)).not.toBe(
+      computeCfgSummaryFingerprint(dot, changedSource)
+    );
   });
 });

@@ -9,11 +9,44 @@
 
 import { execFile } from "child_process";
 import { promisify } from "util";
-import type { ProgDump, XlatedInsn, JitedInsn, ProgramReturnAnalysisResult } from "../shared/ebpf-types";
+import { buildCfgSummary, computeCfgSummaryFingerprint } from "../shared/cfg-summary";
+import type {
+  CfgSummary,
+  ProgDump,
+  XlatedInsn,
+  JitedInsn,
+  ProgramReturnAnalysisResult,
+} from "../shared/ebpf-types";
 import { getBpftoolPath, isSudoEnabled } from "./ebpf-poller";
 import { analyzeXlatedReturns } from "./xlated-return-analysis";
 
 const execFileAsync = promisify(execFile);
+const CFG_SUMMARY_CACHE_LIMIT = 64;
+const cfgSummaryCache = new Map<string, CfgSummary>();
+
+function getCachedCfgSummary(
+  progId: number,
+  dot: string,
+  insns: XlatedInsn[]
+): CfgSummary {
+  const fingerprint = computeCfgSummaryFingerprint(dot, insns);
+  const cacheKey = `${progId}:${fingerprint}`;
+  const cached = cfgSummaryCache.get(cacheKey);
+  if (cached) {
+    cfgSummaryCache.delete(cacheKey);
+    cfgSummaryCache.set(cacheKey, cached);
+    return cached;
+  }
+
+  const summary = buildCfgSummary(dot, insns, fingerprint);
+  cfgSummaryCache.set(cacheKey, summary);
+  while (cfgSummaryCache.size > CFG_SUMMARY_CACHE_LIMIT) {
+    const oldestKey = cfgSummaryCache.keys().next().value;
+    if (oldestKey === undefined) break;
+    cfgSummaryCache.delete(oldestKey);
+  }
+  return summary;
+}
 
 async function run(args: string[]): Promise<{ stdout: string; stderr: string; failed: boolean }> {
   const bpftool = getBpftoolPath();
@@ -391,6 +424,7 @@ export async function fetchProgDump(progId: number, hasBtf: boolean, isJited: bo
     progId,
     xlated,
     cfgDot,
+    cfgSummary: getCachedCfgSummary(progId, cfgDot, xlated),
     jited,
     jitedUnavailableReason,
     hasLineInfo,

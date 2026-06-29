@@ -528,6 +528,39 @@ export interface XlatedInsn {
   sourceColumn?: number;
 }
 
+export interface CfgBasicBlockSummary {
+  id: string;
+  start: number;
+  end: number;
+  instructionCount: number;
+  branchTargets: number[];
+  fallthroughTarget?: number;
+  calls: string[];
+  sourceSnippets: string[];
+  terminalDisasm: string;
+}
+
+export interface CfgRenderAnalysis {
+  instructionCount: number;
+  dotChars: number;
+  estimatedNodeCount: number;
+  estimatedEdgeCount: number;
+  blockCount: number;
+  shouldAutoRender: boolean;
+  reasons: string[];
+}
+
+export interface CfgSummary {
+  fingerprint: string;
+  analysis: CfgRenderAnalysis;
+  blocks: CfgBasicBlockSummary[];
+}
+
+export interface CfgBlockSearchResult {
+  block: CfgBasicBlockSummary;
+  matchReason: string;
+}
+
 /** A single JIT-compiled native instruction */
 export interface JitedInsn {
   /** PC address as hex string */
@@ -673,6 +706,8 @@ export interface ProgDump {
   xlated: XlatedInsn[];
   /** Graphviz DOT source for the CFG — always available */
   cfgDot: string;
+  /** Server-computed summary used by the large-program CFG fallback. */
+  cfgSummary?: CfgSummary;
   /** JIT-compiled native instructions — null when unavailable */
   jited: JitedInsn[] | null;
   /** Human-readable reason why jited is unavailable */
