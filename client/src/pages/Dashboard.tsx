@@ -8,6 +8,7 @@ import { cn } from "@/lib/utils";
 import { BPF_PROGRAM_TYPE_COLORS } from "../../../shared/ebpf-constants";
 import Sparkline, { samplesToCallsPerSec, fmtCps, fmtNs, fmtCpu, fmtBytes } from "@/components/Sparkline";
 import { formatRelativeTime, formatFullTimestamp, useNow } from "@/lib/time";
+import { buildStructOpsGroups } from "@/lib/struct-ops-summary";
 
 function StatCard({ label, value, sub, icon: Icon, color }: {
   label: string; value: string | number; sub?: string;
@@ -379,6 +380,201 @@ function ActivityLeaderboard() {
   );
 }
 
+// ── Struct Ops Summary ────────────────────────────────────────────────────────
+
+function StructOpsSummaryCard() {
+  const { snapshot, historyMap, statsEnabled } = useEbpf();
+
+  const structOpsPrograms = useMemo(
+    () =>
+      snapshot?.programs.filter(
+        program => program.rawType === "struct_ops" || program.type === "struct_ops"
+      ) ?? [],
+    [snapshot]
+  );
+
+  const callsById = useMemo(
+    () =>
+      new Map(
+        structOpsPrograms.map(program => [
+          program.id,
+          historyMap.get(program.id)?.latest?.callsPerSec ?? 0,
+        ])
+      ),
+    [structOpsPrograms, historyMap]
+  );
+
+  const groups = useMemo(
+    () => buildStructOpsGroups(structOpsPrograms, callsById),
+    [structOpsPrograms, callsById]
+  );
+
+  const topCallbacks = useMemo(() => {
+    const callbacks = [...structOpsPrograms];
+    callbacks.sort((a, b) => {
+      const callDelta = (callsById.get(b.id) ?? 0) - (callsById.get(a.id) ?? 0);
+      if (callDelta !== 0) return callDelta;
+      return b.memlock - a.memlock;
+    });
+    return callbacks.slice(0, 5);
+  }, [structOpsPrograms, callsById]);
+
+  if (!snapshot || structOpsPrograms.length === 0) return null;
+
+  const color = BPF_PROGRAM_TYPE_COLORS.struct_ops;
+  const totalMemlock = structOpsPrograms.reduce(
+    (total, program) => total + program.memlock,
+    0
+  );
+  const totalCallsPerSec = groups.reduce(
+    (total, group) => total + group.totalCallsPerSec,
+    0
+  );
+  const activeCallbacks = structOpsPrograms.filter(
+    program => (callsById.get(program.id) ?? 0) > 0
+  ).length;
+  const maxGroupCount = Math.max(1, ...groups.map(group => group.count));
+
+  return (
+    <div
+      className="glass rounded-xl p-5"
+      style={{ borderColor: `${color}33` }}
+    >
+      <div className="flex flex-wrap items-start justify-between gap-3 mb-4">
+        <div>
+          <h2 className="text-sm font-semibold text-foreground flex items-center gap-2">
+            <Cpu size={14} style={{ color }} />
+            Struct Ops
+          </h2>
+          <p className="text-xs text-muted-foreground mt-1 max-w-2xl">
+            Kernel callback implementations registered through BPF struct_ops.
+            Grouping is inferred from callback names until bpftool exposes richer
+            struct metadata.
+          </p>
+        </div>
+        <Link
+          href="/kernel"
+          className="text-xs rounded-lg border border-white/10 px-3 py-1.5 text-muted-foreground hover:text-foreground hover:border-primary/40 transition-colors"
+        >
+          Kernel view →
+        </Link>
+      </div>
+
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-5">
+        <div className="rounded-lg bg-white/[0.03] border border-white/8 px-3 py-2">
+          <div className="text-[10px] uppercase tracking-wide text-muted-foreground">
+            Callbacks
+          </div>
+          <div className="text-lg font-mono font-semibold text-foreground">
+            {structOpsPrograms.length}
+          </div>
+        </div>
+        <div className="rounded-lg bg-white/[0.03] border border-white/8 px-3 py-2">
+          <div className="text-[10px] uppercase tracking-wide text-muted-foreground">
+            Families
+          </div>
+          <div className="text-lg font-mono font-semibold text-foreground">
+            {groups.length}
+          </div>
+        </div>
+        <div className="rounded-lg bg-white/[0.03] border border-white/8 px-3 py-2">
+          <div className="text-[10px] uppercase tracking-wide text-muted-foreground">
+            Active
+          </div>
+          <div className="text-lg font-mono font-semibold text-foreground">
+            {statsEnabled ? activeCallbacks : "n/a"}
+          </div>
+        </div>
+        <div className="rounded-lg bg-white/[0.03] border border-white/8 px-3 py-2">
+          <div className="text-[10px] uppercase tracking-wide text-muted-foreground">
+            Memlock
+          </div>
+          <div className="text-lg font-mono font-semibold text-foreground">
+            {fmtBytes(totalMemlock)}
+          </div>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
+        <div>
+          <div className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-3">
+            Callback Families
+          </div>
+          <div className="space-y-3">
+            {groups.slice(0, 5).map(group => {
+              const pct = (group.count / maxGroupCount) * 100;
+              return (
+                <div key={group.family} className="space-y-1.5">
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs font-medium text-foreground">
+                      {group.family}
+                    </span>
+                    <span className="text-[10px] font-mono text-muted-foreground">
+                      {group.count}
+                    </span>
+                    {group.totalCallsPerSec > 0 && (
+                      <span className="ml-auto text-[10px] font-mono" style={{ color }}>
+                        {fmtCps(group.totalCallsPerSec)}
+                      </span>
+                    )}
+                  </div>
+                  <div className="h-1.5 rounded-full bg-white/5 overflow-hidden">
+                    <div
+                      className="h-full rounded-full"
+                      style={{ width: `${pct}%`, background: color }}
+                    />
+                  </div>
+                  <div className="text-[10px] text-muted-foreground truncate">
+                    {group.examples.join(", ")}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+
+        <div>
+          <div className="flex items-center justify-between mb-3">
+            <div className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">
+              {statsEnabled && totalCallsPerSec > 0
+                ? "Top Active Callbacks"
+                : "Largest Callbacks"}
+            </div>
+            {statsEnabled && totalCallsPerSec > 0 && (
+              <span className="text-[10px] font-mono" style={{ color }}>
+                {fmtCps(totalCallsPerSec)} total
+              </span>
+            )}
+          </div>
+          <div className="space-y-2">
+            {topCallbacks.map(program => {
+              const cps = callsById.get(program.id) ?? 0;
+              const history = historyMap.get(program.id);
+              return (
+                <div key={program.id} className="flex items-center gap-3">
+                  <div className="min-w-0 flex-1">
+                    <ProgBadge
+                      program={program}
+                      history={history}
+                      compact
+                    />
+                  </div>
+                  <span
+                    className="text-[11px] font-mono tabular-nums shrink-0"
+                    style={{ color: cps > 0 ? color : undefined }}
+                  >
+                    {cps > 0 ? fmtCps(cps) : fmtBytes(program.memlock)}
+                  </span>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ── Main ──────────────────────────────────────────────────────────────────────
 
 export default function Dashboard() {
@@ -569,6 +765,8 @@ export default function Dashboard() {
           </div>
         </div>
       </div>
+
+      <StructOpsSummaryCard />
 
       {/* Leaderboards */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
