@@ -8,7 +8,7 @@ import { cn } from "@/lib/utils";
 import { BPF_PROGRAM_TYPE_COLORS } from "../../../shared/ebpf-constants";
 import Sparkline, { samplesToCallsPerSec, fmtCps, fmtNs, fmtCpu, fmtBytes } from "@/components/Sparkline";
 import { formatRelativeTime, formatFullTimestamp, useNow } from "@/lib/time";
-import { buildStructOpsGroups } from "@/lib/struct-ops-summary";
+import { buildStructOpsKindSummaries } from "@/lib/struct-ops-summary";
 
 function StatCard({ label, value, sub, icon: Icon, color }: {
   label: string; value: string | number; sub?: string;
@@ -383,7 +383,7 @@ function ActivityLeaderboard() {
 // ── Struct Ops Summary ────────────────────────────────────────────────────────
 
 function StructOpsSummaryCard() {
-  const { snapshot, historyMap, statsEnabled } = useEbpf();
+  const { snapshot, historyMap, maps, statsEnabled } = useEbpf();
 
   const structOpsPrograms = useMemo(
     () =>
@@ -404,20 +404,25 @@ function StructOpsSummaryCard() {
     [structOpsPrograms, historyMap]
   );
 
-  const groups = useMemo(
-    () => buildStructOpsGroups(structOpsPrograms, callsById),
-    [structOpsPrograms, callsById]
+  const kindSummaries = useMemo(
+    () => buildStructOpsKindSummaries(structOpsPrograms, maps, callsById),
+    [structOpsPrograms, maps, callsById]
   );
 
-  const topCallbacks = useMemo(() => {
-    const callbacks = [...structOpsPrograms];
-    callbacks.sort((a, b) => {
-      const callDelta = (callsById.get(b.id) ?? 0) - (callsById.get(a.id) ?? 0);
-      if (callDelta !== 0) return callDelta;
-      return b.memlock - a.memlock;
-    });
-    return callbacks.slice(0, 5);
-  }, [structOpsPrograms, callsById]);
+  const topAlgorithms = useMemo(
+    () =>
+      kindSummaries
+        .flatMap(kind => kind.algorithms)
+        .sort(
+          (a, b) =>
+            b.totalCallsPerSec - a.totalCallsPerSec ||
+            b.count - a.count ||
+            b.totalMemlock - a.totalMemlock ||
+            a.algorithm.localeCompare(b.algorithm)
+        )
+        .slice(0, 5),
+    [kindSummaries]
+  );
 
   if (!snapshot || structOpsPrograms.length === 0) return null;
 
@@ -426,14 +431,18 @@ function StructOpsSummaryCard() {
     (total, program) => total + program.memlock,
     0
   );
-  const totalCallsPerSec = groups.reduce(
+  const totalCallsPerSec = kindSummaries.reduce(
     (total, group) => total + group.totalCallsPerSec,
     0
   );
   const activeCallbacks = structOpsPrograms.filter(
     program => (callsById.get(program.id) ?? 0) > 0
   ).length;
-  const maxGroupCount = Math.max(1, ...groups.map(group => group.count));
+  const algorithmCount = kindSummaries.reduce(
+    (total, kind) => total + kind.algorithms.length,
+    0
+  );
+  const maxKindCount = Math.max(1, ...kindSummaries.map(kind => kind.count));
 
   return (
     <div
@@ -448,8 +457,8 @@ function StructOpsSummaryCard() {
           </h2>
           <p className="text-xs text-muted-foreground mt-1 max-w-2xl">
             Kernel callback implementations registered through BPF struct_ops.
-            Grouping is inferred from callback names until bpftool exposes richer
-            struct metadata.
+            Grouping separates struct kind, registered algorithm, and callback
+            role when struct_ops map metadata is available.
           </p>
         </div>
         <Link
@@ -471,10 +480,10 @@ function StructOpsSummaryCard() {
         </div>
         <div className="rounded-lg bg-white/[0.03] border border-white/8 px-3 py-2">
           <div className="text-[10px] uppercase tracking-wide text-muted-foreground">
-            Families
+            Algorithms
           </div>
           <div className="text-lg font-mono font-semibold text-foreground">
-            {groups.length}
+            {algorithmCount}
           </div>
         </div>
         <div className="rounded-lg bg-white/[0.03] border border-white/8 px-3 py-2">
@@ -498,23 +507,23 @@ function StructOpsSummaryCard() {
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
         <div>
           <div className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-3">
-            Callback Families
+            Struct Kinds
           </div>
           <div className="space-y-3">
-            {groups.slice(0, 5).map(group => {
-              const pct = (group.count / maxGroupCount) * 100;
+            {kindSummaries.slice(0, 5).map(kind => {
+              const pct = (kind.count / maxKindCount) * 100;
               return (
-                <div key={group.family} className="space-y-1.5">
+                <div key={kind.kind} className="space-y-1.5">
                   <div className="flex items-center gap-2">
                     <span className="text-xs font-medium text-foreground">
-                      {group.family}
+                      {kind.label}
                     </span>
                     <span className="text-[10px] font-mono text-muted-foreground">
-                      {group.count}
+                      {kind.count}
                     </span>
-                    {group.totalCallsPerSec > 0 && (
+                    {kind.totalCallsPerSec > 0 && (
                       <span className="ml-auto text-[10px] font-mono" style={{ color }}>
-                        {fmtCps(group.totalCallsPerSec)}
+                        {fmtCps(kind.totalCallsPerSec)}
                       </span>
                     )}
                   </div>
@@ -524,8 +533,11 @@ function StructOpsSummaryCard() {
                       style={{ width: `${pct}%`, background: color }}
                     />
                   </div>
-                  <div className="text-[10px] text-muted-foreground truncate">
-                    {group.examples.join(", ")}
+                  <div
+                    className="text-[10px] text-muted-foreground truncate"
+                    title={kind.description}
+                  >
+                    {kind.algorithms.map(algorithm => algorithm.algorithm).join(", ")}
                   </div>
                 </div>
               );
@@ -537,8 +549,8 @@ function StructOpsSummaryCard() {
           <div className="flex items-center justify-between mb-3">
             <div className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">
               {statsEnabled && totalCallsPerSec > 0
-                ? "Top Active Callbacks"
-                : "Largest Callbacks"}
+                ? "Top Active Algorithms"
+                : "Largest Algorithms"}
             </div>
             {statsEnabled && totalCallsPerSec > 0 && (
               <span className="text-[10px] font-mono" style={{ color }}>
@@ -547,24 +559,42 @@ function StructOpsSummaryCard() {
             )}
           </div>
           <div className="space-y-2">
-            {topCallbacks.map(program => {
-              const cps = callsById.get(program.id) ?? 0;
-              const history = historyMap.get(program.id);
+            {topAlgorithms.map(algorithm => {
+              const primaryCallback = algorithm.callbacks[0];
               return (
-                <div key={program.id} className="flex items-center gap-3">
-                  <div className="min-w-0 flex-1">
+                <div key={`${algorithm.kind}:${algorithm.algorithm}`} className="space-y-1.5">
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs font-medium text-foreground">
+                      {algorithm.algorithm}
+                    </span>
+                    <span className="rounded border border-teal-500/25 bg-teal-500/5 px-1.5 py-0.5 text-[9px] font-mono text-teal-300/80">
+                      {algorithm.kindLabel}
+                    </span>
+                    <span
+                      className="ml-auto text-[11px] font-mono tabular-nums shrink-0"
+                      style={{
+                        color: algorithm.totalCallsPerSec > 0 ? color : undefined,
+                      }}
+                    >
+                      {algorithm.totalCallsPerSec > 0
+                        ? fmtCps(algorithm.totalCallsPerSec)
+                        : fmtBytes(algorithm.totalMemlock)}
+                    </span>
+                  </div>
+                  <div className="flex items-center gap-2 text-[10px] text-muted-foreground">
+                    <span>{algorithm.count} callback{algorithm.count === 1 ? "" : "s"}</span>
+                    {algorithm.activeCount > 0 && <span>{algorithm.activeCount} active</span>}
+                    <span className="truncate">
+                      {algorithm.examples.join(", ")}
+                    </span>
+                  </div>
+                  {primaryCallback && (
                     <ProgBadge
-                      program={program}
-                      history={history}
+                      program={primaryCallback.program}
+                      history={historyMap.get(primaryCallback.program.id)}
                       compact
                     />
-                  </div>
-                  <span
-                    className="text-[11px] font-mono tabular-nums shrink-0"
-                    style={{ color: cps > 0 ? color : undefined }}
-                  >
-                    {cps > 0 ? fmtCps(cps) : fmtBytes(program.memlock)}
-                  </span>
+                  )}
                 </div>
               );
             })}

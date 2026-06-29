@@ -12,6 +12,7 @@ import {
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
+import { fmtBytes, fmtCps } from "@/components/Sparkline";
 import { usePacketChainAnalysis } from "@/hooks/usePacketChainAnalysis";
 import {
   chainTone,
@@ -22,11 +23,16 @@ import {
   formatRunCnt,
   VERDICT_TONE_CLASSES,
 } from "@/lib/packet-chain-ui";
+import {
+  buildTcpCongestionControlSummaries,
+  type StructOpsAlgorithmSummary,
+} from "@/lib/struct-ops-summary";
 import { predictPacketChain } from "../../../shared/packet-chain-prediction";
 import type {
   BpfProgram,
   NetworkInterface,
   PacketChainPrediction,
+  ProgHistory,
   ProgArrayTarget,
   ProgramChain,
   ProgramReturnAnalysisResult,
@@ -628,6 +634,145 @@ function OsiLayerRow({
   );
 }
 
+function TcpCongestionControlStructOpsCard({
+  algorithms,
+  historyMap,
+  statsEnabled,
+}: {
+  algorithms: StructOpsAlgorithmSummary<BpfProgram>[];
+  historyMap: Map<number, ProgHistory>;
+  statsEnabled: boolean;
+}) {
+  if (algorithms.length === 0) return null;
+
+  const callbackCount = algorithms.reduce(
+    (total, algorithm) => total + algorithm.count,
+    0
+  );
+  const activeCount = algorithms.reduce(
+    (total, algorithm) => total + algorithm.activeCount,
+    0
+  );
+  const totalCallsPerSec = algorithms.reduce(
+    (total, algorithm) => total + algorithm.totalCallsPerSec,
+    0
+  );
+  const totalMemlock = algorithms.reduce(
+    (total, algorithm) => total + algorithm.totalMemlock,
+    0
+  );
+
+  return (
+    <div className="glass rounded-xl p-4 border-teal-500/20">
+      <div className="flex flex-wrap items-start justify-between gap-3 mb-4">
+        <div>
+          <h2 className="text-sm font-semibold text-foreground flex items-center gap-2">
+            <Network size={15} className="text-teal-400" />
+            TCP Congestion Control
+            <span className="rounded border border-teal-500/25 bg-teal-500/5 px-1.5 py-0.5 text-[9px] font-mono text-teal-300/80">
+              struct_ops
+            </span>
+          </h2>
+          <p className="text-xs text-muted-foreground mt-1 max-w-3xl">
+            Registered BPF TCP congestion-control algorithms. These callbacks
+            influence transport behavior such as congestion window, pacing, and
+            state transitions; they are not packet classifier chains and do not
+            directly pass/drop individual packets.
+          </p>
+        </div>
+        <div className="flex flex-wrap gap-1.5 text-[10px] font-mono">
+          <span className="rounded border border-teal-500/25 bg-teal-500/5 px-1.5 py-0.5 text-teal-300/80">
+            {algorithms.length} algorithm{algorithms.length === 1 ? "" : "s"}
+          </span>
+          <span className="rounded border border-border/60 px-1.5 py-0.5 text-muted-foreground">
+            {callbackCount} callback{callbackCount === 1 ? "" : "s"}
+          </span>
+          {statsEnabled && totalCallsPerSec > 0 ? (
+            <span className="rounded border border-cyan-500/25 bg-cyan-500/5 px-1.5 py-0.5 text-cyan-300/80">
+              {fmtCps(totalCallsPerSec)}
+            </span>
+          ) : (
+            <span className="rounded border border-border/60 px-1.5 py-0.5 text-muted-foreground">
+              {fmtBytes(totalMemlock)}
+            </span>
+          )}
+        </div>
+      </div>
+
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
+        {algorithms.map(algorithm => (
+          <div
+            key={`${algorithm.kind}:${algorithm.algorithm}`}
+            className="rounded-lg border border-white/8 bg-white/[0.03] p-3"
+          >
+            <div className="flex items-start justify-between gap-3 mb-2">
+              <div className="min-w-0">
+                <div className="text-sm font-semibold text-foreground">
+                  {algorithm.algorithm}
+                </div>
+                <div
+                  className="text-[10px] text-muted-foreground truncate"
+                  title={algorithm.mapNames.join(", ") || algorithm.kindDescription}
+                >
+                  {algorithm.mapNames.length > 0
+                    ? algorithm.mapNames.join(", ")
+                    : algorithm.kindLabel}
+                </div>
+              </div>
+              <div className="text-right shrink-0">
+                <div className="text-[11px] font-mono text-teal-300">
+                  {algorithm.count} cb
+                </div>
+                <div className="text-[10px] font-mono text-muted-foreground">
+                  {algorithm.totalCallsPerSec > 0
+                    ? fmtCps(algorithm.totalCallsPerSec)
+                    : fmtBytes(algorithm.totalMemlock)}
+                </div>
+              </div>
+            </div>
+
+            <div className="space-y-1.5">
+              {algorithm.callbacks.slice(0, 6).map(callback => (
+                <div
+                  key={callback.program.id}
+                  className="flex items-center gap-2 min-w-0"
+                >
+                  <ProgBadge
+                    program={callback.program}
+                    history={historyMap.get(callback.program.id)}
+                    compact
+                  />
+                  <span className="text-[10px] text-muted-foreground truncate">
+                    {callback.descriptor.callbackLabel}
+                  </span>
+                  <span className="ml-auto text-[10px] font-mono text-muted-foreground/70 shrink-0">
+                    {callback.callsPerSec > 0
+                      ? fmtCps(callback.callsPerSec)
+                      : fmtBytes(callback.program.memlock)}
+                  </span>
+                </div>
+              ))}
+              {algorithm.callbacks.length > 6 && (
+                <div className="text-[10px] text-muted-foreground/60">
+                  +{algorithm.callbacks.length - 6} more callback
+                  {algorithm.callbacks.length - 6 === 1 ? "" : "s"}
+                </div>
+              )}
+            </div>
+          </div>
+        ))}
+      </div>
+
+      {statsEnabled && activeCount > 0 && (
+        <div className="mt-3 text-[10px] text-muted-foreground">
+          {activeCount} callback{activeCount === 1 ? "" : "s"} currently have
+          runtime activity.
+        </div>
+      )}
+    </div>
+  );
+}
+
 function InterfaceCard({
   iface,
   tcChains,
@@ -848,12 +993,44 @@ export default function NetworkView() {
     appMode,
     maps,
     snapshotMapDumps,
+    historyMap,
+    statsEnabled,
   } = useEbpf();
 
   const tcChains = useMemo(
     () =>
       snapshot ? snapshot.programChains.filter(c => c.hookType === "tc") : [],
     [snapshot]
+  );
+
+  const visibleStructOpsPrograms = useMemo(
+    () =>
+      (searchQuery ? filteredPrograms : snapshot?.programs ?? []).filter(
+        program =>
+          program.rawType === "struct_ops" || program.type === "struct_ops"
+      ),
+    [filteredPrograms, searchQuery, snapshot]
+  );
+
+  const structOpsCallsById = useMemo(
+    () =>
+      new Map(
+        visibleStructOpsPrograms.map(program => [
+          program.id,
+          historyMap.get(program.id)?.latest?.callsPerSec ?? 0,
+        ])
+      ),
+    [visibleStructOpsPrograms, historyMap]
+  );
+
+  const tcpCongestionAlgorithms = useMemo(
+    () =>
+      buildTcpCongestionControlSummaries(
+        visibleStructOpsPrograms,
+        maps,
+        structOpsCallsById
+      ),
+    [visibleStructOpsPrograms, maps, structOpsCallsById]
   );
 
   const { returnAnalysisById, returnAnalysisLoading, progArrayTargets } =
@@ -953,6 +1130,12 @@ export default function NetworkView() {
         </div>
       </div>
 
+      <TcpCongestionControlStructOpsCard
+        algorithms={tcpCongestionAlgorithms}
+        historyMap={historyMap}
+        statsEnabled={statsEnabled}
+      />
+
       {/* ── NIC section ─────────────────────────────────────────────────── */}
       <InterfaceSection
         title="Network Interfaces"
@@ -1001,7 +1184,9 @@ export default function NetworkView() {
       )}
 
       {/* Fallback when everything is empty and not searching */}
-      {interfaces.length === 0 && !searchQuery && (
+      {interfaces.length === 0 &&
+        tcpCongestionAlgorithms.length === 0 &&
+        !searchQuery && (
         <div className="glass rounded-xl p-8 text-center">
           <Network size={32} className="text-muted-foreground mx-auto mb-3" />
           <p className="text-sm text-muted-foreground">
