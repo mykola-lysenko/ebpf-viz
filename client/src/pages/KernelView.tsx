@@ -19,6 +19,7 @@ const ZONE_ICONS: Record<string, string> = {
   flow_dissector: "🔀",
   netfilter:      "🛡",
   sk_ops:         "🔧",
+  struct_ops:     "🧩",
   other:          "⚙",
 };
 
@@ -34,11 +35,12 @@ const ZONE_COLORS: Record<string, string> = {
   flow_dissector: "#ec4899",
   netfilter:      "#f43f5e",
   sk_ops:         "#8b5cf6",
+  struct_ops:     "#14b8a6",
   other:          "#6b7280",
 };
 
 const PACKET_FLOW_ZONES: KernelZone[] = ["xdp", "tc_ingress", "netfilter", "socket_filter", "tc_egress"];
-const SYSTEM_ZONES: KernelZone[] = ["kprobe", "tracepoint", "perf_event", "cgroup", "flow_dissector", "sk_ops", "other"];
+const SYSTEM_ZONES: KernelZone[] = ["kprobe", "tracepoint", "perf_event", "cgroup", "flow_dissector", "sk_ops", "struct_ops", "other"];
 
 // ── Zone heat helpers ────────────────────────────────────────────────────────
 

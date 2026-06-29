@@ -208,6 +208,7 @@ export type KernelZone =
   | "flow_dissector"
   | "netfilter"
   | "sk_ops"
+  | "struct_ops"
   | "other";
 
 export interface KernelAttachmentZone {

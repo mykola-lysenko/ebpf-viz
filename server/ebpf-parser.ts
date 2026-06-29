@@ -314,8 +314,9 @@ function getKernelZone(type: BpfProgType): KernelZone {
       return "flow_dissector";
     case "netfilter":
       return "netfilter";
-    case "lsm":
     case "struct_ops":
+      return "struct_ops";
+    case "lsm":
     default:
       return "other";
   }
@@ -660,9 +661,13 @@ const ZONE_META: Record<KernelZone, { label: string; description: string }> = {
     label: "Socket Ops",
     description: "TCP socket operations callbacks",
   },
+  struct_ops: {
+    label: "Struct Ops",
+    description: "Kernel struct_ops callbacks",
+  },
   other: {
     label: "Other",
-    description: "LSM, struct_ops, and other program types",
+    description: "LSM and other program types",
   },
 };
 
@@ -693,6 +698,7 @@ export function buildKernelZones(
     "kprobe",
     "tracepoint",
     "perf_event",
+    "struct_ops",
     "other",
   ];
 

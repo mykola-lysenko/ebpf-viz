@@ -77,6 +77,7 @@ const ZONE_COLORS: Record<string, string> = {
   flow_dissector: "#ec4899",
   netfilter: "#f43f5e",
   sk_ops: "#8b5cf6",
+  struct_ops: "#14b8a6",
   other: "#6b7280",
 };
 
@@ -92,6 +93,7 @@ const ZONE_ICONS: Record<string, string> = {
   flow_dissector: "🔀",
   netfilter: "🛡",
   sk_ops: "🔧",
+  struct_ops: "🧩",
   other: "⚙",
 };
 
@@ -268,6 +270,7 @@ export function buildOsMapLayout(
     "kprobe",
     "tracepoint",
     "perf_event",
+    "struct_ops",
     "cgroup",
     "other",
   ];
@@ -806,6 +809,7 @@ function progTypeToZone(rawType: string): KernelZone {
   if (rawType === "flow_dissector") return "flow_dissector";
   if (rawType === "netfilter") return "netfilter";
   if (rawType === "sock_ops" || rawType === "sk_ops") return "sk_ops";
+  if (rawType === "struct_ops") return "struct_ops";
   if (rawType === "socket_filter") return "socket_filter";
   return "other";
 }

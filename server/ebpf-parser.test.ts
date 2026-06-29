@@ -116,6 +116,19 @@ const orphanedProg: RawBpfProg = {
   bytes_memlock: 4096,
 };
 
+const structOpsProg: RawBpfProg = {
+  id: 8,
+  type: "struct_ops",
+  name: "tcp_init",
+  tag: "0000000000000008",
+  gpl_compatible: true,
+  loaded_at: 1700000007,
+  orphaned: false,
+  bytes_xlated: 2440,
+  jited: true,
+  bytes_memlock: 4096,
+};
+
 // ─── parseProgList ─────────────────────────────────────────────────────────────
 
 describe("parseProgList", () => {
@@ -1897,6 +1910,20 @@ describe("buildKernelZones", () => {
     const cgroupZone = zones.find(z => z.zone === "cgroup");
     expect(cgroupZone).toBeDefined();
     expect(cgroupZone!.programs).toHaveLength(1);
+  });
+
+  it("places struct_ops programs in a dedicated struct_ops zone", () => {
+    const progs = parseProgList([structOpsProg]);
+    const zones = buildKernelZones(progs);
+    const structOpsZone = zones.find(z => z.zone === "struct_ops");
+
+    expect(structOpsZone).toMatchObject({
+      label: "Struct Ops",
+      description: "Kernel struct_ops callbacks",
+      osiLayer: "kernel",
+    });
+    expect(structOpsZone?.programs.map(p => p.id)).toEqual([8]);
+    expect(zones.find(z => z.zone === "other")).toBeUndefined();
   });
 
   it("does not count unattached TC programs as TC ingress", () => {
