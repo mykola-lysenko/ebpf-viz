@@ -17,7 +17,9 @@ Plan:
 
 Status: the first implementation is done. The UI now gates automatic Graphviz rendering for large CFGs, renders full Graphviz layouts in a background Web Worker, and shows a searchable, virtualized basic-block fallback with DOT export and explicit "render anyway" controls. CFG summaries are computed on the server and cached by program dump fingerprint, with a client cache fallback for older dump payloads.
 
-Remaining work: validate thresholds against more large-program captures and tune the fallback row density if needed.
+Tuning note: local snapshot metadata showed a long tail of large programs, with a top-end around 11k approximate BPF instructions. Synthetic Graphviz checks rendered 1.4k-block graphs comfortably in the worker, while 2.2k+ blocks produced multi-megabyte SVGs that still require main-thread parse/insert work. The automatic render gate now allows moderate graphs after the worker migration but keeps very large graphs on the virtualized fallback.
+
+Remaining work: validate thresholds against more full large-program captures that include xlated dumps and Graphviz DOT.
 
 ## Packet Chain Awareness
 

@@ -14,10 +14,10 @@ export type {
 } from "./ebpf-types";
 
 export const CFG_AUTO_RENDER_LIMITS = {
-  maxInstructions: 1_200,
+  maxInstructions: 2_400,
   maxDotChars: 250_000,
-  maxNodes: 450,
-  maxEdges: 900,
+  maxNodes: 1_400,
+  maxEdges: 2_000,
 } as const;
 
 function parseJumpTarget(insn: XlatedInsn): number | null {

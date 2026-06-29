@@ -338,7 +338,7 @@ function BytecodeTab({
 
 // ─── CFG tab ──────────────────────────────────────────────────────────────────
 
-const CFG_BLOCK_ROW_HEIGHT = 82;
+const CFG_BLOCK_ROW_HEIGHT = 68;
 const CFG_BLOCK_OVERSCAN = 6;
 const CFG_RENDER_TIMEOUT_MS = 30_000;
 
@@ -517,7 +517,7 @@ function CfgBlockRow({
 
   return (
     <div
-      className="grid grid-cols-[120px_minmax(0,1fr)_120px] gap-3 border-b border-white/5 px-3 py-2 text-xs"
+      className="grid grid-cols-[108px_minmax(0,1fr)_92px] gap-2 overflow-hidden border-b border-white/5 px-3 py-2 text-xs"
       style={{ height: CFG_BLOCK_ROW_HEIGHT }}
     >
       <div className="font-mono text-slate-300">
