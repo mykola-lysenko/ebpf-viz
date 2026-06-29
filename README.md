@@ -88,7 +88,7 @@ After loading a snapshot file, the toolbar switches to **SNAPSHOT** mode. The fi
 
 ### Option A — Standalone Tarball (recommended for devservers)
 
-The standalone tarball bundles the compiled frontend and Express server into a single archive. The target machine needs only **Node.js ≥ 16** — no npm, no Docker, no internet access.
+The standalone tarball bundles the compiled frontend and Express server into a single archive. The target machine needs only **Node.js ≥ 16.5** — no npm, no Docker, no internet access.
 
 **1. Download the latest release:**
 

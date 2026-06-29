@@ -88,7 +88,7 @@ jobs:
 
           **Download:** \`ebpf-viz-standalone.tar.gz\`
 
-          **Quick start (requires Node.js ≥ 16):**
+          **Quick start (requires Node.js ≥ 16.5):**
           \`\`\`bash
           tar -xzf ebpf-viz-standalone.tar.gz
           cp standalone/.env.example standalone/.env

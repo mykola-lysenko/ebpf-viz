@@ -40,7 +40,7 @@ if ! ensure_node_version; then
   if ! ensure_node_version; then
     echo "" >&2
     echo "ERROR: Could not find or switch to Node.js >= $MIN_NODE." >&2
-    echo "The built package will still run on Node.js >= 16 on the target server." >&2
+    echo "The built package will still run on Node.js >= 16.5 on the target server." >&2
     echo "Install nvm (https://github.com/nvm-sh/nvm) and re-run this script." >&2
     exit 1
   fi
@@ -163,7 +163,7 @@ ENVEXAMPLE
 # Write the start script
 cat > "$OUT_DIR/start.sh" << 'STARTSCRIPT'
 #!/usr/bin/env bash
-# start.sh — run on the devserver (requires Node.js >= 16 only, no npm needed)
+# start.sh — run on the devserver (requires Node.js >= 16.5 only, no npm needed)
 #
 # Usage:
 #   ./start.sh           — normal mode (reads .env)
@@ -196,13 +196,14 @@ done
 # ── Check Node.js version ──────────────────────────────────────────────────────
 if ! command -v node &>/dev/null; then
   echo "ERROR: Node.js is not installed or not on PATH." >&2
-  echo "Install Node.js >= 16 from https://nodejs.org/" >&2
+  echo "Install Node.js >= 16.5 from https://nodejs.org/" >&2
   exit 1
 fi
 
 NODE_MAJOR=$(node -e "process.stdout.write(String(process.versions.node.split('.')[0]))")
-if [ "$NODE_MAJOR" -lt 16 ]; then
-  echo "ERROR: Node.js >= 16 is required (found: $(node --version))." >&2
+NODE_MINOR=$(node -e "process.stdout.write(String(process.versions.node.split('.')[1]))")
+if [ "$NODE_MAJOR" -lt 16 ] || { [ "$NODE_MAJOR" -eq 16 ] && [ "$NODE_MINOR" -lt 5 ]; }; then
+  echo "ERROR: Node.js >= 16.5 is required (found: $(node --version))." >&2
   echo "Upgrade Node.js from https://nodejs.org/" >&2
   exit 1
 fi
@@ -254,43 +255,15 @@ STARTSCRIPT
 chmod +x "$OUT_DIR/start.sh"
 
 # Write a minimal package.json (ESM bundle).
-# undici is required for Node 16 because it provides fetch/Headers globals used
-# by tRPC. It is intentionally installed at build time and bundled into the
-# tarball so target machines need only Node.js, not npm or registry access.
 cat > "$OUT_DIR/package.json" << 'PKGJSON'
 {
   "name": "ebpf-viz-standalone",
   "version": "1.0.0",
-  "type": "module",
-  "dependencies": {
-    "undici": "5.29.0"
-  }
+  "type": "module"
 }
 PKGJSON
 
-# Copy and verify the Node 16 runtime polyfill dependency from the already
-# installed project dependencies. This avoids a second registry install during
-# standalone assembly and guarantees target machines never need npm.
-echo "  Copying undici for Node 16 compatibility..."
-OUT_DIR="$OUT_DIR" node <<'NODE'
-const fs = require("fs");
-const path = require("path");
-
-function copyPackage(name, paths) {
-  const source = path.dirname(require.resolve(`${name}/package.json`, paths ? { paths } : undefined));
-  const destination = path.join(process.env.OUT_DIR, "node_modules", ...name.split("/"));
-  fs.rmSync(destination, { recursive: true, force: true });
-  fs.mkdirSync(path.dirname(destination), { recursive: true });
-  fs.cpSync(source, destination, { recursive: true, dereference: true });
-  return source;
-}
-
-const undiciDir = copyPackage("undici");
-copyPackage("@fastify/busboy", [undiciDir]);
-NODE
-
-# Keep a lockfile in standalone/ so CI/release can audit the packaged runtime
-# dependency without mutating the package.
+# Keep a lockfile in standalone/ so CI/release can audit the packaged runtime.
 cat > "$OUT_DIR/package-lock.json" << 'PKGLOCK'
 {
   "name": "ebpf-viz-standalone",
@@ -300,40 +273,11 @@ cat > "$OUT_DIR/package-lock.json" << 'PKGLOCK'
   "packages": {
     "": {
       "name": "ebpf-viz-standalone",
-      "version": "1.0.0",
-      "dependencies": {
-        "undici": "5.29.0"
-      }
-    },
-    "node_modules/@fastify/busboy": {
-      "version": "2.1.1",
-      "resolved": "https://registry.npmjs.org/@fastify/busboy/-/busboy-2.1.1.tgz",
-      "integrity": "sha512-vBZP4NlzfOlerQTnba4aqZoMhE/a9HY7HRqoOPaETQcSQuWEIyZMHGfVu6w9wGtGK5fED5qRs2DteVCjOH60sA==",
-      "license": "MIT",
-      "engines": {
-        "node": ">=14"
-      }
-    },
-    "node_modules/undici": {
-      "version": "5.29.0",
-      "resolved": "https://registry.npmjs.org/undici/-/undici-5.29.0.tgz",
-      "integrity": "sha512-raqeBD6NQK4SkWhQzeYKd1KmIG6dllBOTt55Rmkt4HtI9mwdWtJljnrXjAFUBLTSN67HWrOIZ3EPF4kjUw80Bg==",
-      "license": "MIT",
-      "dependencies": {
-        "@fastify/busboy": "^2.0.0"
-      },
-      "engines": {
-        "node": ">=14.0"
-      }
+      "version": "1.0.0"
     }
   }
 }
 PKGLOCK
-
-(cd "$OUT_DIR" && node -e 'require.resolve("undici"); const undici = require("undici"); if (!undici.fetch || !undici.Headers) throw new Error("invalid undici install");')
-test -f "$OUT_DIR/node_modules/undici/package.json"
-test -f "$OUT_DIR/node_modules/@fastify/busboy/package.json"
-echo "  Verified bundled undici runtime dependency."
 
 # ── 6. Create the tarball ──────────────────────────────────────────────────────
 echo "[6/6] Creating tarball: $TARBALL"
@@ -352,7 +296,7 @@ echo ""
 echo "Contents:"
 tar -tzf "$TARBALL" | head -20 || true
 echo ""
-echo "To deploy (requires Node.js >= 16):"
+echo "To deploy (requires Node.js >= 16.5):"
 echo "  bash scripts/devvm-standalone.sh user@devserver"
 echo ""
 echo "Manual deploy:"
