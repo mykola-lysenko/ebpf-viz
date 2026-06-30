@@ -645,6 +645,26 @@ function confidenceClasses(confidence: StructOpsAlgorithmSummary["confidence"]) 
   }
 }
 
+function callbackRoleCount(algorithm: StructOpsAlgorithmSummary): number {
+  return new Set(
+    algorithm.callbacks.map(callback => callback.descriptor.callback)
+  ).size;
+}
+
+function structOpsInstanceCount(algorithm: StructOpsAlgorithmSummary): number {
+  return Math.max(1, algorithm.btfIds.length, algorithm.mapNames.length);
+}
+
+function algorithmSourceSummary(algorithm: StructOpsAlgorithmSummary): string {
+  const instances = structOpsInstanceCount(algorithm);
+  if (instances > 1 && algorithm.mapNames.length > 0) {
+    return `${algorithm.sourceLabel} · ${algorithm.mapNames[0]} · ${instances} instances`;
+  }
+  return `source: ${algorithm.sourceLabel}${
+    algorithm.sourceDetail ? ` · ${algorithm.sourceDetail}` : ""
+  }`;
+}
+
 function TcpCongestionControlStructOpsCard({
   algorithms,
   historyMap,
@@ -656,8 +676,12 @@ function TcpCongestionControlStructOpsCard({
 }) {
   if (algorithms.length === 0) return null;
 
-  const callbackCount = algorithms.reduce(
+  const callbackProgramCount = algorithms.reduce(
     (total, algorithm) => total + algorithm.count,
+    0
+  );
+  const roleCount = algorithms.reduce(
+    (total, algorithm) => total + callbackRoleCount(algorithm),
     0
   );
   const activeCount = algorithms.reduce(
@@ -696,7 +720,11 @@ function TcpCongestionControlStructOpsCard({
             {algorithms.length} algorithm{algorithms.length === 1 ? "" : "s"}
           </span>
           <span className="rounded border border-border/60 px-1.5 py-0.5 text-muted-foreground">
-            {callbackCount} callback{callbackCount === 1 ? "" : "s"}
+            {roleCount} role{roleCount === 1 ? "" : "s"}
+          </span>
+          <span className="rounded border border-border/60 px-1.5 py-0.5 text-muted-foreground">
+            {callbackProgramCount} callback program
+            {callbackProgramCount === 1 ? "" : "s"}
           </span>
           {statsEnabled && totalCallsPerSec > 0 ? (
             <span className="rounded border border-cyan-500/25 bg-cyan-500/5 px-1.5 py-0.5 text-cyan-300/80">
@@ -711,94 +739,103 @@ function TcpCongestionControlStructOpsCard({
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
-        {algorithms.map(algorithm => (
-          <div
-            key={`${algorithm.kind}:${algorithm.algorithm}`}
-            className="rounded-lg border border-white/8 bg-white/[0.03] p-3"
-          >
-            <div className="flex items-start justify-between gap-3 mb-2">
-              <div className="min-w-0">
-                <div className="flex flex-wrap items-center gap-1.5">
-                  <span className="text-sm font-semibold text-foreground">
-                    {algorithm.algorithm}
-                  </span>
-                  <span
-                    className={cn(
-                      "rounded border px-1.5 py-0.5 text-[9px] font-mono",
-                      confidenceClasses(algorithm.confidence)
-                    )}
-                    title={`Inference confidence: ${algorithm.confidence}. Source: ${algorithm.sourceLabel} (${algorithm.sourceDetail}).`}
-                  >
-                    {algorithm.confidence}
-                  </span>
-                </div>
-                <div
-                  className="text-[10px] text-muted-foreground truncate"
-                  title={[
-                    `source: ${algorithm.sourceLabel}`,
-                    algorithm.sourceDetail,
-                    algorithm.btfIds.length > 0
-                      ? `BTF id${algorithm.btfIds.length === 1 ? "" : "s"}: ${algorithm.btfIds.join(", ")}`
-                      : null,
-                  ]
-                    .filter(Boolean)
-                    .join("\n")}
-                >
-                  source: {algorithm.sourceLabel}
-                  {algorithm.sourceDetail ? ` · ${algorithm.sourceDetail}` : ""}
-                </div>
-              </div>
-              <div className="text-right shrink-0">
-                <div className="text-[11px] font-mono text-teal-300">
-                  {algorithm.count} cb
-                </div>
-                <div className="text-[10px] font-mono text-muted-foreground">
-                  {algorithm.totalCallsPerSec > 0
-                    ? fmtCps(algorithm.totalCallsPerSec)
-                    : fmtBytes(algorithm.totalMemlock)}
-                </div>
-              </div>
-            </div>
-
-            <div className="space-y-1.5">
-              {algorithm.callbacks.slice(0, 6).map(callback => (
-                <div
-                  key={callback.program.id}
-                  className="flex items-center gap-2 min-w-0"
-                >
-                  <ProgBadge
-                    program={callback.program}
-                    history={historyMap.get(callback.program.id)}
-                    compact
-                  />
-                  <span
+        {algorithms.map(algorithm => {
+          const algorithmRoleCount = callbackRoleCount(algorithm);
+          const instanceCount = structOpsInstanceCount(algorithm);
+          return (
+            <div
+              key={`${algorithm.kind}:${algorithm.algorithm}`}
+              className="rounded-lg border border-white/8 bg-white/[0.03] p-3"
+            >
+              <div className="flex items-start justify-between gap-3 mb-2">
+                <div className="min-w-0">
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    <span className="text-sm font-semibold text-foreground">
+                      {algorithm.algorithm}
+                    </span>
+                    <span
+                      className={cn(
+                        "rounded border px-1.5 py-0.5 text-[9px] font-mono",
+                        confidenceClasses(algorithm.confidence)
+                      )}
+                      title={`Inference confidence: ${algorithm.confidence}. Source: ${algorithm.sourceLabel} (${algorithm.sourceDetail}).`}
+                    >
+                      {algorithm.confidence}
+                    </span>
+                  </div>
+                  <div
                     className="text-[10px] text-muted-foreground truncate"
-                    title={`callback: ${callback.descriptor.callback}\nsource: ${callback.descriptor.sourceLabel} (${callback.descriptor.sourceDetail})\nconfidence: ${callback.descriptor.confidence}`}
+                    title={[
+                      `source: ${algorithm.sourceLabel}`,
+                      algorithm.sourceDetail,
+                      algorithm.mapNames.length > 0
+                        ? `struct_ops map${algorithm.mapNames.length === 1 ? "" : "s"}: ${algorithm.mapNames.join(", ")}`
+                        : null,
+                      algorithm.btfIds.length > 0
+                        ? `BTF id${algorithm.btfIds.length === 1 ? "" : "s"}: ${algorithm.btfIds.join(", ")}`
+                        : null,
+                      `loaded callback programs: ${algorithm.count}`,
+                      `callback roles: ${algorithmRoleCount}`,
+                    ]
+                      .filter(Boolean)
+                      .join("\n")}
                   >
-                    {callback.descriptor.callbackLabel}
-                  </span>
-                  <span className="ml-auto text-[10px] font-mono text-muted-foreground/70 shrink-0">
-                    {callback.callsPerSec > 0
-                      ? fmtCps(callback.callsPerSec)
-                      : fmtBytes(callback.program.memlock)}
-                  </span>
+                    {algorithmSourceSummary(algorithm)}
+                  </div>
                 </div>
-              ))}
-              {algorithm.callbacks.length > 6 && (
-                <div className="text-[10px] text-muted-foreground/60">
-                  +{algorithm.callbacks.length - 6} more callback
-                  {algorithm.callbacks.length - 6 === 1 ? "" : "s"}
+                <div className="text-right shrink-0">
+                  <div className="text-[11px] font-mono text-teal-300">
+                    {algorithmRoleCount} role
+                    {algorithmRoleCount === 1 ? "" : "s"}
+                  </div>
+                  <div className="text-[10px] font-mono text-muted-foreground">
+                    {instanceCount > 1
+                      ? `${instanceCount} inst · ${algorithm.count} progs`
+                      : `${algorithm.count} prog${algorithm.count === 1 ? "" : "s"}`}
+                  </div>
                 </div>
-              )}
+              </div>
+
+              <div className="space-y-1.5">
+                {algorithm.callbacks.slice(0, 6).map(callback => (
+                  <div
+                    key={callback.program.id}
+                    className="flex items-center gap-2 min-w-0"
+                  >
+                    <ProgBadge
+                      program={callback.program}
+                      history={historyMap.get(callback.program.id)}
+                      compact
+                    />
+                    <span
+                      className="text-[10px] text-muted-foreground truncate"
+                      title={`callback: ${callback.descriptor.callback}\nsource: ${callback.descriptor.sourceLabel} (${callback.descriptor.sourceDetail})\nconfidence: ${callback.descriptor.confidence}`}
+                    >
+                      {callback.descriptor.callbackLabel}
+                    </span>
+                    <span className="ml-auto text-[10px] font-mono text-muted-foreground/70 shrink-0">
+                      {callback.callsPerSec > 0
+                        ? fmtCps(callback.callsPerSec)
+                        : fmtBytes(callback.program.memlock)}
+                    </span>
+                  </div>
+                ))}
+                {algorithm.callbacks.length > 6 && (
+                  <div className="text-[10px] text-muted-foreground/60">
+                    +{algorithm.callbacks.length - 6} more callback program
+                    {algorithm.callbacks.length - 6 === 1 ? "" : "s"}
+                  </div>
+                )}
+              </div>
             </div>
-          </div>
-        ))}
+          );
+        })}
       </div>
 
       {statsEnabled && activeCount > 0 && (
         <div className="mt-3 text-[10px] text-muted-foreground">
-          {activeCount} callback{activeCount === 1 ? "" : "s"} currently have
-          runtime activity.
+          {activeCount} callback program{activeCount === 1 ? "" : "s"} currently
+          have runtime activity.
         </div>
       )}
     </div>
