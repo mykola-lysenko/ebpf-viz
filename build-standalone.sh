@@ -8,6 +8,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 OUT_DIR="$SCRIPT_DIR/standalone"
 TARBALL="$SCRIPT_DIR/ebpf-viz-standalone.tar.gz"
 STUB_DIR="$SCRIPT_DIR/.standalone-stubs"
+PACKAGE_VERSION=""
 
 echo "=== eBPF Viz — Standalone Build ==="
 echo ""
@@ -46,6 +47,7 @@ if ! ensure_node_version; then
   fi
 fi
 echo "  Using Node.js $(node --version)"
+PACKAGE_VERSION="$(node -e "process.stdout.write(JSON.parse(require('fs').readFileSync('$SCRIPT_DIR/package.json', 'utf8')).version)")"
 
 # ── 1. Install dependencies ────────────────────────────────────────────────────
 echo "[1/6] Installing dependencies..."
@@ -258,26 +260,30 @@ chmod +x "$OUT_DIR/start.sh"
 cat > "$OUT_DIR/package.json" << 'PKGJSON'
 {
   "name": "ebpf-viz-standalone",
-  "version": "1.0.0",
+  "version": "__PACKAGE_VERSION__",
   "type": "module"
 }
 PKGJSON
+sed -i.bak "s/__PACKAGE_VERSION__/$PACKAGE_VERSION/g" "$OUT_DIR/package.json"
+rm -f "$OUT_DIR/package.json.bak"
 
 # Keep a lockfile in standalone/ so CI/release can audit the packaged runtime.
 cat > "$OUT_DIR/package-lock.json" << 'PKGLOCK'
 {
   "name": "ebpf-viz-standalone",
-  "version": "1.0.0",
+  "version": "__PACKAGE_VERSION__",
   "lockfileVersion": 3,
   "requires": true,
   "packages": {
     "": {
       "name": "ebpf-viz-standalone",
-      "version": "1.0.0"
+      "version": "__PACKAGE_VERSION__"
     }
   }
 }
 PKGLOCK
+sed -i.bak "s/__PACKAGE_VERSION__/$PACKAGE_VERSION/g" "$OUT_DIR/package-lock.json"
+rm -f "$OUT_DIR/package-lock.json.bak"
 
 # ── 6. Create the tarball ──────────────────────────────────────────────────────
 echo "[6/6] Creating tarball: $TARBALL"

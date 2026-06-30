@@ -4,6 +4,8 @@ on:
   push:
     branches:
       - main
+    tags:
+      - 'v*'
 
 permissions:
   contents: write   # needed to create/update releases and upload assets
@@ -70,8 +72,62 @@ jobs:
         run: |
           echo "sha=$(git rev-parse --short HEAD)" >> $GITHUB_OUTPUT
           echo "date=$(date -u +%Y-%m-%d)" >> $GITHUB_OUTPUT
+          package_version="$(node -e "process.stdout.write(require('./package.json').version)")"
+          echo "package_version=${package_version}" >> $GITHUB_OUTPUT
+
+      - name: Validate version tag
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          tag_version="${GITHUB_REF_NAME#v}"
+          package_version="${{ steps.meta.outputs.package_version }}"
+          if [ "$tag_version" != "$package_version" ]; then
+            echo "Tag ${GITHUB_REF_NAME} does not match package.json version ${package_version}." >&2
+            exit 1
+          fi
+
+      - name: Prepare versioned release notes
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          set -euo pipefail
+          tag="${GITHUB_REF_NAME}"
+          version="${tag#v}"
+          notes_file="release-notes.md"
+
+          awk -v version="$version" '
+            BEGIN { capture = 0 }
+            /^## \[/ {
+              if (capture) exit
+              capture = ($0 ~ "\\[" version "\\]")
+            }
+            capture { print }
+          ' CHANGELOG.md > "$notes_file"
+
+          if [ ! -s "$notes_file" ]; then
+            cat > "$notes_file" <<NOTES
+          ## ${tag}
+
+          Built from commit \`${{ steps.meta.outputs.sha }}\`.
+          NOTES
+          fi
+
+          cat >> "$notes_file" <<NOTES
+
+          **Download:** \`ebpf-viz-standalone-${tag}.tar.gz\`
+
+          **Quick start (requires Node.js ≥ 16.5):**
+          \`\`\`bash
+          tar -xzf ebpf-viz-standalone-${tag}.tar.gz
+          cp standalone/.env.example standalone/.env
+          ./standalone/start.sh --demo
+          \`\`\`
+          NOTES
+
+      - name: Prepare versioned release asset
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: cp ebpf-viz-standalone.tar.gz "ebpf-viz-standalone-${GITHUB_REF_NAME}.tar.gz"
 
       - name: Delete existing rolling release (if any)
+        if: github.ref == 'refs/heads/main'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
@@ -79,6 +135,7 @@ jobs:
           git push origin :refs/tags/latest 2>/dev/null || true
 
       - name: Create rolling release and upload tarball
+        if: github.ref == 'refs/heads/main'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
@@ -97,3 +154,24 @@ jobs:
           \`\`\`" \
             --prerelease \
             ebpf-viz-standalone.tar.gz
+
+      - name: Create versioned release and upload tarball
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          tag="${GITHUB_REF_NAME}"
+          asset="ebpf-viz-standalone-${tag}.tar.gz"
+
+          if gh release view "$tag" >/dev/null 2>&1; then
+            gh release edit "$tag" \
+              --title "eBPF Viz ${tag}" \
+              --notes-file release-notes.md
+          else
+            gh release create "$tag" \
+              --title "eBPF Viz ${tag}" \
+              --notes-file release-notes.md
+          fi
+
+          gh release upload "$tag" "$asset" --clobber
