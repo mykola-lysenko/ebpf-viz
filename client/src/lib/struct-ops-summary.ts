@@ -46,6 +46,9 @@ export interface StructOpsAlgorithmSummary<
   algorithm: string;
   count: number;
   activeCount: number;
+  callbackRoleCount: number;
+  instanceCount: number;
+  duplicateInstanceCount: number;
   totalMemlock: number;
   totalCallsPerSec: number;
   callbacks: StructOpsCallbackSummary<TProgram>[];
@@ -380,6 +383,9 @@ export function buildStructOpsKindSummaries<
         algorithm: descriptor.algorithm,
         count: 0,
         activeCount: 0,
+        callbackRoleCount: 0,
+        instanceCount: 0,
+        duplicateInstanceCount: 0,
         totalMemlock: 0,
         totalCallsPerSec: 0,
         callbacks: [],
@@ -441,6 +447,15 @@ export function buildStructOpsKindSummaries<
   for (const algorithm of sortedAlgorithms) {
     const kind = kinds.get(algorithm.kind);
     if (kind) kind.algorithms.push(algorithm);
+    algorithm.callbackRoleCount = new Set(
+      algorithm.callbacks.map(callback => callback.descriptor.callback)
+    ).size;
+    algorithm.instanceCount = Math.max(
+      1,
+      algorithm.btfIds.length,
+      algorithm.mapNames.length
+    );
+    algorithm.duplicateInstanceCount = Math.max(0, algorithm.instanceCount - 1);
     algorithm.callbacks.sort(
       (a, b) =>
         b.callsPerSec - a.callsPerSec ||

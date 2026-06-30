@@ -645,20 +645,9 @@ function confidenceClasses(confidence: StructOpsAlgorithmSummary["confidence"]) 
   }
 }
 
-function callbackRoleCount(algorithm: StructOpsAlgorithmSummary): number {
-  return new Set(
-    algorithm.callbacks.map(callback => callback.descriptor.callback)
-  ).size;
-}
-
-function structOpsInstanceCount(algorithm: StructOpsAlgorithmSummary): number {
-  return Math.max(1, algorithm.btfIds.length, algorithm.mapNames.length);
-}
-
 function algorithmSourceSummary(algorithm: StructOpsAlgorithmSummary): string {
-  const instances = structOpsInstanceCount(algorithm);
-  if (instances > 1 && algorithm.mapNames.length > 0) {
-    return `${algorithm.sourceLabel} · ${algorithm.mapNames[0]} · ${instances} instances`;
+  if (algorithm.instanceCount > 1 && algorithm.mapNames.length > 0) {
+    return `${algorithm.sourceLabel} · ${algorithm.mapNames[0]} · ${algorithm.instanceCount} instances`;
   }
   return `source: ${algorithm.sourceLabel}${
     algorithm.sourceDetail ? ` · ${algorithm.sourceDetail}` : ""
@@ -681,7 +670,11 @@ function TcpCongestionControlStructOpsCard({
     0
   );
   const roleCount = algorithms.reduce(
-    (total, algorithm) => total + callbackRoleCount(algorithm),
+    (total, algorithm) => total + algorithm.callbackRoleCount,
+    0
+  );
+  const duplicateInstanceCount = algorithms.reduce(
+    (total, algorithm) => total + algorithm.duplicateInstanceCount,
     0
   );
   const activeCount = algorithms.reduce(
@@ -726,6 +719,15 @@ function TcpCongestionControlStructOpsCard({
             {callbackProgramCount} callback program
             {callbackProgramCount === 1 ? "" : "s"}
           </span>
+          {duplicateInstanceCount > 0 && (
+            <span
+              className="rounded border border-amber-500/25 bg-amber-500/5 px-1.5 py-0.5 text-amber-300/80"
+              title="Multiple struct_ops registrations for the same inferred algorithm. These are loaded BPF objects, not sockets."
+            >
+              {duplicateInstanceCount} duplicate instance
+              {duplicateInstanceCount === 1 ? "" : "s"}
+            </span>
+          )}
           {statsEnabled && totalCallsPerSec > 0 ? (
             <span className="rounded border border-cyan-500/25 bg-cyan-500/5 px-1.5 py-0.5 text-cyan-300/80">
               {fmtCps(totalCallsPerSec)}
@@ -740,12 +742,15 @@ function TcpCongestionControlStructOpsCard({
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
         {algorithms.map(algorithm => {
-          const algorithmRoleCount = callbackRoleCount(algorithm);
-          const instanceCount = structOpsInstanceCount(algorithm);
           return (
             <div
               key={`${algorithm.kind}:${algorithm.algorithm}`}
-              className="rounded-lg border border-white/8 bg-white/[0.03] p-3"
+              className={cn(
+                "rounded-lg border bg-white/[0.03] p-3",
+                algorithm.duplicateInstanceCount > 0
+                  ? "border-amber-500/25"
+                  : "border-white/8"
+              )}
             >
               <div className="flex items-start justify-between gap-3 mb-2">
                 <div className="min-w-0">
@@ -775,7 +780,10 @@ function TcpCongestionControlStructOpsCard({
                         ? `BTF id${algorithm.btfIds.length === 1 ? "" : "s"}: ${algorithm.btfIds.join(", ")}`
                         : null,
                       `loaded callback programs: ${algorithm.count}`,
-                      `callback roles: ${algorithmRoleCount}`,
+                      `callback roles: ${algorithm.callbackRoleCount}`,
+                      algorithm.duplicateInstanceCount > 0
+                        ? `duplicate instances: ${algorithm.duplicateInstanceCount}`
+                        : null,
                     ]
                       .filter(Boolean)
                       .join("\n")}
@@ -785,16 +793,26 @@ function TcpCongestionControlStructOpsCard({
                 </div>
                 <div className="text-right shrink-0">
                   <div className="text-[11px] font-mono text-teal-300">
-                    {algorithmRoleCount} role
-                    {algorithmRoleCount === 1 ? "" : "s"}
+                    {algorithm.callbackRoleCount} role
+                    {algorithm.callbackRoleCount === 1 ? "" : "s"}
                   </div>
                   <div className="text-[10px] font-mono text-muted-foreground">
-                    {instanceCount > 1
-                      ? `${instanceCount} inst · ${algorithm.count} progs`
+                    {algorithm.instanceCount > 1
+                      ? `${algorithm.instanceCount} inst · ${algorithm.count} progs`
                       : `${algorithm.count} prog${algorithm.count === 1 ? "" : "s"}`}
                   </div>
                 </div>
               </div>
+
+              {algorithm.duplicateInstanceCount > 0 && (
+                <div
+                  className="mb-2 rounded border border-amber-500/20 bg-amber-500/5 px-2 py-1 text-[10px] text-amber-200/80"
+                  title="Duplicate instances mean multiple loaded struct_ops registrations with the same inferred algorithm name. This consumes kernel memory, but does not mean one instance per socket."
+                >
+                  {algorithm.duplicateInstanceCount} extra loaded instance
+                  {algorithm.duplicateInstanceCount === 1 ? "" : "s"} detected
+                </div>
+              )}
 
               <div className="space-y-1.5">
                 {algorithm.callbacks.slice(0, 6).map(callback => (

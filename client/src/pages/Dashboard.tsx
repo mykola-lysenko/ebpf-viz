@@ -442,6 +442,16 @@ function StructOpsSummaryCard() {
     (total, kind) => total + kind.algorithms.length,
     0
   );
+  const duplicateInstanceCount = kindSummaries.reduce(
+    (total, kind) =>
+      total +
+      kind.algorithms.reduce(
+        (kindTotal, algorithm) =>
+          kindTotal + algorithm.duplicateInstanceCount,
+        0
+      ),
+    0
+  );
   const maxKindCount = Math.max(1, ...kindSummaries.map(kind => kind.count));
 
   return (
@@ -503,6 +513,17 @@ function StructOpsSummaryCard() {
           </div>
         </div>
       </div>
+
+      {duplicateInstanceCount > 0 && (
+        <div
+          className="mb-5 rounded-lg border border-amber-500/25 bg-amber-500/5 px-3 py-2 text-xs text-amber-200/85"
+          title="Duplicate instances are multiple loaded struct_ops registrations for the same inferred algorithm. They are not per-socket instances."
+        >
+          {duplicateInstanceCount} duplicate struct_ops instance
+          {duplicateInstanceCount === 1 ? "" : "s"} detected across algorithms.
+          These are loaded BPF objects and may consume extra kernel memory.
+        </div>
+      )}
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
         <div>
@@ -570,6 +591,14 @@ function StructOpsSummaryCard() {
                     <span className="rounded border border-teal-500/25 bg-teal-500/5 px-1.5 py-0.5 text-[9px] font-mono text-teal-300/80">
                       {algorithm.kindLabel}
                     </span>
+                    {algorithm.duplicateInstanceCount > 0 && (
+                      <span
+                        className="rounded border border-amber-500/25 bg-amber-500/5 px-1.5 py-0.5 text-[9px] font-mono text-amber-300/80"
+                        title="Multiple loaded struct_ops registrations for this inferred algorithm."
+                      >
+                        +{algorithm.duplicateInstanceCount} dup inst
+                      </span>
+                    )}
                     <span
                       className="ml-auto text-[11px] font-mono tabular-nums shrink-0"
                       style={{

@@ -20,6 +20,13 @@ const structOpsMaps = [
     name: "tcp_dctcp_ops",
     btfId: 11,
   },
+  {
+    id: 102,
+    type: "struct_ops",
+    rawType: "struct_ops",
+    name: "tcp_d2tcp_ops",
+    btfId: 12,
+  },
 ] as const;
 
 describe("struct ops summary helpers", () => {
@@ -103,12 +110,14 @@ describe("struct ops summary helpers", () => {
         { id: 1, name: "ssthresh", memlock: 100, btfId: 10 },
         { id: 2, name: "d2tcp_acked", memlock: 200, btfId: 10 },
         { id: 3, name: "dctcp_update_alpha", memlock: 300, btfId: 11 },
+        { id: 4, name: "ssthresh", memlock: 400, btfId: 12 },
       ],
       [...structOpsMaps],
       new Map([
         [1, 1],
         [2, 7],
         [3, 3],
+        [4, 0],
       ])
     );
 
@@ -116,9 +125,9 @@ describe("struct ops summary helpers", () => {
     expect(summaries[0]).toMatchObject({
       kind: "tcp_congestion_ops",
       label: "TCP congestion control",
-      count: 3,
+      count: 4,
       activeCount: 3,
-      totalMemlock: 600,
+      totalMemlock: 1000,
       totalCallsPerSec: 11,
     });
     expect(
@@ -129,15 +138,21 @@ describe("struct ops summary helpers", () => {
         confidence: algorithm.confidence,
         sourceLabel: algorithm.sourceLabel,
         btfIds: algorithm.btfIds,
+        callbackRoleCount: algorithm.callbackRoleCount,
+        instanceCount: algorithm.instanceCount,
+        duplicateInstanceCount: algorithm.duplicateInstanceCount,
       }))
     ).toEqual([
       {
         algorithm: "D2TCP",
-        count: 2,
+        count: 3,
         examples: ["ssthresh", "acked"],
         confidence: "high",
         sourceLabel: "struct_ops map",
-        btfIds: [10],
+        btfIds: [10, 12],
+        callbackRoleCount: 2,
+        instanceCount: 2,
+        duplicateInstanceCount: 1,
       },
       {
         algorithm: "DCTCP",
@@ -146,6 +161,9 @@ describe("struct ops summary helpers", () => {
         confidence: "high",
         sourceLabel: "struct_ops map",
         btfIds: [11],
+        callbackRoleCount: 1,
+        instanceCount: 1,
+        duplicateInstanceCount: 0,
       },
     ]);
   });
