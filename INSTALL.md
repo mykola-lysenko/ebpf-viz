@@ -129,15 +129,23 @@ sudo dnf install -y \
 ```
 
 > **Fedora 38+ / RHEL 9+:** a pre-built bpftool package is available.
-> Try `sudo dnf install -y bpftool` first. If `bpftool version` reports ≥ 7.x,
-> skip Step 2. On Fedora the binary lands at `/usr/sbin/bpftool` — set
-> `BPFTOOL_PATH=/usr/sbin/bpftool` in your `.env` accordingly.
+> Try `sudo dnf install -y bpftool` first. If `bpftool version` reports ≥ 7.x
+> **and** its `features:` line includes `skeletons`, skip Step 2. On Fedora the
+> binary lands at `/usr/sbin/bpftool` — set `BPFTOOL_PATH=/usr/sbin/bpftool`
+> in your `.env` accordingly.
+>
+> **Check the features line, not just the version.** A bpftool built without
+> skeleton support (e.g. Ubuntu's `linux-tools` packages) silently omits the
+> `pids` field, so the visualizer cannot attribute programs to their owning
+> processes and every program shows as *orphaned*. The server logs a warning
+> at startup when it detects such a build.
 
 #### Debian / Ubuntu
 
 ```bash
 sudo apt-get install -y \
   git build-essential \
+  clang llvm \
   libelf-dev \
   zlib1g-dev \
   libcap-dev \
@@ -145,6 +153,10 @@ sudo apt-get install -y \
   pkg-config \
   binutils-dev
 ```
+
+> `clang`/`llvm` are required for the skeleton (pids/ownership) support —
+> without them the build succeeds but produces a bpftool that cannot report
+> which processes own each program.
 
 #### Arch Linux
 
@@ -163,7 +175,8 @@ sudo pacman -S --needed \
 
 ### Step 2 — Build bpftool from source
 
-> Skip if you installed a pre-built bpftool in Step 1 and `bpftool version` ≥ 7.x.
+> Skip if you installed a pre-built bpftool in Step 1, `bpftool version` ≥ 7.x,
+> **and** its `features:` line lists `skeletons`.
 
 ```bash
 git clone --depth=1 https://github.com/libbpf/bpftool.git

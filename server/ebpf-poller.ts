@@ -79,6 +79,7 @@ let latestMaps: BpfMap[] = [];
 let pollingTimer: ReturnType<typeof setInterval> | null = null;
 let lastError: string | null = null;
 let bpftoolVersion = "unknown";
+let bpftoolHasSkeletons: boolean | null = null;
 let kernelVersion = "unknown";
 let isPolling = false;
 let statsEnabled = false;
@@ -108,6 +109,24 @@ async function ensureBpfStatsEnabled(): Promise<void> {
 
 // ─── System info ───────────────────────────────────────────────────────────
 
+/**
+ * Parse `bpftool version` output. `hasSkeletons` is null when the build is
+ * too old to print a features line at all (pre-v5.19), so we can't tell.
+ * A build without the "skeletons" feature silently omits the `pids` field
+ * from all prog/map listings — every program then looks ownerless/orphaned.
+ */
+export function parseBpftoolVersion(stdout: string): {
+  version: string;
+  hasSkeletons: boolean | null;
+} {
+  const lines = stdout.trim().split("\n");
+  const featuresLine = lines.find(line => line.trim().startsWith("features:"));
+  return {
+    version: lines[0] ?? "unknown",
+    hasSkeletons: featuresLine ? /\bskeletons\b/.test(featuresLine) : null,
+  };
+}
+
 async function getSystemInfo(): Promise<void> {
   try {
     const { stdout: kv } = await execAsync("uname -r");
@@ -116,7 +135,18 @@ async function getSystemInfo(): Promise<void> {
 
   try {
     const { stdout } = await execFileAsync(config.bpftoolPath, ["version"], { timeout: 5000 });
-    bpftoolVersion = stdout.trim().split("\n")[0];
+    const parsed = parseBpftoolVersion(stdout);
+    bpftoolVersion = parsed.version;
+    bpftoolHasSkeletons = parsed.hasSkeletons;
+    if (bpftoolHasSkeletons === false) {
+      console.warn(
+        `[ebpf-poller] ${config.bpftoolPath} was built without skeleton support ` +
+        "(no \"skeletons\" entry in `bpftool version` features) — it cannot report " +
+        "process ownership, so the pids field is silently omitted and every program " +
+        "will appear orphaned. Ubuntu's linux-tools bpftool is a common culprit; " +
+        "build from https://github.com/libbpf/bpftool and point BPFTOOL_PATH at it."
+      );
+    }
   } catch { bpftoolVersion = "built from source"; }
 }
 
@@ -402,6 +432,9 @@ export function getPollerStatus(): {
   lastError: string | null;
   lastPollTime: number | null;
   statsEnabled: boolean;
+  /** false = bpftool build cannot report pids (all programs look orphaned);
+   *  null = unknown (demo mode, or bpftool too old to list features). */
+  bpftoolHasSkeletons: boolean | null;
 } {
   return {
     running: pollingTimer !== null,
@@ -409,6 +442,7 @@ export function getPollerStatus(): {
     lastError,
     lastPollTime: latestSnapshot?.timestamp ?? null,
     statsEnabled,
+    bpftoolHasSkeletons,
   };
 }
 
