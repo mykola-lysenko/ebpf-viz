@@ -801,7 +801,16 @@ export function buildOsMapLayout(
 function progTypeToZone(rawType: string): KernelZone {
   if (rawType === "xdp") return "xdp";
   if (rawType === "sched_cls" || rawType === "sched_act") return "tc_ingress";
-  if (rawType === "kprobe" || rawType === "kretprobe") return "kprobe";
+  if (
+    rawType === "kprobe" ||
+    rawType === "kretprobe" ||
+    rawType === "tracing" ||
+    rawType === "ext" ||
+    rawType === "fentry" ||
+    rawType === "fexit" ||
+    rawType === "freplace"
+  )
+    return "kprobe";
   if (rawType === "tracepoint" || rawType === "raw_tracepoint")
     return "tracepoint";
   if (rawType === "perf_event") return "perf_event";
@@ -810,7 +819,8 @@ function progTypeToZone(rawType: string): KernelZone {
   if (rawType === "netfilter") return "netfilter";
   if (rawType === "sock_ops" || rawType === "sk_ops") return "sk_ops";
   if (rawType === "struct_ops") return "struct_ops";
-  if (rawType === "socket_filter") return "socket_filter";
+  if (rawType === "socket_filter" || rawType === "sk_reuseport")
+    return "socket_filter";
   return "other";
 }
 

@@ -23,6 +23,9 @@ export const BPF_PROGRAM_TYPE_COLORS: Record<string, string> = {
   fentry:         "#84cc16",
   fexit:          "#65a30d",
   freplace:       "#4d7c0f",
+  tracing:        "#a3e635",
+  sk_reuseport:   "#a855f7",
+  syscall:        "#34d399",
   struct_ops:     "#14b8a6",
   unknown:        "#6b7280",
 };

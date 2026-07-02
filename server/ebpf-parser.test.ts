@@ -210,6 +210,26 @@ describe("parseProgList", () => {
     }
   });
 
+  it("classifies real bpftool type strings for BTF-based programs (tracing/ext)", () => {
+    // bpftool reports fentry/fexit/iter as "tracing" and freplace as "ext";
+    // it never emits "fentry"/"fexit"/"freplace" in prog list output.
+    const map = parseProgList([
+      { ...xdpProg, id: 30, type: "tracing", name: "fentry__tcp_connect" },
+      { ...xdpProg, id: 31, type: "ext", name: "freplace_xdp_pass" },
+      { ...xdpProg, id: 32, type: "sk_reuseport", name: "select_sock" },
+      { ...xdpProg, id: 33, type: "syscall", name: "bpf_loader" },
+    ]);
+    expect(map.get(30)!.type).toBe("tracing");
+    expect(map.get(31)!.type).toBe("freplace");
+    expect(map.get(32)!.type).toBe("sk_reuseport");
+    expect(map.get(33)!.type).toBe("syscall");
+    for (const id of [30, 31, 32, 33]) {
+      expect(map.get(id)!.type).not.toBe("unknown");
+      expect(map.get(id)!.color).not.toBe(BPF_PROGRAM_TYPE_COLORS.unknown);
+    }
+    expect(map.get(32)!.osiLayer).toBe("L4");
+  });
+
   it("handles empty input", () => {
     const map = parseProgList([]);
     expect(map.size).toBe(0);
@@ -1902,6 +1922,18 @@ describe("buildKernelZones", () => {
     const kprobeZone = zones.find(z => z.zone === "kprobe");
     expect(kprobeZone).toBeDefined();
     expect(kprobeZone!.programs).toHaveLength(1);
+  });
+
+  it("places tracing (fentry/fexit) and ext (freplace) programs in kprobe zone", () => {
+    const progs = parseProgList([
+      { ...kprobeProg, id: 40, type: "tracing", name: "fentry__tcp_connect" },
+      { ...kprobeProg, id: 41, type: "ext", name: "freplace_xdp_pass" },
+    ]);
+    const zones = buildKernelZones(progs);
+    const kprobeZone = zones.find(z => z.zone === "kprobe");
+    expect(kprobeZone).toBeDefined();
+    expect(kprobeZone!.programs.map(p => p.id).sort()).toEqual([40, 41]);
+    expect(zones.find(z => z.zone === "other")).toBeUndefined();
   });
 
   it("places cgroup_skb in cgroup zone", () => {

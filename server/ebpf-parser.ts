@@ -45,9 +45,18 @@ const TYPE_MAP: Record<string, BpfProgType> = {
   netfilter: "netfilter",
   lsm: "lsm",
   struct_ops: "struct_ops",
+  // bpftool reports BPF_PROG_TYPE_TRACING (fentry/fexit/fmod_ret/iter) as
+  // "tracing" and BPF_PROG_TYPE_EXT (freplace) as "ext". The fentry/fexit/
+  // freplace keys below never appear in `bpftool prog list -j` output; they
+  // are kept so older captured snapshots and refined subtypes (e.g. from a
+  // future `bpftool link list` join) still normalize.
+  tracing: "tracing",
+  ext: "freplace",
   fentry: "fentry",
   fexit: "fexit",
   freplace: "freplace",
+  sk_reuseport: "sk_reuseport",
+  syscall: "syscall",
   lirc_mode2: "lirc_mode2",
   lwt_in: "lwt_in",
   lwt_out: "lwt_out",
@@ -76,6 +85,7 @@ function getOsiLayer(type: BpfProgType): OsiLayer {
     case "socket_filter":
     case "sk_skb":
     case "sk_lookup":
+    case "sk_reuseport":
     case "cgroup_skb":
     case "cgroup_sock_addr":
       return "L4";
@@ -290,12 +300,14 @@ function getKernelZone(type: BpfProgType): KernelZone {
     case "sk_skb":
     case "sk_msg":
     case "sk_lookup":
+    case "sk_reuseport":
       return "socket_filter";
     case "kprobe":
     case "kretprobe":
     case "fentry":
     case "fexit":
     case "freplace":
+    case "tracing":
       return "kprobe";
     case "tracepoint":
     case "raw_tracepoint":
