@@ -350,23 +350,12 @@ async function poll(): Promise<void> {
   } catch (err) {
     lastError = err instanceof Error ? err.message : String(err);
     console.error("[ebpf-poller] poll error:", lastError);
-
-    // Fall back to demo mode on error
-    if (!config.demoMode) {
-      console.warn("[ebpf-poller] Falling back to demo mode due to error");
-      const snap = buildSnapshot(MOCK_PROGS, MOCK_NET, MOCK_CGROUPS, {
-        hostname: hostname(),
-        kernelVersion,
-        bpftoolVersion: "demo",
-        demoMode: true,
-      });
-      latestMaps = buildMockMaps(snap.programs);
-      ingestSnapshot(snap.programs, snap.timestamp);
-      latestSnapshot = snap;
-      for (const cb of Array.from(listeners)) {
-        try { cb(snap); } catch { /* ignore */ }
-      }
-    }
+    // Keep serving the last good snapshot and surface the error via poller
+    // status. Swapping in mock data here (as this used to do) presented
+    // synthetic programs as live while config.demoMode stayed false, routed
+    // prog/map drill-downs at nonexistent kernel IDs, and mixed mock samples
+    // into the real stats rings. Demo mode is only entered explicitly, via
+    // DEMO_MODE or the startup bpftool availability check.
   } finally {
     isPolling = false;
   }

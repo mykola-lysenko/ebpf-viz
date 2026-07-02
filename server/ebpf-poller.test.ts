@@ -1,5 +1,22 @@
-import { describe, expect, it } from "vitest";
-import { parseBpftoolVersion } from "./ebpf-poller";
+import { describe, expect, it, vi } from "vitest";
+
+vi.mock("./ebpf-parser", async importOriginal => {
+  const actual = await importOriginal<typeof import("./ebpf-parser")>();
+  return {
+    ...actual,
+    buildSnapshot: vi.fn(() => {
+      throw new Error("boom: simulated snapshot build failure");
+    }),
+  };
+});
+
+import {
+  getLatestSnapshot,
+  getPollerStatus,
+  isDemoMode,
+  parseBpftoolVersion,
+  triggerPoll,
+} from "./ebpf-poller";
 
 describe("parseBpftoolVersion", () => {
   it("detects skeleton support from the features line", () => {
@@ -30,5 +47,19 @@ describe("parseBpftoolVersion", () => {
       version: "bpftool v5.4.0",
       hasSkeletons: null,
     });
+  });
+});
+
+describe("poll failure handling", () => {
+  it("does not swap in mock data or enter demo mode when a live poll throws", async () => {
+    // buildSnapshot is mocked to throw (see vi.mock above), simulating an
+    // unexpected failure mid-poll in live mode.
+    await triggerPoll();
+
+    // Previously this fell back to a MOCK_PROGS snapshot with demoMode
+    // still false — synthetic data presented as live.
+    expect(getLatestSnapshot()).toBeNull();
+    expect(isDemoMode()).toBe(false);
+    expect(getPollerStatus().lastError).toContain("boom");
   });
 });
