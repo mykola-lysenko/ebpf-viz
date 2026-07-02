@@ -12,6 +12,11 @@ export default defineConfig({
     },
   },
   envDir: path.resolve(import.meta.dirname),
+  optimizeDeps: {
+    // Lazily imported by the Code Inspector CFG tab; without pre-bundling,
+    // the first CFG render triggers an on-the-fly optimize + full page reload.
+    include: ["@viz-js/viz"],
+  },
   root: path.resolve(import.meta.dirname, "client"),
   publicDir: path.resolve(import.meta.dirname, "client", "public"),
   build: {
