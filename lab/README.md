@@ -57,9 +57,13 @@ no Kubernetes needed — and loads the production Tetragon sensor programs
 (kprobes via links, ringbuf event maps, process-exec tracking):
 
 ```bash
-# NOTE: tetragon publishes versioned tags only — ":latest" does not exist
+# NOTE: tetragon publishes versioned tags only — ":latest" does not exist.
+# Mounting the host /sys/fs/bpf matters: bpffs instances are per-mount, so
+# without it tetragon pins into a container-private bpffs and the pin paths
+# are invisible to host-side bpftool (and to the dashboard).
 docker run --name tetragon -d --pull always \
   --pid=host --cgroupns=host --privileged \
+  -v /sys/fs/bpf:/sys/fs/bpf \
   -v /sys/kernel/btf/vmlinux:/var/lib/tetragon/btf \
   quay.io/cilium/tetragon:v1.7.0
 
