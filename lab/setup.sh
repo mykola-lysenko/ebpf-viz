@@ -19,7 +19,11 @@ VETH_LAB=veth-lab
 HOST_IP=10.99.0.1
 LAB_IP=10.99.0.2
 PIN_DIR=/sys/fs/bpf/ebpfviz-lab
-BPFTOOL="${BPFTOOL_PATH:-$HOME/.local/bin/bpftool}"
+# Under sudo $HOME is /root — resolve the invoking user's home for the
+# default ~/.local/bin/bpftool location.
+USER_HOME=$(getent passwd "${SUDO_USER:-$USER}" | cut -d: -f6)
+BPFTOOL="${BPFTOOL_PATH:-$USER_HOME/.local/bin/bpftool}"
+[[ -x "$BPFTOOL" ]] || BPFTOOL=$(command -v bpftool || echo "$BPFTOOL")
 
 if [[ $EUID -ne 0 ]]; then
   echo "Run as root: sudo BPFTOOL_PATH=... $0 $*" >&2
