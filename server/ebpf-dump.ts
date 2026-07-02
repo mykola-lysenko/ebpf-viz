@@ -8,6 +8,7 @@
  */
 
 import { execFile } from "child_process";
+import { readFile } from "fs/promises";
 import { promisify } from "util";
 import { buildCfgSummary, computeCfgSummaryFingerprint } from "../shared/cfg-summary";
 import type {
@@ -47,6 +48,83 @@ function getCachedCfgSummary(
   }
   return summary;
 }
+
+/**
+ * Creates a helper that temporarily sets a sysctl-like value for the duration
+ * of an async scope and restores the original value afterwards. Concurrent
+ * scopes are reference-counted: the first entry saves + sets, the last exit
+ * restores. If the value cannot be read or set, the scope still runs (the
+ * operation inside may work anyway or fail with its own message).
+ */
+export function createScopedSysctl(
+  read: () => Promise<string | null>,
+  write: (value: string) => Promise<void>,
+  scopedValue: string
+): <T>(fn: () => Promise<T>) => Promise<T> {
+  let depth = 0;
+  let saved: string | null = null;
+  let entering: Promise<void> | null = null;
+  return async function withScopedValue<T>(fn: () => Promise<T>): Promise<T> {
+    depth++;
+    if (depth === 1) {
+      // All scopes (including later concurrent entrants) await this shared
+      // promise so nobody runs before the value is actually set.
+      entering = (async () => {
+        const current = await read();
+        if (current !== null && current !== scopedValue) {
+          try {
+            await write(scopedValue);
+            saved = current;
+          } catch {
+            saved = null; // couldn't set — proceed best-effort
+          }
+        }
+      })();
+    }
+    try {
+      await entering;
+      return await fn();
+    } finally {
+      depth--;
+      if (depth === 0) {
+        entering = null;
+        if (saved !== null) {
+          const value = saved;
+          saved = null;
+          try {
+            await write(value);
+          } catch {
+            console.error(
+              `[ebpf-dump] failed to restore sysctl value ${value} — check it manually`
+            );
+          }
+        }
+      }
+    }
+  };
+}
+
+// kernel.kptr_restrict hides kernel addresses from the JIT disassembly. It is
+// lowered only for the duration of a jited dump and restored right after —
+// leaving it at 0 would expose kernel pointers to every unprivileged process
+// on the host until reboot.
+const withKptrRestrictLowered = createScopedSysctl(
+  async () => {
+    try {
+      return (await readFile("/proc/sys/kernel/kptr_restrict", "utf8")).trim();
+    } catch {
+      return null;
+    }
+  },
+  async value => {
+    const cmd = isSudoEnabled() ? "sudo" : "sysctl";
+    const argv = isSudoEnabled()
+      ? ["sysctl", "-w", `kernel.kptr_restrict=${value}`]
+      : ["-w", `kernel.kptr_restrict=${value}`];
+    await execFileAsync(cmd, argv, { timeout: 5_000 });
+  },
+  "0"
+);
 
 async function run(args: string[]): Promise<{ stdout: string; stderr: string; failed: boolean }> {
   const bpftool = getBpftoolPath();
@@ -368,30 +446,27 @@ export async function fetchProgDump(progId: number, hasBtf: boolean, isJited: bo
   if (!isJited) {
     jitedUnavailableReason = "This program was not JIT-compiled (jited=false). JIT compilation requires CONFIG_BPF_JIT and net.core.bpf_jit_enable=1.";
   } else {
-    // Ensure kptr_restrict=0 so kernel pointers are visible
-    try {
-      const sysctlCmd = isSudoEnabled() ? "sudo" : "sysctl";
-      const sysctlArgv = isSudoEnabled()
-        ? ["sysctl", "-w", "kernel.kptr_restrict=0"]
-        : ["-w", "kernel.kptr_restrict=0"];
-      await execFileAsync(sysctlCmd, sysctlArgv, { timeout: 5_000 });
-    } catch { /* best-effort — JIT dump may still work */ }
+    // kptr_restrict=0 is needed so kernel pointers are visible in the dump;
+    // it is restored to its previous value as soon as the dump completes.
+    const { jitedJsonResult, jitedTextResult, parsed } =
+      await withKptrRestrictLowered(async () => {
+        const jitedJsonResult = await run(["-jp", "prog", "dump", "jited", "id", String(progId)]);
+        let parsed = jitedJsonResult.failed
+          ? []
+          : [
+              ...parseJitedJson(jitedJsonResult.stdout),
+              ...parseJitedText(jitedJsonResult.stdout),
+            ];
 
-    const jitedJsonResult = await run(["-jp", "prog", "dump", "jited", "id", String(progId)]);
-    let parsed = jitedJsonResult.failed
-      ? []
-      : [
-          ...parseJitedJson(jitedJsonResult.stdout),
-          ...parseJitedText(jitedJsonResult.stdout),
-        ];
-
-    let jitedTextResult: Awaited<ReturnType<typeof run>> | undefined;
-    if (parsed.length === 0) {
-      jitedTextResult = await run(["prog", "dump", "jited", "id", String(progId)]);
-      if (!jitedTextResult.failed) {
-        parsed = parseJitedText(jitedTextResult.stdout);
-      }
-    }
+        let jitedTextResult: Awaited<ReturnType<typeof run>> | undefined;
+        if (parsed.length === 0) {
+          jitedTextResult = await run(["prog", "dump", "jited", "id", String(progId)]);
+          if (!jitedTextResult.failed) {
+            parsed = parseJitedText(jitedTextResult.stdout);
+          }
+        }
+        return { jitedJsonResult, jitedTextResult, parsed };
+      });
 
     if (parsed.length > 0) {
       jited = parsed;

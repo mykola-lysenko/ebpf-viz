@@ -7,7 +7,7 @@ import { createExpressMiddleware } from "@trpc/server/adapters/express";
 import { appRouter } from "../routers";
 import { createContext } from "./context";
 import { serveStatic, setupVite } from "./vite";
-import { startPoller } from "../ebpf-poller";
+import { restoreKernelSettings, startPoller, stopPoller } from "../ebpf-poller";
 import { sseHandler } from "../sse";
 
 function isPortAvailable(port: number): Promise<boolean> {
@@ -248,3 +248,18 @@ startServer().catch(console.error);
 startPoller().catch(err => {
   console.error("[ebpf-poller] Failed to start:", err);
 });
+
+// Restore kernel settings we changed (bpf_stats_enabled) before exiting.
+let shuttingDown = false;
+async function shutdown(signal: string): Promise<void> {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  console.log(`[server] ${signal} received — shutting down`);
+  stopPoller();
+  try {
+    await restoreKernelSettings();
+  } catch { /* best-effort */ }
+  process.exit(0);
+}
+process.on("SIGINT", () => void shutdown("SIGINT"));
+process.on("SIGTERM", () => void shutdown("SIGTERM"));

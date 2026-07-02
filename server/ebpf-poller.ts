@@ -83,6 +83,10 @@ let bpftoolHasSkeletons: boolean | null = null;
 let kernelVersion = "unknown";
 let isPolling = false;
 let statsEnabled = false;
+/** True when *we* flipped kernel.bpf_stats_enabled from 0 to 1, so we can
+ *  restore it on shutdown instead of leaving per-invocation overhead on
+ *  every BPF program in the system forever. */
+let statsEnabledByUs = false;
 
 const listeners = new Set<(snap: EbpfSnapshot) => void>();
 
@@ -100,7 +104,8 @@ async function ensureBpfStatsEnabled(): Promise<void> {
     // Try to enable it
     await execAsync("sudo sysctl -w kernel.bpf_stats_enabled=1 2>/dev/null");
     statsEnabled = true;
-    console.log("[ebpf-poller] Enabled kernel.bpf_stats_enabled=1 — runtime stats will accumulate");
+    statsEnabledByUs = true;
+    console.log("[ebpf-poller] Enabled kernel.bpf_stats_enabled=1 — runtime stats will accumulate (restored on shutdown)");
   } catch {
     statsEnabled = false;
     console.warn("[ebpf-poller] Could not enable bpf_stats_enabled — run_time_ns will be 0");
@@ -400,6 +405,22 @@ export function stopPoller(): void {
   if (pollingTimer) {
     clearInterval(pollingTimer);
     pollingTimer = null;
+  }
+}
+
+/**
+ * Undo kernel settings this process changed. Currently: disable
+ * kernel.bpf_stats_enabled if we were the ones who enabled it (it adds
+ * measurable per-invocation overhead to every BPF program on the host).
+ */
+export async function restoreKernelSettings(): Promise<void> {
+  if (!statsEnabledByUs) return;
+  statsEnabledByUs = false;
+  try {
+    await execAsync("sudo sysctl -w kernel.bpf_stats_enabled=0 2>/dev/null");
+    console.log("[ebpf-poller] Restored kernel.bpf_stats_enabled=0");
+  } catch {
+    console.error("[ebpf-poller] Failed to restore kernel.bpf_stats_enabled — check it manually");
   }
 }
 

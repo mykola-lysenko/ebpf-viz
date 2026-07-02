@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { parseJitedJson, parseJitedText, parseXlatedJson } from "./ebpf-dump";
+import { createScopedSysctl, parseJitedJson, parseJitedText, parseXlatedJson } from "./ebpf-dump";
 
 // ─── Unit tests for the dump module helpers ────────────────────────────────
 // We test the pure parsing logic without calling bpftool (which requires root).
@@ -304,5 +304,91 @@ ffffffffc0010000:
       { pc: "0xffffffffc0010000", opcodes: "55", disasm: "push   %rbp" },
       { pc: "0xffffffffc001000a", opcodes: "c3", disasm: "retq" },
     ]);
+  });
+});
+
+describe("createScopedSysctl", () => {
+  function makeFakeSysctl(initial: string | null) {
+    const writes: string[] = [];
+    let value = initial;
+    return {
+      writes,
+      get: () => value,
+      read: async () => value,
+      write: async (v: string) => {
+        writes.push(v);
+        value = v;
+      },
+    };
+  }
+
+  it("lowers the value for the scope and restores the original after", async () => {
+    const sysctl = makeFakeSysctl("2");
+    const scoped = createScopedSysctl(sysctl.read, sysctl.write, "0");
+
+    let valueDuringScope: string | null = null;
+    await scoped(async () => {
+      valueDuringScope = sysctl.get();
+    });
+
+    expect(valueDuringScope).toBe("0");
+    expect(sysctl.get()).toBe("2");
+    expect(sysctl.writes).toEqual(["0", "2"]);
+  });
+
+  it("does not write when the value is already at the target", async () => {
+    const sysctl = makeFakeSysctl("0");
+    const scoped = createScopedSysctl(sysctl.read, sysctl.write, "0");
+    await scoped(async () => {});
+    expect(sysctl.writes).toEqual([]);
+  });
+
+  it("restores even when the scoped function throws", async () => {
+    const sysctl = makeFakeSysctl("1");
+    const scoped = createScopedSysctl(sysctl.read, sysctl.write, "0");
+    await expect(
+      scoped(async () => {
+        throw new Error("dump failed");
+      })
+    ).rejects.toThrow("dump failed");
+    expect(sysctl.get()).toBe("1");
+  });
+
+  it("reference-counts concurrent scopes and restores only after the last exits", async () => {
+    const sysctl = makeFakeSysctl("2");
+    const scoped = createScopedSysctl(sysctl.read, sysctl.write, "0");
+
+    let releaseFirst!: () => void;
+    const firstGate = new Promise<void>(resolve => (releaseFirst = resolve));
+
+    const first = scoped(async () => {
+      await firstGate;
+    });
+    // Second scope enters while the first is still active.
+    const second = scoped(async () => {
+      expect(sysctl.get()).toBe("0");
+    });
+
+    await second;
+    // First scope is still open — value must remain lowered.
+    expect(sysctl.get()).toBe("0");
+
+    releaseFirst();
+    await first;
+    expect(sysctl.get()).toBe("2");
+    expect(sysctl.writes).toEqual(["0", "2"]);
+  });
+
+  it("proceeds without restoring when the value cannot be read", async () => {
+    const writes: string[] = [];
+    const scoped = createScopedSysctl(
+      async () => null,
+      async v => {
+        writes.push(v);
+      },
+      "0"
+    );
+    await scoped(async () => {});
+    expect(writes).toEqual([]);
   });
 });
