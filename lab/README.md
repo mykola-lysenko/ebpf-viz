@@ -91,7 +91,42 @@ Caveats: pod-veth attachments live in node netns, so the Network view won't
 place them on NICs; Cilium pins into each node container's private bpffs, so
 pin paths won't show (see the Tetragon note above for why).
 
-## Known WSL2 (kernel 6.6) limits
+## 5. netkit (Phase 3 — custom WSL kernel)
+
+netkit is a compile-time kernel feature (`CONFIG_NETKIT=y`, bool — no module
+possible) that stock WSL2 kernels ship disabled. To use it, rebuild the
+matching Microsoft kernel with netkit (+ `CONFIG_FPROBE` for kprobe_multi):
+
+```bash
+sudo apt-get install -y dwarves   # pahole, for BTF
+git clone --depth 1 --branch linux-msft-wsl-$(uname -r | cut -d- -f1) \
+  https://github.com/microsoft/WSL2-Linux-Kernel.git
+cd WSL2-Linux-Kernel
+cp Microsoft/config-wsl .config
+./scripts/config --enable NETKIT --enable FPROBE
+make olddefconfig && make -j$(nproc)
+cp arch/x86/boot/bzImage /mnt/c/Users/<you>/wsl-kernel-netkit
+```
+
+Then in `C:\Users\<you>\.wslconfig`:
+
+```ini
+[wsl2]
+kernel=C:\\Users\\<you>\\wsl-kernel-netkit
+```
+
+`wsl --shutdown` from Windows, reopen, verify with
+`zcat /proc/config.gz | grep NETKIT`. Revert anytime by removing the
+`kernel=` line. Finally:
+
+```bash
+cd kind && ./setup.sh --teardown && ./setup.sh --netkit
+```
+
+Pods now get netkit devices instead of veth — the dashboard shows netkit
+links and the `bpftool net` netkit section.
+
+## Known stock-WSL2-kernel limits
 
 - **netkit** needs kernel ≥ 6.7 (+ Cilium ≥ 1.16 netkit mode or iproute2 ≥ 6.7) — requires a custom WSL2 kernel; see the phased plan.
 - **kprobe_multi** links need `CONFIG_FPROBE`, which the stock WSL2 kernel disables; bpftrace falls back to perf kprobes.

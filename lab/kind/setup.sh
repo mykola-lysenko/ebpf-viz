@@ -10,11 +10,20 @@ if [[ "${1:-}" == "--teardown" ]]; then
   exit 0
 fi
 
+# --netkit: use netkit devices instead of veth for pod networking.
+# Requires a kernel with CONFIG_NETKIT=y (>= 6.7; stock WSL2 kernels have it
+# disabled — see lab/README.md) and Cilium >= 1.16.
+DATAPATH_ARGS=()
+if [[ "${1:-}" == "--netkit" ]]; then
+  DATAPATH_ARGS=(--set bpf.datapathMode=netkit)
+  echo "==> netkit datapath mode enabled"
+fi
+
 echo "==> Creating kind cluster (2 nodes, no default CNI)..."
 kind create cluster --config cluster.yaml
 
 echo "==> Installing Cilium (socket-LB / kube-proxy replacement on)..."
-cilium install --set kubeProxyReplacement=true
+cilium install --set kubeProxyReplacement=true "${DATAPATH_ARGS[@]}"
 
 echo "==> Waiting for Cilium to become ready (can take a few minutes)..."
 cilium status --wait
