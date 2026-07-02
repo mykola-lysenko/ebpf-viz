@@ -163,7 +163,7 @@ run_bpftool_to_file() {
   if [[ ${#SUDO_PREFIX[@]} -gt 0 ]]; then
     cmd_parts+=("${SUDO_PREFIX[@]}")
   fi
-  cmd_parts+=("$BPFTOOL" -j)
+  cmd_parts+=("$BPFTOOL" -j -f)
   # Split args on whitespace into separate arguments
   read -ra arg_array <<< "$args"
   cmd_parts+=("${arg_array[@]}")

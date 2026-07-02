@@ -159,7 +159,10 @@ async function getSystemInfo(): Promise<void> {
 // ─── Run bpftool commands ──────────────────────────────────────────────────
 
 async function runBpftool(args: string): Promise<string> {
-  const argv = ["-j", ...args.split(/\s+/)];
+  // -f/--bpffs: include bpffs pin paths ("pinned" arrays) in prog/map/link
+  // listings — without it bpftool omits the field entirely. Harmless for the
+  // other subcommands.
+  const argv = ["-j", "-f", ...args.split(/\s+/)];
   const cmd = config.sudo ? "sudo" : config.bpftoolPath;
   const fullArgv = config.sudo ? [config.bpftoolPath, ...argv] : argv;
   // Raise maxBuffer from the Node default (1 MB) to 32 MB.
