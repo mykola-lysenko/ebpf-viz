@@ -71,6 +71,26 @@ docker exec tetragon tetra getevents -o compact   # live event feed
 docker rm -f tetragon                             # cleanup
 ```
 
+## 4. Cilium in kind (Phase 2)
+
+Runs the real Cilium datapath in a two-node kind cluster. Because all kind
+nodes are containers on the shared WSL kernel, every Cilium BPF program, map,
+and link is visible to the host dashboard. Requires Docker + `kind`,
+`kubectl`, `cilium` CLIs in `~/.local/bin` (no sudo).
+
+```bash
+cd kind
+./setup.sh              # cluster + cilium + nginx/curl demo traffic
+./setup.sh --teardown   # delete the cluster
+```
+
+What to look for: dozens of `cil_*` sched_cls/tcx programs (per-endpoint
+datapath), `cgroup_sock_addr` connect/bind hooks from socket-LB in the
+Cgroups view, lpm_trie policy maps and `cilium_*` maps in the Maps view.
+Caveats: pod-veth attachments live in node netns, so the Network view won't
+place them on NICs; Cilium pins into each node container's private bpffs, so
+pin paths won't show (see the Tetragon note above for why).
+
 ## Known WSL2 (kernel 6.6) limits
 
 - **netkit** needs kernel ≥ 6.7 (+ Cilium ≥ 1.16 netkit mode or iproute2 ≥ 6.7) — requires a custom WSL2 kernel; see the phased plan.
