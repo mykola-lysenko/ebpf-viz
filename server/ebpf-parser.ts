@@ -378,6 +378,7 @@ export function parseProgList(raw: RawBpfProg[]): Map<number, BpfProgram> {
       runTimeNs: r.run_time_ns,
       runCnt: r.run_cnt,
       pids: r.pids,
+      pinnedPaths: r.pinned ?? [],
       attachments: [],
       osiLayer: getOsiLayer(type),
       color: getColor(type),
@@ -503,6 +504,13 @@ export function enrichWithLinkAttachments(
     // keeps only the link fd (e.g. systemd, cilium).
     if ((!prog.pids || prog.pids.length === 0) && link.pids?.length) {
       prog.pids = link.pids;
+    }
+
+    // The link's bpffs pin paths are the ownership breadcrumb when nobody
+    // holds an fd (e.g. Tetragon pins links under /sys/fs/bpf/tetragon).
+    for (const pin of link.pinned ?? []) {
+      prog.pinnedPaths ??= [];
+      if (!prog.pinnedPaths.includes(pin)) prog.pinnedPaths.push(pin);
     }
 
     if (!LINK_TYPES_COVERED_ELSEWHERE.has(link.type)) {

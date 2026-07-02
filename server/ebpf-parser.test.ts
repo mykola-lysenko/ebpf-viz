@@ -365,6 +365,25 @@ describe("enrichWithLinkAttachments", () => {
     expect(progs.get(2)!.pids).toEqual([{ pid: 1, comm: "systemd" }]);
   });
 
+  it("collects program and link bpffs pin paths", () => {
+    const progs = parseProgList([
+      { ...tracingProg, pinned: ["/sys/fs/bpf/tetragon/prog_pin"] },
+    ]);
+    enrichWithLinkAttachments(progs, [
+      {
+        id: 20,
+        type: "tracing",
+        prog_id: 50,
+        attach_type: "trace_fentry",
+        pinned: ["/sys/fs/bpf/tetragon/link_pin", "/sys/fs/bpf/tetragon/prog_pin"],
+      },
+    ]);
+    expect(progs.get(50)!.pinnedPaths).toEqual([
+      "/sys/fs/bpf/tetragon/prog_pin",
+      "/sys/fs/bpf/tetragon/link_pin",
+    ]);
+  });
+
   it("ignores links without a prog_id or with unknown prog ids", () => {
     const progs = parseProgList([xdpProg]);
     enrichWithLinkAttachments(progs, [

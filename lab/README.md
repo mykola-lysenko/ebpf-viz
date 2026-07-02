@@ -57,10 +57,11 @@ no Kubernetes needed — and loads the production Tetragon sensor programs
 (kprobes via links, ringbuf event maps, process-exec tracking):
 
 ```bash
+# NOTE: tetragon publishes versioned tags only — ":latest" does not exist
 docker run --name tetragon -d --pull always \
   --pid=host --cgroupns=host --privileged \
   -v /sys/kernel/btf/vmlinux:/var/lib/tetragon/btf \
-  quay.io/cilium/tetragon:latest
+  quay.io/cilium/tetragon:v1.7.0
 
 docker exec tetragon tetra getevents -o compact   # live event feed
 docker rm -f tetragon                             # cleanup

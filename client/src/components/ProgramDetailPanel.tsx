@@ -18,6 +18,7 @@ import {
   Code2,
   Loader2,
   Share2,
+  Pin,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -682,6 +683,29 @@ export function ProgramDetailPanel({ program, history, onClose }: Props) {
               />
             </div>
           </section>
+
+          {/* Pinned paths — the ownership breadcrumb when no process holds an fd */}
+          {(program.pinnedPaths?.length ?? 0) > 0 && (
+            <>
+              <Separator className="bg-border/50" />
+              <section>
+                <h3 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2">
+                  Pinned in bpffs ({program.pinnedPaths!.length})
+                </h3>
+                <div className="space-y-1">
+                  {program.pinnedPaths!.map(path => (
+                    <div
+                      key={path}
+                      className="flex items-center gap-2 text-[11px] font-mono text-muted-foreground break-all"
+                    >
+                      <Pin className="w-3 h-3 shrink-0 text-cyan-400/70" />
+                      {path}
+                    </div>
+                  ))}
+                </div>
+              </section>
+            </>
+          )}
 
           {/* Maps */}
           {program.mapIds.length > 0 && (

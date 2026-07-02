@@ -20,6 +20,8 @@ export interface RawBpfProg {
   recursion_misses?: number;
   verified_insns?: number;
   pids?: Array<{ pid: number; comm: string }>;
+  /** bpffs pin paths, reported when bpftool scans mounted bpf filesystems */
+  pinned?: string[];
 }
 
 /** One entry of `bpftool link list -j`. Field availability varies by link
@@ -59,6 +61,7 @@ export interface RawBpfLink {
   hooknum?: number | string; // netfilter
   prio?: number; // netfilter
   pids?: Array<{ pid: number; comm: string }>;
+  pinned?: string[]; // bpffs pin paths of the link itself
 }
 
 export interface RawNetEntry {
@@ -186,6 +189,11 @@ export interface BpfProgram {
   runTimeNs?: number;
   runCnt?: number;
   pids?: Array<{ pid: number; comm: string }>;
+  /** bpffs pin paths of the program and of any links attaching it — the
+   *  ownership breadcrumb when no process holds an fd (e.g. Tetragon pins
+   *  its links under /sys/fs/bpf/tetragon and closes the fds). Optional for
+   *  backward compatibility with older captured snapshots. */
+  pinnedPaths?: string[];
   // enriched
   attachments: BpfAttachment[];
   osiLayer: OsiLayer;
