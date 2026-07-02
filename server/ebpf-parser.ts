@@ -414,6 +414,11 @@ function formatOffset(offset: number | undefined): string {
   return offset ? `+0x${offset.toString(16)}` : "";
 }
 
+/** bpftool ≥ ~7.5 prints "perf_event"; some earlier builds printed "perf". */
+function isPerfLink(link: RawBpfLink): boolean {
+  return link.type === "perf" || link.type === "perf_event";
+}
+
 function describeLink(link: RawBpfLink): string {
   switch (link.type) {
     case "tracing": {
@@ -423,7 +428,8 @@ function describeLink(link: RawBpfLink): string {
     }
     case "raw_tracepoint":
       return `raw_tp ${link.tp_name ?? "?"}`;
-    case "perf": {
+    case "perf":
+    case "perf_event": {
       if (link.file) {
         const kind = link.retprobe ? "uretprobe" : "uprobe";
         return `${kind} ${link.file}${formatOffset(link.offset)}`;
@@ -462,10 +468,10 @@ function refineTypeFromLink(prog: BpfProgram, link: RawBpfLink): void {
   if (prog.type === "tracing" && link.type === "tracing" && link.attach_type) {
     refined = TRACING_ATTACH_TYPE_MAP[link.attach_type];
   } else if (prog.type === "kprobe") {
-    if (link.type === "perf" && link.file) {
+    if (isPerfLink(link) && link.file) {
       refined = link.retprobe ? "uretprobe" : "uprobe";
     } else if (
-      (link.type === "perf" && link.func) ||
+      (isPerfLink(link) && link.func) ||
       link.type === "kprobe_multi"
     ) {
       refined = link.retprobe ? "kretprobe" : "kprobe";

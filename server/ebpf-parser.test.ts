@@ -279,6 +279,32 @@ describe("enrichWithLinkAttachments", () => {
     ]);
   });
 
+  it("parses a real bpftool v7.8 perf_event kprobe link", () => {
+    // Verbatim from `bpftool link list -j` on a 6.6 kernel (bpftool v7.8.0),
+    // which prints "perf_event" — not "perf" — as the link type.
+    const progs = parseProgList([
+      { ...kprobeRawProg, id: 1291, name: "ebpfviz_test_probe" },
+    ]);
+    enrichWithLinkAttachments(progs, [
+      {
+        id: 132,
+        type: "perf_event",
+        prog_id: 1291,
+        retprobe: false,
+        addr: 18446744072435018496,
+        func: "do_nanosleep",
+        offset: 0,
+        missed: 0,
+        cookie: 0,
+      },
+    ]);
+    const prog = progs.get(1291)!;
+    expect(prog.type).toBe("kprobe");
+    expect(prog.attachments).toEqual([
+      { kind: "link", detail: "kprobe do_nanosleep", linkId: 132 },
+    ]);
+  });
+
   it("refines kprobe programs via perf links (kretprobe, uprobe, uretprobe)", () => {
     const progs = parseProgList([
       kprobeRawProg,

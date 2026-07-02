@@ -311,7 +311,7 @@ export const MOCK_LINKS: RawBpfLink[] = [
   { id: 101, type: "tracing", prog_id: 8, attach_type: "trace_fentry", target_obj_id: 1, target_btf_id: 29868, pids: [{ pid: 911, comm: "tcp-tracer" }] },
   { id: 102, type: "tracing", prog_id: 9, attach_type: "trace_fexit", target_obj_id: 1, target_btf_id: 30122, pids: [{ pid: 911, comm: "tcp-tracer" }] },
   { id: 103, type: "tracing", prog_id: 26, attach_type: "trace_fentry", target_obj_id: 1, target_btf_id: 29901, pids: [{ pid: 911, comm: "tcp-tracer" }] },
-  { id: 104, type: "perf", prog_id: 6, func: "__x64_sys_execve", offset: 0, retprobe: false, pids: [{ pid: 1204, comm: "exec-monitor" }] },
-  { id: 105, type: "perf", prog_id: 7, func: "do_sys_open", offset: 0, retprobe: true, pids: [{ pid: 1204, comm: "exec-monitor" }] },
+  { id: 104, type: "perf_event", prog_id: 6, func: "__x64_sys_execve", offset: 0, retprobe: false, pids: [{ pid: 1204, comm: "exec-monitor" }] },
+  { id: 105, type: "perf_event", prog_id: 7, func: "do_sys_open", offset: 0, retprobe: true, pids: [{ pid: 1204, comm: "exec-monitor" }] },
   { id: 106, type: "raw_tracepoint", prog_id: 12, tp_name: "sched_switch", pids: [{ pid: 1873, comm: "sched-profiler" }] },
 ];

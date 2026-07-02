@@ -26,7 +26,10 @@ export interface RawBpfProg {
  *  type and bpftool version, so everything beyond id/type is optional. */
 export interface RawBpfLink {
   id: number;
-  type: string; // "tracing" | "perf" | "kprobe_multi" | "uprobe_multi" | "raw_tracepoint" | "cgroup" | "iter" | "netns" | "xdp" | "tcx" | "netkit" | "struct_ops" | "netfilter" | ...
+  /** "tracing" | "perf_event" (older bpftool: "perf") | "kprobe_multi" |
+   *  "uprobe_multi" | "raw_tracepoint" | "cgroup" | "iter" | "netns" |
+   *  "xdp" | "tcx" | "netkit" | "struct_ops" | "netfilter" | ... */
+  type: string;
   prog_id?: number;
   /** tracing ("trace_fentry"/"trace_fexit"/"modify_return"/"lsm_mac"/…),
    *  cgroup, tcx, netkit attach type string */
@@ -38,6 +41,9 @@ export interface RawBpfLink {
   func?: string; // perf kprobe target
   file?: string; // perf uprobe binary
   offset?: number;
+  addr?: number; // perf kprobe resolved address
+  missed?: number;
+  cookie?: number;
   tracepoint?: string; // perf tracepoint
   event_type?: string; // perf hardware/software event
   event_config?: string;
