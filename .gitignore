@@ -118,3 +118,4 @@ ebpf-viz-network-*.tar.gz
 ebpf-snapshot-*.json
 ebpf-mapdumps-*.json
 captures/
+lab/build/
