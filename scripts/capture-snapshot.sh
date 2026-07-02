@@ -263,6 +263,9 @@ run_bpftool_to_file "$TMPDIR_SNAP/net.json" "net"
 log "Running: bpftool cgroup tree..."
 run_bpftool_to_file "$TMPDIR_SNAP/cgroups.json" "cgroup tree"
 
+log "Running: bpftool link list..."
+run_bpftool_to_file "$TMPDIR_SNAP/links.json" "link list"
+
 log "Running: bpftool cgroup tree effective..."
 run_bpftool_to_file "$TMPDIR_SNAP/cgroups-effective.json" "cgroup tree /sys/fs/cgroup effective"
 
@@ -305,6 +308,8 @@ log "Writing snapshot to: $OUTPUT_FILE"
   cat "$TMPDIR_SNAP/tc-filters.json"
   printf ',\n    "cgroups": '
   cat "$TMPDIR_SNAP/cgroups.json"
+  printf ',\n    "links": '
+  cat "$TMPDIR_SNAP/links.json"
   printf ',\n    "cgroupsEffective": '
   cat "$TMPDIR_SNAP/cgroups-effective.json"
   printf '\n  }\n'

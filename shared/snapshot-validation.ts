@@ -4,6 +4,7 @@ export const MAX_SNAPSHOT_PROGRAMS = 100_000;
 export const MAX_SNAPSHOT_MAPS = 100_000;
 export const MAX_SNAPSHOT_NET_ENTRIES = 20_000;
 export const MAX_SNAPSHOT_CGROUPS = 100_000;
+export const MAX_SNAPSHOT_LINKS = 100_000;
 export const MAX_MAP_DUMP_MAPS = 10_000;
 
 const idSchema = z.number().int().min(0).refine(Number.isFinite, "must be finite");
@@ -37,6 +38,11 @@ export const rawBpfMapSchema = z.object({
 
 export const rawNetSnapshotSchema = z.record(z.string(), z.unknown());
 
+export const rawBpfLinkSchema = z.object({
+  id: idSchema,
+  type: z.string().min(1),
+}).catchall(z.unknown());
+
 export const rawCgroupEntrySchema = z.object({
   cgroup: z.string().min(1),
   programs: z.array(z.object({
@@ -55,6 +61,7 @@ export const rawSnapshotPayloadSchema = z.object({
     .array(rawCgroupEntrySchema)
     .max(MAX_SNAPSHOT_CGROUPS)
     .optional(),
+  links: z.array(rawBpfLinkSchema).max(MAX_SNAPSHOT_LINKS).optional(),
 });
 
 const bpfAttachmentSchema = z.object({

@@ -3,6 +3,7 @@ import {
   parseProgList,
   enrichWithNetAttachments,
   enrichWithCgroupAttachments,
+  enrichWithLinkAttachments,
   buildNetworkInterfaces,
   buildCgroupTree,
   buildKernelZones,
@@ -243,6 +244,124 @@ describe("parseProgList", () => {
       orphanedProg,
     ]);
     expect(map.size).toBe(4);
+  });
+});
+
+// ─── enrichWithLinkAttachments ────────────────────────────────────────────────
+
+describe("enrichWithLinkAttachments", () => {
+  const tracingProg: RawBpfProg = {
+    id: 50,
+    type: "tracing",
+    name: "fentry__tcp_close",
+    tag: "1111111111111111",
+    gpl_compatible: true,
+    loaded_at: 1700000000,
+    orphaned: false,
+    bytes_xlated: 128,
+    jited: true,
+    bytes_memlock: 4096,
+  };
+  const kprobeRawProg: RawBpfProg = { ...tracingProg, id: 51, type: "kprobe", name: "probe_prog" };
+
+  it("refines tracing programs to fentry/fexit from the link attach_type", () => {
+    const progs = parseProgList([tracingProg, { ...tracingProg, id: 52 }]);
+    enrichWithLinkAttachments(progs, [
+      { id: 1, type: "tracing", prog_id: 50, attach_type: "trace_fentry", target_btf_id: 123 },
+      { id: 2, type: "tracing", prog_id: 52, attach_type: "trace_fexit" },
+    ]);
+    expect(progs.get(50)!.type).toBe("fentry");
+    expect(progs.get(52)!.type).toBe("fexit");
+    expect(progs.get(50)!.color).toBe(BPF_PROGRAM_TYPE_COLORS.fentry);
+    expect(progs.get(50)!.rawType).toBe("tracing");
+    expect(progs.get(50)!.attachments).toEqual([
+      { kind: "link", detail: "trace_fentry → btf_id 123", linkId: 1 },
+    ]);
+  });
+
+  it("refines kprobe programs via perf links (kretprobe, uprobe, uretprobe)", () => {
+    const progs = parseProgList([
+      kprobeRawProg,
+      { ...kprobeRawProg, id: 53 },
+      { ...kprobeRawProg, id: 54 },
+    ]);
+    enrichWithLinkAttachments(progs, [
+      { id: 3, type: "perf", prog_id: 51, func: "do_sys_open", retprobe: true },
+      { id: 4, type: "perf", prog_id: 53, file: "/usr/bin/node", offset: 0x1234, retprobe: false },
+      { id: 5, type: "perf", prog_id: 54, file: "/usr/bin/node", retprobe: true },
+    ]);
+    expect(progs.get(51)!.type).toBe("kretprobe");
+    expect(progs.get(51)!.attachments[0].detail).toBe("kretprobe do_sys_open");
+    expect(progs.get(53)!.type).toBe("uprobe");
+    expect(progs.get(53)!.attachments[0].detail).toBe("uprobe /usr/bin/node+0x1234");
+    expect(progs.get(54)!.type).toBe("uretprobe");
+  });
+
+  it("attributes ownership from link pids when the program has none", () => {
+    const progs = parseProgList([tracingProg]);
+    enrichWithLinkAttachments(progs, [
+      {
+        id: 6,
+        type: "tracing",
+        prog_id: 50,
+        attach_type: "trace_fentry",
+        pids: [{ pid: 388, comm: "systemd" }],
+      },
+    ]);
+    expect(progs.get(50)!.pids).toEqual([{ pid: 388, comm: "systemd" }]);
+  });
+
+  it("does not overwrite existing program pids with link pids", () => {
+    const progs = parseProgList([
+      { ...tracingProg, pids: [{ pid: 42, comm: "loader" }] },
+    ]);
+    enrichWithLinkAttachments(progs, [
+      { id: 7, type: "tracing", prog_id: 50, pids: [{ pid: 388, comm: "systemd" }] },
+    ]);
+    expect(progs.get(50)!.pids).toEqual([{ pid: 42, comm: "loader" }]);
+  });
+
+  it("skips attachments for link types covered by net/cgroup sources", () => {
+    const progs = parseProgList([xdpProg, cgroupSkbProg]);
+    enrichWithLinkAttachments(progs, [
+      { id: 8, type: "xdp", prog_id: 1, ifindex: 2 },
+      { id: 9, type: "cgroup", prog_id: 2, cgroup_id: 4321, attach_type: "cgroup_inet_ingress" },
+    ]);
+    expect(progs.get(1)!.attachments).toEqual([]);
+    expect(progs.get(2)!.attachments).toEqual([]);
+  });
+
+  it("still adopts pids from net/cgroup-covered link types", () => {
+    const progs = parseProgList([cgroupSkbProg]);
+    enrichWithLinkAttachments(progs, [
+      { id: 10, type: "cgroup", prog_id: 2, pids: [{ pid: 1, comm: "systemd" }] },
+    ]);
+    expect(progs.get(2)!.pids).toEqual([{ pid: 1, comm: "systemd" }]);
+  });
+
+  it("ignores links without a prog_id or with unknown prog ids", () => {
+    const progs = parseProgList([xdpProg]);
+    enrichWithLinkAttachments(progs, [
+      { id: 11, type: "iter", target_name: "bpf_map" },
+      { id: 12, type: "tracing", prog_id: 9999 },
+    ]);
+    expect(progs.get(1)!.attachments).toEqual([]);
+  });
+
+  it("describes raw_tracepoint, kprobe_multi, and iter links", () => {
+    const progs = parseProgList([
+      { ...kprobeRawProg, id: 60, type: "raw_tracepoint" },
+      { ...kprobeRawProg, id: 61 },
+      { ...kprobeRawProg, id: 62, type: "tracing" },
+    ]);
+    enrichWithLinkAttachments(progs, [
+      { id: 13, type: "raw_tracepoint", prog_id: 60, tp_name: "sched_switch" },
+      { id: 14, type: "kprobe_multi", prog_id: 61, retprobe: false, func_cnt: 12 },
+      { id: 15, type: "iter", prog_id: 62, target_name: "task_file" },
+    ]);
+    expect(progs.get(60)!.attachments[0].detail).toBe("raw_tp sched_switch");
+    expect(progs.get(61)!.attachments[0].detail).toBe("kprobe.multi (12 funcs)");
+    expect(progs.get(62)!.attachments[0].detail).toBe("iter task_file");
   });
 });
 

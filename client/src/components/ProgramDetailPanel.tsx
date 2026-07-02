@@ -260,6 +260,7 @@ const ATTACH_KIND_COLORS: Record<string, string> = {
   flow_dissector: "#ec4899",
   netfilter: "#f43f5e",
   perf: "#f97316",
+  link: "#22d3ee",
   unknown: "#6b7280",
 };
 

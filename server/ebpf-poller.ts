@@ -6,6 +6,7 @@ import type {
   BpfMap,
   EbpfSnapshot,
   PollingConfig,
+  RawBpfLink,
   RawBpfMap,
   RawBpfProg,
   RawCgroupEntry,
@@ -14,7 +15,7 @@ import type {
 } from "../shared/ebpf-types";
 import { buildSnapshot } from "./ebpf-parser";
 import { buildMockMaps, parseMaps } from "./ebpf-map-parser";
-import { MOCK_CGROUPS, MOCK_NET, MOCK_PROGS } from "./ebpf-mock";
+import { MOCK_CGROUPS, MOCK_LINKS, MOCK_NET, MOCK_PROGS } from "./ebpf-mock";
 import {
   ingestSnapshot,
   pruneStale,
@@ -217,6 +218,7 @@ async function fetchLiveData(): Promise<{
   cgroups: RawCgroupEntry[];
   cgroupsEffective: RawCgroupEntry[];
   rawMaps: RawBpfMap[];
+  links: RawBpfLink[];
 }> {
   const [
     progOut,
@@ -224,12 +226,14 @@ async function fetchLiveData(): Promise<{
     cgroupOut,
     cgroupEffectiveOut,
     mapOut,
+    linkOut,
   ] = await Promise.allSettled([
     runBpftool("prog list"),
     runBpftool("net"),
     runBpftool("cgroup tree"),
     runBpftool("cgroup tree /sys/fs/cgroup effective"),
     runBpftool("map list"),
+    runBpftool("link list"),
   ]);
 
   let progs: RawBpfProg[] = [];
@@ -237,6 +241,7 @@ async function fetchLiveData(): Promise<{
   let cgroups: RawCgroupEntry[] = [];
   let cgroupsEffective: RawCgroupEntry[] = [];
   let rawMaps: RawBpfMap[] = [];
+  let links: RawBpfLink[] = [];
 
   if (progOut.status === "fulfilled") {
     try { progs = JSON.parse(stripNonJson(progOut.value)); } catch { progs = []; }
@@ -252,6 +257,9 @@ async function fetchLiveData(): Promise<{
   }
   if (mapOut.status === "fulfilled") {
     try { rawMaps = JSON.parse(stripNonJson(mapOut.value)); } catch { rawMaps = []; }
+  }
+  if (linkOut.status === "fulfilled") {
+    try { links = JSON.parse(stripNonJson(linkOut.value)); } catch { links = []; }
   }
 
   const netSnapshot = net[0];
@@ -278,7 +286,7 @@ async function fetchLiveData(): Promise<{
     }
   }
 
-  return { progs, net, cgroups, cgroupsEffective, rawMaps };
+  return { progs, net, cgroups, cgroupsEffective, rawMaps, links };
 }
 
 // ─── Poll ──────────────────────────────────────────────────────────────────
@@ -295,6 +303,7 @@ async function poll(): Promise<void> {
     let cgroupsEffective: RawCgroupEntry[] = [];
 
     let rawMaps: RawBpfMap[] = [];
+    let links: RawBpfLink[] = [];
 
     if (config.demoMode) {
       // Simulate incrementing stats in demo mode so sparklines are always active
@@ -307,6 +316,7 @@ async function poll(): Promise<void> {
       net = MOCK_NET;
       cgroups = MOCK_CGROUPS;
       cgroupsEffective = [];
+      links = MOCK_LINKS;
       void now; // used implicitly via Date.now() in ingestSnapshot
     } else {
       const data = await fetchLiveData();
@@ -315,6 +325,7 @@ async function poll(): Promise<void> {
       cgroups = data.cgroups;
       cgroupsEffective = data.cgroupsEffective;
       rawMaps = data.rawMaps;
+      links = data.links;
     }
 
     const snap = buildSnapshot(
@@ -327,7 +338,8 @@ async function poll(): Promise<void> {
         bpftoolVersion,
         demoMode: config.demoMode,
       },
-      cgroupsEffective
+      cgroupsEffective,
+      links
     );
 
     // ── Parse maps ─────────────────────────────────────────────────────────

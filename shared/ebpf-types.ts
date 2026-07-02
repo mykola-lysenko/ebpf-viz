@@ -22,6 +22,39 @@ export interface RawBpfProg {
   pids?: Array<{ pid: number; comm: string }>;
 }
 
+/** One entry of `bpftool link list -j`. Field availability varies by link
+ *  type and bpftool version, so everything beyond id/type is optional. */
+export interface RawBpfLink {
+  id: number;
+  type: string; // "tracing" | "perf" | "kprobe_multi" | "uprobe_multi" | "raw_tracepoint" | "cgroup" | "iter" | "netns" | "xdp" | "tcx" | "netkit" | "struct_ops" | "netfilter" | ...
+  prog_id?: number;
+  /** tracing ("trace_fentry"/"trace_fexit"/"modify_return"/"lsm_mac"/…),
+   *  cgroup, tcx, netkit attach type string */
+  attach_type?: string;
+  target_obj_id?: number; // tracing
+  target_btf_id?: number; // tracing
+  tp_name?: string; // raw_tracepoint
+  retprobe?: boolean; // perf kprobe/uprobe, kprobe_multi
+  func?: string; // perf kprobe target
+  file?: string; // perf uprobe binary
+  offset?: number;
+  tracepoint?: string; // perf tracepoint
+  event_type?: string; // perf hardware/software event
+  event_config?: string;
+  func_cnt?: number; // kprobe_multi / uprobe_multi
+  path?: string; // uprobe_multi binary
+  cgroup_id?: number;
+  ifindex?: number; // xdp / tcx / netkit
+  devname?: string; // xdp
+  netns_ino?: number; // netns
+  map_id?: number; // struct_ops, map iters
+  target_name?: string; // iter
+  pf?: string; // netfilter
+  hooknum?: number | string; // netfilter
+  prio?: number; // netfilter
+  pids?: Array<{ pid: number; comm: string }>;
+}
+
 export interface RawNetEntry {
   devname: string;
   ifindex: number;
@@ -116,6 +149,8 @@ export type BpfProgType =
   | "fexit"
   | "freplace"
   | "tracing"
+  | "uprobe"
+  | "uretprobe"
   | "sk_reuseport"
   | "syscall"
   | "lirc_mode2"
@@ -161,8 +196,11 @@ export interface BpfAttachment {
     | "netfilter"
     | "cgroup"
     | "perf"
+    | "link"
     | "unknown";
   detail: string; // e.g. "eth0 (driver)", "cgroup_inet_ingress", "sys_enter_openat"
+  /** BPF link id when the attachment was discovered via `bpftool link list` */
+  linkId?: number;
   ifname?: string;
   cgroupPath?: string;
   attachFlags?: string;

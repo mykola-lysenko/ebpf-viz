@@ -2,6 +2,7 @@ import type {
   BpfAttachment,
   BpfProgram,
   BpfProgType,
+  RawBpfLink,
   CgroupNode,
   EbpfSnapshot,
   KernelAttachmentZone,
@@ -304,6 +305,8 @@ function getKernelZone(type: BpfProgType): KernelZone {
       return "socket_filter";
     case "kprobe":
     case "kretprobe":
+    case "uprobe":
+    case "uretprobe":
     case "fentry":
     case "fexit":
     case "freplace":
@@ -382,6 +385,128 @@ export function parseProgList(raw: RawBpfProg[]): Map<number, BpfProgram> {
     map.set(prog.id, prog);
   }
   return map;
+}
+
+// ─── Enrich with BPF link attachments ──────────────────────────────────────
+
+/** libbpf attach-type strings (as printed by `bpftool link list`) that let us
+ *  refine the generic "tracing" prog type into its actual subtype. */
+const TRACING_ATTACH_TYPE_MAP: Record<string, BpfProgType> = {
+  trace_fentry: "fentry",
+  fentry: "fentry",
+  trace_fexit: "fexit",
+  fexit: "fexit",
+};
+
+/** Link types whose attachments are already surfaced by `bpftool net` or
+ *  `bpftool cgroup tree` — skip the attachment (but still use the link for
+ *  type refinement and pid attribution) to avoid duplicate entries. */
+const LINK_TYPES_COVERED_ELSEWHERE = new Set([
+  "xdp",
+  "tcx",
+  "netkit",
+  "cgroup",
+  "netns",
+  "netfilter",
+]);
+
+function formatOffset(offset: number | undefined): string {
+  return offset ? `+0x${offset.toString(16)}` : "";
+}
+
+function describeLink(link: RawBpfLink): string {
+  switch (link.type) {
+    case "tracing": {
+      const attach = link.attach_type ?? "tracing";
+      const target = link.target_btf_id ? ` → btf_id ${link.target_btf_id}` : "";
+      return `${attach}${target}`;
+    }
+    case "raw_tracepoint":
+      return `raw_tp ${link.tp_name ?? "?"}`;
+    case "perf": {
+      if (link.file) {
+        const kind = link.retprobe ? "uretprobe" : "uprobe";
+        return `${kind} ${link.file}${formatOffset(link.offset)}`;
+      }
+      if (link.func) {
+        const kind = link.retprobe ? "kretprobe" : "kprobe";
+        return `${kind} ${link.func}${formatOffset(link.offset)}`;
+      }
+      if (link.tracepoint) return `tracepoint ${link.tracepoint}`;
+      if (link.event_type) {
+        return `perf event ${link.event_type}${link.event_config ? `:${link.event_config}` : ""}`;
+      }
+      return "perf event";
+    }
+    case "kprobe_multi": {
+      const kind = link.retprobe ? "kretprobe" : "kprobe";
+      return `${kind}.multi (${link.func_cnt ?? "?"} funcs)`;
+    }
+    case "uprobe_multi":
+      return `uprobe.multi ${link.path ?? "?"} (${link.func_cnt ?? "?"} funcs)`;
+    case "iter":
+      return `iter ${link.target_name ?? "?"}${link.map_id ? ` map ${link.map_id}` : ""}`;
+    case "struct_ops":
+      return `struct_ops map ${link.map_id ?? "?"}`;
+    default:
+      return `${link.type} link`;
+  }
+}
+
+/** Refine coarse prog-list types using link attach info:
+ *  - "tracing" progs become fentry/fexit when the link says so
+ *  - "kprobe" progs become kretprobe/uprobe/uretprobe based on the perf link */
+function refineTypeFromLink(prog: BpfProgram, link: RawBpfLink): void {
+  let refined: BpfProgType | undefined;
+
+  if (prog.type === "tracing" && link.type === "tracing" && link.attach_type) {
+    refined = TRACING_ATTACH_TYPE_MAP[link.attach_type];
+  } else if (prog.type === "kprobe") {
+    if (link.type === "perf" && link.file) {
+      refined = link.retprobe ? "uretprobe" : "uprobe";
+    } else if (
+      (link.type === "perf" && link.func) ||
+      link.type === "kprobe_multi"
+    ) {
+      refined = link.retprobe ? "kretprobe" : "kprobe";
+    } else if (link.type === "uprobe_multi") {
+      refined = "uprobe";
+    }
+  }
+
+  if (refined && refined !== prog.type) {
+    prog.type = refined;
+    prog.color = getColor(refined);
+    prog.osiLayer = getOsiLayer(refined);
+  }
+}
+
+export function enrichWithLinkAttachments(
+  progs: Map<number, BpfProgram>,
+  links: RawBpfLink[]
+): void {
+  for (const link of links) {
+    if (typeof link?.prog_id !== "number") continue;
+    const prog = progs.get(link.prog_id);
+    if (!prog) continue;
+
+    refineTypeFromLink(prog, link);
+
+    // Attribute ownership from the link holder when the program itself has
+    // no fd holders — common for link-attached programs where the loader
+    // keeps only the link fd (e.g. systemd, cilium).
+    if ((!prog.pids || prog.pids.length === 0) && link.pids?.length) {
+      prog.pids = link.pids;
+    }
+
+    if (!LINK_TYPES_COVERED_ELSEWHERE.has(link.type)) {
+      prog.attachments.push({
+        kind: "link",
+        detail: describeLink(link),
+        linkId: link.id,
+      });
+    }
+  }
 }
 
 // ─── Enrich with net attachments ──────────────────────────────────────────
@@ -1298,9 +1423,13 @@ export function buildSnapshot(
     bpftoolVersion: string;
     demoMode: boolean;
   },
-  rawEffectiveCgroups: RawCgroupEntry[] = []
+  rawEffectiveCgroups: RawCgroupEntry[] = [],
+  rawLinks: RawBpfLink[] = []
 ): EbpfSnapshot {
   const progMap = parseProgList(rawProgs);
+  // Links first: they refine coarse prog types (tracing → fentry/fexit,
+  // kprobe → kretprobe/uprobe) that zone/interface building depends on.
+  enrichWithLinkAttachments(progMap, rawLinks);
   enrichWithNetAttachments(progMap, rawNet);
   enrichWithCgroupAttachments(progMap, rawCgroups);
 
