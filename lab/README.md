@@ -98,15 +98,26 @@ possible) that stock WSL2 kernels ship disabled. To use it, rebuild the
 matching Microsoft kernel with netkit (+ `CONFIG_FPROBE` for kprobe_multi):
 
 ```bash
-sudo apt-get install -y dwarves   # pahole, for BTF
+# dwarves (pahole) MUST be installed BEFORE the config step — Kconfig probes
+# for it and silently drops CONFIG_DEBUG_INFO_BTF (no BTF → no bpftrace, no
+# fentry, no CO-RE) when it's missing at `make olddefconfig` time.
+sudo apt-get install -y dwarves
 git clone --depth 1 --branch linux-msft-wsl-$(uname -r | cut -d- -f1) \
   https://github.com/microsoft/WSL2-Linux-Kernel.git
 cd WSL2-Linux-Kernel
 cp Microsoft/config-wsl .config
 ./scripts/config --enable NETKIT --enable FPROBE
-make olddefconfig && make -j$(nproc)
+make olddefconfig
+# The stock config builds ~1000 options as modules (incl. the netfilter/
+# conntrack stack Docker needs), shipped in Microsoft's modules.vhd — which
+# refuses to load into a rebuilt kernel. Fold them into the image instead:
+make mod2yesconfig
+make -j$(nproc)
 cp arch/x86/boot/bzImage /mnt/c/Users/<you>/wsl-kernel-netkit
 ```
+
+Sanity-check the config before building: `grep -E "DEBUG_INFO_BTF=|NETKIT=|PAHOLE_VERSION" .config`
+should show both `=y` and a non-zero pahole version.
 
 Then in `C:\Users\<you>\.wslconfig`:
 
