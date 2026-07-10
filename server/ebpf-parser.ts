@@ -411,6 +411,20 @@ const LINK_TYPES_COVERED_ELSEWHERE = new Set([
   "netfilter",
 ]);
 
+/** Netdev-scoped link types are only covered by `bpftool net` when the device
+ *  is in bpftool's own netns. bpftool reports devname "(unknown)" for devices
+ *  in other namespaces (container/pod interfaces — e.g. Cilium's netkit or
+ *  tcx attachments inside kind nodes), so those links are the sole evidence
+ *  of the attachment and must not be skipped. */
+const NETDEV_LINK_TYPES = new Set(["xdp", "tcx", "netkit"]);
+
+function isForeignNetdevLink(link: RawBpfLink): boolean {
+  return (
+    NETDEV_LINK_TYPES.has(link.type) &&
+    (!link.devname || link.devname === "(unknown)")
+  );
+}
+
 function formatOffset(offset: number | undefined): string {
   return offset ? `+0x${offset.toString(16)}` : "";
 }
@@ -455,6 +469,12 @@ function describeLink(link: RawBpfLink): string {
       return `iter ${link.target_name ?? "?"}${link.map_id ? ` map ${link.map_id}` : ""}`;
     case "struct_ops":
       return `struct_ops map ${link.map_id ?? "?"}`;
+    case "xdp":
+    case "tcx":
+    case "netkit":
+      // Only foreign-netns links of these types reach here (see
+      // isForeignNetdevLink); same-netns ones are covered by `bpftool net`.
+      return `${link.attach_type ?? link.type} · ifindex ${link.ifindex ?? "?"} (other netns)`;
     default:
       return `${link.type} link`;
   }
@@ -513,7 +533,7 @@ export function enrichWithLinkAttachments(
       if (!prog.pinnedPaths.includes(pin)) prog.pinnedPaths.push(pin);
     }
 
-    if (!LINK_TYPES_COVERED_ELSEWHERE.has(link.type)) {
+    if (!LINK_TYPES_COVERED_ELSEWHERE.has(link.type) || isForeignNetdevLink(link)) {
       prog.attachments.push({
         kind: "link",
         detail: describeLink(link),

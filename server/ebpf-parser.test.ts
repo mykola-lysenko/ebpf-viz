@@ -350,11 +350,45 @@ describe("enrichWithLinkAttachments", () => {
   it("skips attachments for link types covered by net/cgroup sources", () => {
     const progs = parseProgList([xdpProg, cgroupSkbProg]);
     enrichWithLinkAttachments(progs, [
-      { id: 8, type: "xdp", prog_id: 1, ifindex: 2 },
+      { id: 8, type: "xdp", prog_id: 1, devname: "eth0", ifindex: 2 },
       { id: 9, type: "cgroup", prog_id: 2, cgroup_id: 4321, attach_type: "cgroup_inet_ingress" },
     ]);
     expect(progs.get(1)!.attachments).toEqual([]);
     expect(progs.get(2)!.attachments).toEqual([]);
+  });
+
+  it("keeps netdev link attachments whose device is in another netns", () => {
+    // Verbatim from `bpftool -j link list` run against a Cilium 1.19 netkit
+    // datapath in a kind node: devname is "(unknown)" because the netkit
+    // device lives in the pod netns, so `bpftool net` will never report it —
+    // the link is the only evidence of the attachment.
+    const progs = parseProgList([
+      { ...xdpProg, id: 1687, type: "sched_cls", name: "cil_from_container" },
+      { ...xdpProg, id: 1681, type: "sched_cls", name: "cil_to_netdev" },
+    ]);
+    enrichWithLinkAttachments(progs, [
+      {
+        id: 98,
+        type: "netkit",
+        prog_id: 1687,
+        devname: "(unknown)",
+        ifindex: 6,
+        attach_type: "netkit_peer",
+      },
+      // Same shape but resolvable in our netns → covered by `bpftool net`.
+      {
+        id: 87,
+        type: "tcx",
+        prog_id: 1681,
+        devname: "cilium_vxlan",
+        ifindex: 5,
+        attach_type: "tcx_ingress",
+      },
+    ]);
+    expect(progs.get(1687)!.attachments).toEqual([
+      { kind: "link", detail: "netkit_peer · ifindex 6 (other netns)", linkId: 98 },
+    ]);
+    expect(progs.get(1681)!.attachments).toEqual([]);
   });
 
   it("still adopts pids from net/cgroup-covered link types", () => {
