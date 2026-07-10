@@ -145,6 +145,36 @@ cd kind && ./setup.sh --teardown && ./setup.sh --netkit
 Pods now get netkit devices instead of veth — the dashboard shows netkit
 links and the `bpftool net` netkit section.
 
+## 6. netkit without Kubernetes (`netkit/`)
+
+The kind cluster above needs Kubernetes just to get Cilium to create netkit
+devices. `lab/netkit/` reproduces the same datapath — real netkit device pairs
+connecting namespaces, each carrying a `sched_cls` program attached via a
+**netkit link** — with no Kubernetes and no Cilium, using the same libraries
+Cilium's agent uses (`cilium/ebpf` + `vishvananda/netlink`). It still needs the
+custom netkit kernel from section 5.
+
+Why a Go loader and not `ip`/`bpftool`: netkit's BPF program is attached over
+netlink (`bpf_link_create` with `BPF_NETKIT_PRIMARY`/`PEER`) — there is no
+`tc`/`bpftool` CLI for it — and this host's iproute2 (6.1) is too old to even
+create a netkit device. netlink is version-independent, so the loader does both.
+
+```bash
+cd netkit
+./build.sh              # compile the BPF object + build the Go loader
+                        # (first build may fetch a newer Go toolchain)
+sudo ./setup.sh         # named netns: nklab-node + nklab-pod1..3, netkit pairs,
+                        # programs attached + pinned under /sys/fs/bpf/nklab
+sudo ip netns exec nklab-pod1 ping -c100 10.244.2.2   # pod1 -> pod2 traffic
+sudo ./setup.sh --teardown
+```
+
+Because these are **named** namespaces (`/var/run/netns`), the dashboard reaches
+them via `nsenter` with the host's own bpftool — so the **Topology** view shows
+`nklab-node` connected to each `nklab-pod` by a netkit edge with `nk_to_pod` /
+`nk_from_pod` on the sides, **fully attributed** (no docker bridge, no ifindex
+ambiguity, no `(?)`). This is the cleanest way to see the netkit topology.
+
 ## Known stock-WSL2-kernel limits
 
 - **netkit** needs kernel ≥ 6.7 (+ Cilium ≥ 1.16 netkit mode or iproute2 ≥ 6.7) — requires a custom WSL2 kernel; see the phased plan.

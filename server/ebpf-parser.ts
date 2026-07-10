@@ -17,6 +17,7 @@ import type {
   RawNetEntry,
   RawNetSnapshot,
   RawNetnsSnapshot,
+  RawNetnsLink,
   RawTcFilterEntry,
   NamespaceTopology,
   NamespaceTopologyEndpoint,
@@ -1619,15 +1620,20 @@ export function buildNamespaceTopology(
     ensureNode(ns.label, ns.label, false).deviceCount = ns.links?.length ?? 0;
   }
 
-  // ifindex → labels of scanned namespaces holding a device with that ifindex,
-  // for peer resolution.
+  // Per-namespace device index (ifindex → its own peer_ifindex), for peer
+  // resolution. ifindexes repeat across namespaces (every pod's eth0 tends to
+  // be ifindex 2), so a device at the peer ifindex isn't enough on its own.
+  const devByNsIfindex = new Map<string, Map<number, RawNetnsLink>>();
   const labelsByIfindex = new Map<number, string[]>();
   for (const ns of netns) {
+    const byIf = new Map<number, RawNetnsLink>();
     for (const link of ns.links ?? []) {
+      byIf.set(link.ifindex, link);
       const list = labelsByIfindex.get(link.ifindex);
       if (list) list.push(ns.label);
       else labelsByIfindex.set(link.ifindex, [ns.label]);
     }
+    devByNsIfindex.set(ns.label, byIf);
   }
 
   const edges: NamespaceTopology["edges"] = [];
@@ -1639,18 +1645,27 @@ export function buildNamespaceTopology(
       if (typeof dev.link_index !== "number") continue; // no peer → skip
 
       const peerIfindex = dev.link_index;
-      // Resolve the peer namespace: a scanned namespace (other than this one)
-      // holding exactly one device at the peer ifindex, else an inferred node.
-      const candidates = (labelsByIfindex.get(peerIfindex) ?? []).filter(
+      // Resolve the peer namespace. Prefer a bidirectional match: the peer's
+      // device points back at THIS device's (namespace-unique) ifindex — this
+      // disambiguates even when several namespaces share the peer ifindex.
+      const byIfindexCandidates = (labelsByIfindex.get(peerIfindex) ?? []).filter(
         l => l !== ns.label
+      );
+      const backMatches = byIfindexCandidates.filter(
+        l => devByNsIfindex.get(l)?.get(peerIfindex)?.link_index === dev.ifindex
       );
       let peerLabel: string;
       let peerInferred: boolean;
-      if (candidates.length === 1) {
-        peerLabel = candidates[0];
+      if (backMatches.length === 1) {
+        peerLabel = backMatches[0];
+        peerInferred = false;
+      } else if (backMatches.length === 0 && byIfindexCandidates.length === 1) {
+        // One-way match (peer didn't report a back-reference) — still unique.
+        peerLabel = byIfindexCandidates[0];
         peerInferred = false;
       } else {
-        // Behind a namespace we did not enter (e.g. a pod behind a kind node).
+        // Behind a namespace we did not enter (e.g. a pod behind a kind node),
+        // or genuinely ambiguous — synthesize an inferred peer node.
         peerLabel = `${ns.label} · peer nsid ${dev.link_netnsid ?? "?"}`;
         peerInferred = true;
       }

@@ -1069,6 +1069,52 @@ describe("buildNamespaceTopology", () => {
     expect(edge.ambiguous).toBeUndefined();
   });
 
+  it("resolves peers bidirectionally when pod ifindexes collide", () => {
+    // Two pods both have eth0 at ifindex 2 (typical for fresh netns). Matching
+    // by peer ifindex alone is ambiguous; the back-reference (pod eth0's
+    // link_index points at the node device's unique ifindex) disambiguates.
+    const progs = parseProgList([
+      { ...xdpProg, id: 100, type: "sched_cls", name: "nk_to_pod" },
+      { ...xdpProg, id: 101, type: "sched_cls", name: "nk_from_pod" },
+    ]);
+    const netns: RawNetnsSnapshot[] = [
+      {
+        id: "node", label: "nklab-node",
+        net: [{ tc: [
+          { devname: "nk-pod1", ifindex: 7, kind: "netkit/primary", name: "nk_to_pod", prog_id: 100 },
+          { devname: "nk-pod2", ifindex: 9, kind: "netkit/primary", name: "nk_to_pod", prog_id: 100 },
+        ] }],
+        links: [
+          { ifindex: 7, ifname: "nk-pod1", kind: "netkit", link_index: 2, link_netnsid: 1 },
+          { ifindex: 9, ifname: "nk-pod2", kind: "netkit", link_index: 2, link_netnsid: 2 },
+        ],
+      },
+      {
+        id: "pod1", label: "nklab-pod1",
+        net: [{ tc: [{ devname: "eth0", ifindex: 2, kind: "netkit/peer", name: "nk_from_pod", prog_id: 101 }] }],
+        links: [{ ifindex: 2, ifname: "eth0", kind: "netkit", link_index: 7, link_netnsid: 0 }],
+      },
+      {
+        id: "pod2", label: "nklab-pod2",
+        net: [{ tc: [{ devname: "eth0", ifindex: 2, kind: "netkit/peer", name: "nk_from_pod", prog_id: 101 }] }],
+        links: [{ ifindex: 2, ifname: "eth0", kind: "netkit", link_index: 9, link_netnsid: 0 }],
+      },
+    ];
+    const topo = buildNamespaceTopology(progs, netns, []);
+
+    // No inferred nodes — both pods resolved to their real names.
+    expect(topo.nodes.every(n => !n.inferred)).toBe(true);
+    expect(topo.nodes.map(n => n.id).sort()).toEqual(["nklab-node", "nklab-pod1", "nklab-pod2"]);
+
+    // node:7 pairs with pod1 (its eth0 points back at 7), node:9 with pod2.
+    const e1 = topo.edges.find(e => e.a.ifindex === 7 || e.b.ifindex === 7)!;
+    const peer1 = e1.a.ifindex === 7 ? e1.b : e1.a;
+    expect(peer1.namespace).toBe("nklab-pod1");
+    const e2 = topo.edges.find(e => e.a.ifindex === 9 || e.b.ifindex === 9)!;
+    const peer2 = e2.a.ifindex === 9 ? e2.b : e2.a;
+    expect(peer2.namespace).toBe("nklab-pod2");
+  });
+
   it("returns an empty topology when no namespaces were scanned", () => {
     const topo = buildNamespaceTopology(new Map(), [], []);
     expect(topo).toEqual({ nodes: [], edges: [] });
