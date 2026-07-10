@@ -101,34 +101,42 @@ matching Microsoft kernel with netkit (+ `CONFIG_FPROBE` for kprobe_multi):
 # dwarves (pahole) MUST be installed BEFORE the config step — Kconfig probes
 # for it and silently drops CONFIG_DEBUG_INFO_BTF (no BTF → no bpftrace, no
 # fentry, no CO-RE) when it's missing at `make olddefconfig` time.
-sudo apt-get install -y dwarves
+sudo apt-get install -y dwarves qemu-utils
 git clone --depth 1 --branch linux-msft-wsl-$(uname -r | cut -d- -f1) \
   https://github.com/microsoft/WSL2-Linux-Kernel.git
 cd WSL2-Linux-Kernel
 cp Microsoft/config-wsl .config
 ./scripts/config --enable NETKIT --enable FPROBE
 make olddefconfig
+# Sanity check — must show =y and a non-zero pahole version:
+grep -E "DEBUG_INFO_BTF=|NETKIT=|PAHOLE_VERSION" .config
+make -j$(nproc)
+make INSTALL_MOD_PATH="$PWD/modules-staging" INSTALL_MOD_STRIP=1 modules_install
 # The stock config builds ~1000 options as modules (incl. the netfilter/
 # conntrack stack Docker needs), shipped in Microsoft's modules.vhd — which
-# refuses to load into a rebuilt kernel. Fold them into the image instead:
-make mod2yesconfig
-make -j$(nproc)
+# refuses to load into a rebuilt kernel. Package OUR modules the same way
+# (do NOT `make mod2yesconfig` them into the image instead: the resulting
+# ~54MB monolith fails to boot — WSL aborts with CreateVm/E_ABORT):
+sudo bash Microsoft/scripts/gen_modules_vhdx.sh \
+  "$PWD/modules-staging" "$(make -s kernelrelease)" ~/wsl-modules.vhdx
 cp arch/x86/boot/bzImage /mnt/c/Users/<you>/wsl-kernel-netkit
+cp ~/wsl-modules.vhdx /mnt/c/Users/<you>/wsl-modules.vhdx
 ```
-
-Sanity-check the config before building: `grep -E "DEBUG_INFO_BTF=|NETKIT=|PAHOLE_VERSION" .config`
-should show both `=y` and a non-zero pahole version.
 
 Then in `C:\Users\<you>\.wslconfig`:
 
 ```ini
 [wsl2]
 kernel=C:\\Users\\<you>\\wsl-kernel-netkit
+kernelModules=C:\\Users\\<you>\\wsl-modules.vhdx
 ```
 
 `wsl --shutdown` from Windows, reopen, verify with
-`zcat /proc/config.gz | grep NETKIT`. Revert anytime by removing the
-`kernel=` line. Finally:
+`zcat /proc/config.gz | grep NETKIT` and check modules load (`lsmod` non-empty,
+`docker version` works — Docker Desktop needs modular filesystems like
+iso9660). Revert anytime by removing the `kernel=`/`kernelModules=` lines.
+Note: Windows locks the currently-booted kernel file, so to replace it,
+write under a new filename and update `.wslconfig`. Finally:
 
 ```bash
 cd kind && ./setup.sh --teardown && ./setup.sh --netkit
