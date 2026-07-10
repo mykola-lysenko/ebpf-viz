@@ -14,6 +14,7 @@ import { BPF_PROGRAM_TYPE_COLORS } from "../shared/ebpf-constants";
 import type {
   RawBpfProg,
   RawNetSnapshot,
+  RawNetnsSnapshot,
   RawCgroupEntry,
 } from "../shared/ebpf-types";
 
@@ -927,6 +928,47 @@ describe("buildNetworkInterfaces", () => {
     expect(sm.layers.L7).toHaveLength(1);
     expect(sm.layers.L2).toHaveLength(0);
     expect(sm.layers.L3).toHaveLength(0);
+  });
+
+  it("builds per-netns interfaces from netns scans, keyed apart from host", () => {
+    const progs = parseProgList([
+      xdpProg,
+      { ...xdpProg, id: 30, type: "sched_cls", name: "cil_from_container" },
+      { ...xdpProg, id: 31, type: "sched_cls", name: "cil_to_netdev" },
+    ]);
+    const hostNet: RawNetSnapshot[] = [
+      { xdp: [{ devname: "eth0", ifindex: 2, mode: "generic", id: 1 }] },
+    ];
+    // Shaped like real `bpftool net` inside a kind node running Cilium in
+    // netkit mode: link-based entries carry prog_id, not id.
+    const netns: RawNetnsSnapshot[] = [
+      {
+        id: "4026533042",
+        label: "ebpfviz-worker",
+        net: [
+          {
+            tc: [
+              { devname: "eth0", ifindex: 2, kind: "tcx/ingress", name: "cil_to_netdev", prog_id: 31 },
+              { devname: "lxc_health", ifindex: 7, kind: "netkit/peer", name: "cil_from_container", prog_id: 30 },
+            ],
+          },
+        ],
+      },
+    ];
+    const interfaces = buildNetworkInterfaces(progs, hostNet, netns);
+
+    // Host eth0 and node eth0 stay separate despite the shared devname.
+    const hostEth0 = interfaces.find(i => i.name === "eth0" && !i.netns)!;
+    expect(hostEth0.layers.L2.map(p => p.id)).toEqual([1]);
+
+    const nodeEth0 = interfaces.find(i => i.name === "eth0" && i.netns === "ebpfviz-worker")!;
+    expect(nodeEth0.layers.L3.map(p => p.id)).toEqual([31]);
+
+    // netkit entries ride the tc section but render at L2.
+    const lxc = interfaces.find(i => i.name === "lxc_health")!;
+    expect(lxc.netns).toBe("ebpfviz-worker");
+    expect(lxc.layers.L2.map(p => p.id)).toEqual([30]);
+    expect(lxc.layers.L3).toHaveLength(0);
   });
 });
 
@@ -2278,6 +2320,52 @@ describe("buildSnapshot", () => {
     expect(snapshot.networkInterfaces.length).toBeGreaterThanOrEqual(1);
     expect(snapshot.cgroupTree.length).toBeGreaterThanOrEqual(1);
     expect(snapshot.kernelZones.length).toBeGreaterThan(0);
+  });
+
+  it("prefers netns scan attachments over the foreign-link ifindex fallback", () => {
+    const cil: RawBpfProg = {
+      ...xdpProg,
+      id: 1687,
+      type: "sched_cls",
+      name: "cil_from_container",
+    };
+    const netns: RawNetnsSnapshot[] = [
+      {
+        id: "4026533042",
+        label: "ebpfviz-worker",
+        net: [
+          {
+            tc: [
+              { devname: "lxc_health", ifindex: 7, kind: "netkit/peer", name: "cil_from_container", prog_id: 1687 },
+            ],
+          },
+        ],
+      },
+    ];
+    const meta = { hostname: "h", kernelVersion: "6.18", bpftoolVersion: "7.8", demoMode: false };
+    const foreignLink = {
+      id: 98,
+      type: "netkit",
+      prog_id: 1687,
+      devname: "(unknown)",
+      ifindex: 6,
+      attach_type: "netkit_peer",
+    };
+
+    // Without the netns scan, the foreign link is the only evidence.
+    const withoutNetns = buildSnapshot([cil], [{}], [], meta, [], [foreignLink]);
+    expect(withoutNetns.programs[0].attachments.map(a => a.detail)).toEqual([
+      "netkit_peer · ifindex 6 (other netns)",
+    ]);
+
+    // With the netns scan, the named-device attachment wins and the
+    // ifindex-only fallback is suppressed.
+    const withNetns = buildSnapshot([cil], [{}], [], meta, [], [foreignLink], netns);
+    expect(withNetns.programs[0].attachments.map(a => a.detail)).toEqual([
+      "lxc_health netkit/peer [cil_from_container] · netns ebpfviz-worker",
+    ]);
+    expect(withNetns.networkInterfaces).toHaveLength(1);
+    expect(withNetns.networkInterfaces[0].netns).toBe("ebpfviz-worker");
   });
 
   it("counts orphaned programs correctly", () => {

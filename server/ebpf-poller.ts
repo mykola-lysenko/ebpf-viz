@@ -11,11 +11,13 @@ import type {
   RawBpfProg,
   RawCgroupEntry,
   RawNetSnapshot,
+  RawNetnsSnapshot,
   RawTcFilterEntry,
 } from "../shared/ebpf-types";
 import { buildSnapshot } from "./ebpf-parser";
 import { buildMockMaps, parseMaps } from "./ebpf-map-parser";
-import { MOCK_CGROUPS, MOCK_LINKS, MOCK_NET, MOCK_PROGS } from "./ebpf-mock";
+import { discoverNetNamespaces } from "./ebpf-netns";
+import { MOCK_CGROUPS, MOCK_LINKS, MOCK_NET, MOCK_NETNS, MOCK_PROGS } from "./ebpf-mock";
 import {
   ingestSnapshot,
   pruneStale,
@@ -173,6 +175,55 @@ async function runBpftool(args: string): Promise<string> {
   return stdout.trim();
 }
 
+/** Run `bpftool net` inside another network namespace via nsenter.
+ *  Requires root (the live poller already runs as root for bpftool). */
+async function runBpftoolNetInNetns(nsPath: string): Promise<string> {
+  const nsenterArgv = [`--net=${nsPath}`, "--", config.bpftoolPath, "-j", "net", "show"];
+  const cmd = config.sudo ? "sudo" : "nsenter";
+  const fullArgv = config.sudo ? ["nsenter", ...nsenterArgv] : nsenterArgv;
+  const { stdout } = await execFileAsync(cmd, fullArgv, {
+    timeout: 10000,
+    maxBuffer: 32 * 1024 * 1024,
+  });
+  return stdout.trim();
+}
+
+/** Does this netns snapshot contain any netdev BPF attachment worth showing?
+ *  Namespaces with none (most pods) are dropped to keep the view focused. */
+function hasNetdevPrograms(net: RawNetSnapshot[]): boolean {
+  const snapshot = net[0];
+  if (!snapshot) return false;
+  return [
+    snapshot.xdp,
+    snapshot.tc,
+    snapshot.tcx,
+    snapshot.netkit,
+    snapshot.flow_dissector,
+    snapshot.netfilter,
+  ].some(section => (section?.length ?? 0) > 0);
+}
+
+/** Scan all reachable non-root network namespaces with `bpftool net`.
+ *  Individual failures (namespace vanished mid-poll, nsenter denied) are
+ *  dropped silently — pod churn makes them routine. */
+async function fetchNetnsData(): Promise<RawNetnsSnapshot[]> {
+  const refs = await discoverNetNamespaces();
+  const scans = await Promise.allSettled(
+    refs.map(async ref => {
+      const out = await runBpftoolNetInNetns(ref.nsPath);
+      const net = JSON.parse(stripNonJson(out)) as RawNetSnapshot[];
+      return { id: ref.id, label: ref.label, net };
+    })
+  );
+  return scans
+    .filter(
+      (s): s is PromiseFulfilledResult<RawNetnsSnapshot> =>
+        s.status === "fulfilled"
+    )
+    .map(s => s.value)
+    .filter(ns => hasNetdevPrograms(ns.net));
+}
+
 async function runTcFilterShow(
   devname: string,
   direction: RawTcFilterEntry["direction"]
@@ -222,6 +273,7 @@ async function fetchLiveData(): Promise<{
   cgroupsEffective: RawCgroupEntry[];
   rawMaps: RawBpfMap[];
   links: RawBpfLink[];
+  netns: RawNetnsSnapshot[];
 }> {
   const [
     progOut,
@@ -230,6 +282,7 @@ async function fetchLiveData(): Promise<{
     cgroupEffectiveOut,
     mapOut,
     linkOut,
+    netnsOut,
   ] = await Promise.allSettled([
     runBpftool("prog list"),
     runBpftool("net"),
@@ -237,6 +290,7 @@ async function fetchLiveData(): Promise<{
     runBpftool("cgroup tree /sys/fs/cgroup effective"),
     runBpftool("map list"),
     runBpftool("link list"),
+    fetchNetnsData(),
   ]);
 
   let progs: RawBpfProg[] = [];
@@ -245,6 +299,8 @@ async function fetchLiveData(): Promise<{
   let cgroupsEffective: RawCgroupEntry[] = [];
   let rawMaps: RawBpfMap[] = [];
   let links: RawBpfLink[] = [];
+  const netns: RawNetnsSnapshot[] =
+    netnsOut.status === "fulfilled" ? netnsOut.value : [];
 
   if (progOut.status === "fulfilled") {
     try { progs = JSON.parse(stripNonJson(progOut.value)); } catch { progs = []; }
@@ -289,7 +345,7 @@ async function fetchLiveData(): Promise<{
     }
   }
 
-  return { progs, net, cgroups, cgroupsEffective, rawMaps, links };
+  return { progs, net, cgroups, cgroupsEffective, rawMaps, links, netns };
 }
 
 // ─── Poll ──────────────────────────────────────────────────────────────────
@@ -307,6 +363,7 @@ async function poll(): Promise<void> {
 
     let rawMaps: RawBpfMap[] = [];
     let links: RawBpfLink[] = [];
+    let netns: RawNetnsSnapshot[] = [];
 
     if (config.demoMode) {
       // Simulate incrementing stats in demo mode so sparklines are always active
@@ -320,6 +377,7 @@ async function poll(): Promise<void> {
       cgroups = MOCK_CGROUPS;
       cgroupsEffective = [];
       links = MOCK_LINKS;
+      netns = MOCK_NETNS;
       void now; // used implicitly via Date.now() in ingestSnapshot
     } else {
       const data = await fetchLiveData();
@@ -329,6 +387,7 @@ async function poll(): Promise<void> {
       cgroupsEffective = data.cgroupsEffective;
       rawMaps = data.rawMaps;
       links = data.links;
+      netns = data.netns;
     }
 
     const snap = buildSnapshot(
@@ -342,7 +401,8 @@ async function poll(): Promise<void> {
         demoMode: config.demoMode,
       },
       cgroupsEffective,
-      links
+      links,
+      netns
     );
 
     // ── Parse maps ─────────────────────────────────────────────────────────

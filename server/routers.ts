@@ -24,7 +24,7 @@ import {
   parseProgArrayTargets,
   MAX_DUMP_ENTRIES,
 } from "./ebpf-map-dump";
-import type { RawBpfLink, RawBpfMap, RawBpfProg, RawCgroupEntry, RawMapEntry, RawNetSnapshot, MapDumpResult, ProgramReturnAnalysisResult } from "../shared/ebpf-types";
+import type { RawBpfLink, RawBpfMap, RawBpfProg, RawCgroupEntry, RawMapEntry, RawNetSnapshot, RawNetnsSnapshot, MapDumpResult, ProgramReturnAnalysisResult } from "../shared/ebpf-types";
 import { parseMapDumpsInputSchema, rawSnapshotInputSchema } from "../shared/snapshot-validation";
 import { buildMockMapDump } from "./ebpf-mock-map-dump";
 
@@ -259,7 +259,8 @@ export const appRouter = router({
             demoMode: false,
           },
           (input.raw.cgroupsEffective ?? []) as RawCgroupEntry[],
-          (input.raw.links ?? []) as RawBpfLink[]
+          (input.raw.links ?? []) as RawBpfLink[],
+          (input.raw.netns ?? []) as RawNetnsSnapshot[]
         );
         // Preserve the original capture timestamp if provided
         if (input.timestamp !== undefined) snap.timestamp = input.timestamp;

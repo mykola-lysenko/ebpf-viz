@@ -437,13 +437,17 @@ export function buildOsMapLayout(
   const IFACE_NODE_PADDING_TOP = 60; // distance from band top to first node
   const IFACE_SAFETY_MARGIN = 40;
 
+  // The OS map draws one kernel/host — interfaces from other network
+  // namespaces (containers, pods) live in the Network view instead.
+  const hostInterfaces = snapshot.networkInterfaces.filter(i => !i.netns);
+
   let maxIfaceH = 200; // fallback minimum
-  snapshot.networkInterfaces.forEach(iface => {
+  hostInterfaces.forEach(iface => {
     const h = estimateInterfaceNodeHeight(iface.layers, lod);
     if (h > maxIfaceH) maxIfaceH = h;
   });
 
-  snapshot.networkInterfaces.forEach((iface, idx) => {
+  hostInterfaces.forEach((iface, idx) => {
     const x = KERNEL_PADDING + idx * (IFACE_W + IFACE_GAP);
     const y = NET_Y + IFACE_NODE_PADDING_TOP;
 
@@ -538,7 +542,7 @@ export function buildOsMapLayout(
 
       if (NIC_ZONE_KEYS.has(zoneKey)) {
         // Find the interface this program is attached to
-        const attachedIface = snapshot.networkInterfaces.find(iface =>
+        const attachedIface = hostInterfaces.find(iface =>
           iface.allPrograms.some(ap => ap.id === prog.id)
         );
         if (attachedIface) {
@@ -671,7 +675,7 @@ export function buildOsMapLayout(
 
         let sourceNodeId = `zone-${zoneKey}`;
         if (NIC_ZONE_KEYS.has(zoneKey)) {
-          const attachedIface = snapshot.networkInterfaces.find(iface =>
+          const attachedIface = hostInterfaces.find(iface =>
             iface.allPrograms.some(ap => ap.id === prog.id)
           );
           if (attachedIface) sourceNodeId = `iface-${attachedIface.name}`;
@@ -741,7 +745,7 @@ export function buildOsMapLayout(
 
         let sourceNodeId = `zone-${zoneKey}`;
         if (NIC_ZONE_KEYS.has(zoneKey)) {
-          const attachedIface = snapshot.networkInterfaces.find(iface =>
+          const attachedIface = hostInterfaces.find(iface =>
             iface.allPrograms.some(ap => ap.id === prog.id)
           );
           if (attachedIface) sourceNodeId = `iface-${attachedIface.name}`;
@@ -832,7 +836,7 @@ function progZoneForLayout(
   if (zone !== "tc_ingress" && zone !== "tc_egress") return zone;
 
   const isAttachedToInterface = snapshot.networkInterfaces.some(iface =>
-    iface.allPrograms.some(attached => attached.id === prog.id)
+    !iface.netns && iface.allPrograms.some(attached => attached.id === prog.id)
   );
   return isAttachedToInterface ? zone : "other";
 }

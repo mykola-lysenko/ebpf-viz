@@ -9,6 +9,7 @@ import {
   Wifi,
   Share2,
   AlertTriangle,
+  Box,
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
@@ -1049,7 +1050,7 @@ function InterfaceSection({
         {interfaces.length > 0 ? (
           interfaces.map(iface => (
             <InterfaceCard
-              key={iface.name}
+              key={`${iface.netns ?? ""}::${iface.name}`}
               iface={iface}
               tcChains={tcChains}
               returnAnalysisById={returnAnalysisById}
@@ -1164,8 +1165,17 @@ export default function NetworkView() {
         .filter(i => i.allPrograms.length > 0)
     : snapshot.networkInterfaces;
 
-  const nicInterfaces = interfaces.filter(i => i.kind === "nic");
+  const nicInterfaces = interfaces.filter(i => i.kind === "nic" && !i.netns);
   const sockmapInterfaces = interfaces.filter(i => i.kind === "sockmap");
+  // Interfaces discovered inside other network namespaces (containers,
+  // pods, named netns), grouped per namespace.
+  const netnsGroups = new Map<string, typeof interfaces>();
+  for (const iface of interfaces) {
+    if (iface.kind !== "nic" || !iface.netns) continue;
+    const group = netnsGroups.get(iface.netns);
+    if (group) group.push(iface);
+    else netnsGroups.set(iface.netns, [iface]);
+  }
   const totalNetProgs = snapshot.networkInterfaces.reduce(
     (a, i) => a + i.allPrograms.length,
     0
@@ -1239,6 +1249,23 @@ export default function NetworkView() {
             : undefined
         }
       />
+
+      {/* ── Per-netns sections (containers, pods, named namespaces) ──────── */}
+      {Array.from(netnsGroups.entries()).map(([netns, ifaces]) => (
+        <InterfaceSection
+          key={`netns-${netns}`}
+          title={`Namespace: ${netns}`}
+          description="Devices inside this network namespace — scanned via nsenter"
+          icon={<Box size={15} style={{ color: "oklch(0.72 0.15 220)" }} />}
+          interfaces={ifaces}
+          accentColor="#38bdf8"
+          tcChains={tcChains}
+          returnAnalysisById={returnAnalysisById}
+          returnAnalysisLoading={returnAnalysisLoading}
+          progArrayTargets={progArrayTargets}
+          emptyMessage="No interfaces match the current filter."
+        />
+      ))}
 
       {/* ── Sockmap section (hidden when empty in live mode) ─────────────── */}
       {(sockmapInterfaces.length > 0 || searchQuery) && (

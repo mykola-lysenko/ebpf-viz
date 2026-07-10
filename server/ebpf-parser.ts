@@ -16,6 +16,7 @@ import type {
   RawCgroupEntry,
   RawNetEntry,
   RawNetSnapshot,
+  RawNetnsSnapshot,
   RawTcFilterEntry,
 } from "../shared/ebpf-types";
 import { BPF_PROGRAM_TYPE_COLORS } from "../shared/ebpf-constants";
@@ -510,7 +511,11 @@ function refineTypeFromLink(prog: BpfProgram, link: RawBpfLink): void {
 
 export function enrichWithLinkAttachments(
   progs: Map<number, BpfProgram>,
-  links: RawBpfLink[]
+  links: RawBpfLink[],
+  /** Prog ids whose netdev attachments were observed by a per-netns
+   *  `bpftool net` scan — their foreign links are covered there, with real
+   *  device names, so the ifindex-only fallback would be a duplicate. */
+  netdevProgIdsCoveredByNetns: Set<number> = new Set()
 ): void {
   for (const link of links) {
     if (typeof link?.prog_id !== "number") continue;
@@ -533,7 +538,11 @@ export function enrichWithLinkAttachments(
       if (!prog.pinnedPaths.includes(pin)) prog.pinnedPaths.push(pin);
     }
 
-    if (!LINK_TYPES_COVERED_ELSEWHERE.has(link.type) || isForeignNetdevLink(link)) {
+    if (
+      !LINK_TYPES_COVERED_ELSEWHERE.has(link.type) ||
+      (isForeignNetdevLink(link) &&
+        !netdevProgIdsCoveredByNetns.has(link.prog_id))
+    ) {
       prog.attachments.push({
         kind: "link",
         detail: describeLink(link),
@@ -545,24 +554,32 @@ export function enrichWithLinkAttachments(
 
 // ─── Enrich with net attachments ──────────────────────────────────────────
 
+/** bpftool net emits `id` for legacy tc/xdp entries but `prog_id` for
+ *  link-based tcx/netkit entries. */
+function netEntryProgId(entry: RawNetEntry): number | undefined {
+  return entry.id ?? entry.prog_id;
+}
+
 export function enrichWithNetAttachments(
   progs: Map<number, BpfProgram>,
-  net: RawNetSnapshot[]
+  net: RawNetSnapshot[],
+  netnsLabel?: string
 ): void {
   const snapshot = net[0] ?? {};
+  const suffix = netnsLabel ? ` · netns ${netnsLabel}` : "";
 
   for (const entry of snapshot.xdp ?? []) {
-    const p = progs.get(entry.id);
+    const p = progs.get(netEntryProgId(entry) ?? -1);
     if (!p) continue;
     p.attachments.push({
       kind: "xdp",
-      detail: `${entry.devname} (${entry.mode ?? "driver"})`,
+      detail: `${entry.devname} (${entry.mode ?? "driver"})${suffix}`,
       ifname: entry.devname,
     });
   }
 
   for (const entry of snapshot.tc ?? []) {
-    const p = progs.get(entry.id);
+    const p = progs.get(netEntryProgId(entry) ?? -1);
     if (!p) continue;
     const kindStr = entry.kind ?? "";
     const direction: "ingress" | "egress" | undefined = kindStr.includes(
@@ -575,14 +592,14 @@ export function enrichWithNetAttachments(
     p.attachments.push({
       kind: "tc",
       detail:
-        `${entry.devname} ${kindStr || "tc"} ${entry.name ? `[${entry.name}]` : ""}`.trim(),
+        `${entry.devname} ${kindStr || "tc"} ${entry.name ? `[${entry.name}]` : ""}`.trim() + suffix,
       ifname: entry.devname,
       direction,
     });
   }
 
   for (const entry of snapshot.tcx ?? []) {
-    const p = progs.get(entry.id);
+    const p = progs.get(netEntryProgId(entry) ?? -1);
     if (!p) continue;
     const kindStr = entry.kind ?? "";
     const direction: "ingress" | "egress" | undefined = kindStr.includes(
@@ -594,28 +611,28 @@ export function enrichWithNetAttachments(
         : undefined;
     p.attachments.push({
       kind: "tcx",
-      detail: `${entry.devname} tcx${kindStr ? ` ${kindStr}` : ""}`,
+      detail: `${entry.devname} tcx${kindStr ? ` ${kindStr}` : ""}${suffix}`,
       ifname: entry.devname,
       direction,
     });
   }
 
   for (const entry of snapshot.flow_dissector ?? []) {
-    const p = progs.get(entry.id);
+    const p = progs.get(netEntryProgId(entry) ?? -1);
     if (!p) continue;
     p.attachments.push({
       kind: "flow_dissector",
-      detail: `${entry.devname} flow_dissector`,
+      detail: `${entry.devname} flow_dissector${suffix}`,
       ifname: entry.devname,
     });
   }
 
   for (const entry of snapshot.netfilter ?? []) {
-    const p = progs.get(entry.id);
+    const p = progs.get(netEntryProgId(entry) ?? -1);
     if (!p) continue;
     p.attachments.push({
       kind: "netfilter",
-      detail: `netfilter id=${entry.id}`,
+      detail: `netfilter id=${netEntryProgId(entry)}${suffix}`,
     });
   }
 }
@@ -644,73 +661,86 @@ export function enrichWithCgroupAttachments(
 
 export function buildNetworkInterfaces(
   progs: Map<number, BpfProgram>,
-  net: RawNetSnapshot[]
+  net: RawNetSnapshot[],
+  netns: RawNetnsSnapshot[] = []
 ): NetworkInterface[] {
-  const snapshot = net[0] ?? {};
   const ifaceMap = new Map<string, NetworkInterface>();
 
-  const getOrCreate = (
-    name: string,
-    ifindex: number,
-    kind: "nic" | "sockmap" = "nic"
-  ): NetworkInterface => {
-    if (!ifaceMap.has(name)) {
-      ifaceMap.set(name, {
-        name,
-        ifindex,
-        kind,
-        layers: { L2: [], L3: [], L4: [], L7: [] },
-        allPrograms: [],
-      });
+  const collect = (snapshot: RawNetSnapshot, netnsLabel?: string): void => {
+    const getOrCreate = (
+      name: string,
+      ifindex: number,
+      kind: "nic" | "sockmap" = "nic"
+    ): NetworkInterface => {
+      // Devnames repeat across namespaces (every pod has an eth0) — key by both.
+      const key = `${netnsLabel ?? ""}::${name}`;
+      if (!ifaceMap.has(key)) {
+        ifaceMap.set(key, {
+          name,
+          ifindex,
+          kind,
+          ...(netnsLabel ? { netns: netnsLabel } : {}),
+          layers: { L2: [], L3: [], L4: [], L7: [] },
+          allPrograms: [],
+        });
+      }
+      return ifaceMap.get(key)!;
+    };
+
+    for (const entry of snapshot.xdp ?? []) {
+      const p = progs.get(netEntryProgId(entry) ?? -1);
+      if (!p) continue;
+      const iface = getOrCreate(entry.devname, entry.ifindex, "nic");
+      iface.layers.L2.push(p);
+      iface.allPrograms.push(p);
     }
-    return ifaceMap.get(name)!;
+
+    for (const entry of tcLayerEntries(progs, snapshot)) {
+      const p = progs.get(netEntryProgId(entry) ?? -1);
+      if (!p) continue;
+      const iface = getOrCreate(entry.devname, entry.ifindex, "nic");
+      // netkit programs ride the tc section (kind "netkit/peer|primary") but
+      // hook the device like XDP does — show them at L2 with other netkit.
+      const layer = entry.kind?.startsWith("netkit") ? "L2" : "L3";
+      iface.layers[layer].push(p);
+      iface.allPrograms.push(p);
+    }
+
+    for (const entry of [
+      ...(snapshot.netfilter ?? []),
+      ...(snapshot.flow_dissector ?? []),
+    ]) {
+      const p = progs.get(netEntryProgId(entry) ?? -1);
+      if (!p) continue;
+      const iface = getOrCreate(entry.devname, entry.ifindex, "nic");
+      iface.layers.L3.push(p);
+      iface.allPrograms.push(p);
+    }
+
+    for (const entry of snapshot.netkit ?? []) {
+      const p = progs.get(netEntryProgId(entry) ?? -1);
+      if (!p) continue;
+      const iface = getOrCreate(entry.devname, entry.ifindex, "nic");
+      iface.layers.L2.push(p);
+      iface.allPrograms.push(p);
+    }
+
+    // Sockmap/sockhash entries: route to L4 or L7 based on program type.
+    // sk_skb and sk_lookup operate at the transport layer (L4).
+    // sk_msg and sock_ops operate at the application/socket layer (L7).
+    for (const entry of snapshot.sockmap ?? []) {
+      const p = progs.get(netEntryProgId(entry) ?? -1);
+      if (!p) continue;
+      const iface = getOrCreate(entry.devname, entry.ifindex, "sockmap");
+      const layer = p.type === "sk_msg" || p.type === "sock_ops" ? "L7" : "L4";
+      iface.layers[layer].push(p);
+      iface.allPrograms.push(p);
+    }
   };
 
-  for (const entry of snapshot.xdp ?? []) {
-    const p = progs.get(entry.id);
-    if (!p) continue;
-    const iface = getOrCreate(entry.devname, entry.ifindex, "nic");
-    iface.layers.L2.push(p);
-    iface.allPrograms.push(p);
-  }
-
-  for (const entry of tcLayerEntries(progs, snapshot)) {
-    const p = progs.get(entry.id);
-    if (!p) continue;
-    const iface = getOrCreate(entry.devname, entry.ifindex, "nic");
-    iface.layers.L3.push(p);
-    iface.allPrograms.push(p);
-  }
-
-  for (const entry of [
-    ...(snapshot.netfilter ?? []),
-    ...(snapshot.flow_dissector ?? []),
-  ]) {
-    const p = progs.get(entry.id);
-    if (!p) continue;
-    const iface = getOrCreate(entry.devname, entry.ifindex, "nic");
-    iface.layers.L3.push(p);
-    iface.allPrograms.push(p);
-  }
-
-  for (const entry of snapshot.netkit ?? []) {
-    const p = progs.get(entry.id);
-    if (!p) continue;
-    const iface = getOrCreate(entry.devname, entry.ifindex, "nic");
-    iface.layers.L2.push(p);
-    iface.allPrograms.push(p);
-  }
-
-  // Sockmap/sockhash entries: route to L4 or L7 based on program type.
-  // sk_skb and sk_lookup operate at the transport layer (L4).
-  // sk_msg and sock_ops operate at the application/socket layer (L7).
-  for (const entry of snapshot.sockmap ?? []) {
-    const p = progs.get(entry.id);
-    if (!p) continue;
-    const iface = getOrCreate(entry.devname, entry.ifindex, "sockmap");
-    const layer = p.type === "sk_msg" || p.type === "sock_ops" ? "L7" : "L4";
-    iface.layers[layer].push(p);
-    iface.allPrograms.push(p);
+  collect(net[0] ?? {});
+  for (const ns of netns) {
+    collect(ns.net[0] ?? {}, ns.label);
   }
 
   return Array.from(ifaceMap.values() as Iterable<NetworkInterface>);
@@ -1398,7 +1428,8 @@ export function buildProgramChains(
   }
 
   for (const entry of snapshot.tc ?? []) {
-    if (!progs.has(entry.id)) continue;
+    const progId = netEntryProgId(entry);
+    if (progId === undefined || !progs.has(progId)) continue;
     const kind = entry.kind ?? "tc";
     const key = tcHookKey(entry.devname, kind);
     if (detailedHooks.has(key)) continue;
@@ -1414,11 +1445,11 @@ export function buildProgramChains(
     const group = tcByHook.get(key)!;
     // The coarse bpftool net view can repeat the same attachment; avoid
     // manufacturing duplicate chain positions unless detailed tc data says so.
-    if (!group.programs.some(p => p.id === entry.id)) {
+    if (!group.programs.some(p => p.id === progId)) {
       group.programs.push({
-        id: entry.id,
+        id: progId,
         position: group.programs.length + 1,
-        name: entry.name ?? progs.get(entry.id)!.name,
+        name: entry.name ?? progs.get(progId)!.name,
       });
     }
   }
@@ -1447,6 +1478,27 @@ export function buildProgramChains(
 
 // ─── Master parse function ─────────────────────────────────────────────────
 
+/** Prog ids with a netdev attachment (xdp/tc/tcx/netkit/…) in any per-netns
+ *  scan — used to suppress the ifindex-only link fallback for those progs. */
+function netdevProgIdsFromNetns(netns: RawNetnsSnapshot[]): Set<number> {
+  const ids = new Set<number>();
+  for (const ns of netns) {
+    const snapshot = ns.net[0] ?? {};
+    for (const entry of [
+      ...(snapshot.xdp ?? []),
+      ...(snapshot.tc ?? []),
+      ...(snapshot.tcx ?? []),
+      ...(snapshot.netkit ?? []),
+      ...(snapshot.flow_dissector ?? []),
+      ...(snapshot.netfilter ?? []),
+    ]) {
+      const id = netEntryProgId(entry);
+      if (id !== undefined) ids.add(id);
+    }
+  }
+  return ids;
+}
+
 export function buildSnapshot(
   rawProgs: RawBpfProg[],
   rawNet: RawNetSnapshot[],
@@ -1458,13 +1510,17 @@ export function buildSnapshot(
     demoMode: boolean;
   },
   rawEffectiveCgroups: RawCgroupEntry[] = [],
-  rawLinks: RawBpfLink[] = []
+  rawLinks: RawBpfLink[] = [],
+  rawNetns: RawNetnsSnapshot[] = []
 ): EbpfSnapshot {
   const progMap = parseProgList(rawProgs);
   // Links first: they refine coarse prog types (tracing → fentry/fexit,
   // kprobe → kretprobe/uprobe) that zone/interface building depends on.
-  enrichWithLinkAttachments(progMap, rawLinks);
+  enrichWithLinkAttachments(progMap, rawLinks, netdevProgIdsFromNetns(rawNetns));
   enrichWithNetAttachments(progMap, rawNet);
+  for (const ns of rawNetns) {
+    enrichWithNetAttachments(progMap, ns.net, ns.label);
+  }
   enrichWithCgroupAttachments(progMap, rawCgroups);
 
   const programs = Array.from(progMap.values());
@@ -1480,7 +1536,7 @@ export function buildSnapshot(
     bpftoolVersion: meta.bpftoolVersion,
     demoMode: meta.demoMode,
     programs,
-    networkInterfaces: buildNetworkInterfaces(progMap, rawNet),
+    networkInterfaces: buildNetworkInterfaces(progMap, rawNet, rawNetns),
     cgroupTree: buildCgroupTree(progMap, rawCgroups),
     kernelZones: buildKernelZones(progMap),
     programChains: buildProgramChains(

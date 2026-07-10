@@ -235,6 +235,82 @@ collect_tc_filters_to_file() {
   printf '\n  ]\n' >> "$outfile"
 }
 
+# Capture `bpftool net` inside every reachable non-root network namespace.
+# bpftool net is netns-scoped: container/pod datapaths (Cilium netkit/tcx in
+# k8s nodes, docker) are invisible from the host netns. Mirrors the server's
+# live netns scan; emits the raw.netns array. Requires nsenter + root; on
+# systems without either the array is left empty.
+collect_netns_to_file() {
+  local outfile="$1"
+  printf '[' > "$outfile"
+
+  if ! command -v nsenter &>/dev/null || [[ ! -r /proc/self/ns/net ]]; then
+    printf ']\n' >> "$outfile"
+    return 0
+  fi
+
+  local host_ino
+  host_ino=$(readlink /proc/self/ns/net 2>/dev/null | grep -oE '[0-9]+' || true)
+
+  local first=1
+  declare -A seen_ino=()
+  [[ -n "$host_ino" ]] && seen_ino["$host_ino"]=1
+
+  emit_netns() { # <inode> <label> <nsPath>
+    local ino="$1" label="$2" ns_path="$3"
+    local net_tmp="$TMPDIR_SNAP/netns_${ino}.json"
+    local cmd_parts=()
+    if [[ -n "$TIMEOUT_CMD" ]]; then
+      cmd_parts+=("$TIMEOUT_CMD" "$CMD_TIMEOUT")
+    fi
+    if [[ ${#SUDO_PREFIX[@]} -gt 0 ]]; then
+      cmd_parts+=("${SUDO_PREFIX[@]}")
+    fi
+    cmd_parts+=(nsenter "--net=$ns_path" -- "$BPFTOOL" -j net show)
+    if ! "${cmd_parts[@]}" 2>/dev/null | grep -v '^libbpf:' > "$net_tmp"; then
+      return 0
+    fi
+    [[ -s "$net_tmp" ]] || return 0
+    # Drop namespaces with no netdev attachments (most pods)
+    if ! grep -qE '"(prog_)?id"[[:space:]]*:[[:space:]]*[0-9]' "$net_tmp"; then
+      return 0
+    fi
+    if [[ $first -eq 0 ]]; then
+      printf ',\n' >> "$outfile"
+    fi
+    first=0
+    printf '    {"id":"%s","label":"%s","net":' \
+      "$(json_escape_string "$ino")" "$(json_escape_string "$label")" >> "$outfile"
+    cat "$net_tmp" >> "$outfile"
+    printf '}' >> "$outfile"
+  }
+
+  # Named namespaces (ip netns add)
+  if [[ -d /var/run/netns ]]; then
+    local name ino
+    for name in $(ls /var/run/netns 2>/dev/null); do
+      ino=$(stat -c '%i' "/var/run/netns/$name" 2>/dev/null || true)
+      [[ -z "$ino" || -n "${seen_ino[$ino]:-}" ]] && continue
+      seen_ino["$ino"]=1
+      emit_netns "$ino" "$name" "/var/run/netns/$name"
+    done
+  fi
+
+  # Process scan: one representative pid per distinct netns inode
+  local pid_dir pid ino label
+  for pid_dir in /proc/[0-9]*; do
+    pid="${pid_dir#/proc/}"
+    ino=$(readlink "$pid_dir/ns/net" 2>/dev/null | grep -oE '[0-9]+' || true)
+    [[ -z "$ino" || -n "${seen_ino[$ino]:-}" ]] && continue
+    seen_ino["$ino"]=1
+    label=$(cat "$pid_dir/root/etc/hostname" 2>/dev/null | tr -d '[:space:]' || true)
+    [[ -z "$label" ]] && label=$(cat "$pid_dir/comm" 2>/dev/null || echo "pid-$pid")
+    emit_netns "$ino" "$label" "$pid_dir/ns/net"
+  done
+
+  printf '\n  ]\n' >> "$outfile"
+}
+
 # ── Gather metadata ───────────────────────────────────────────────────────────
 HOSTNAME_VAL=$(hostname 2>/dev/null || echo "unknown")
 KERNEL_VERSION=$(uname -r 2>/dev/null || echo "unknown")
@@ -271,6 +347,9 @@ run_bpftool_to_file "$TMPDIR_SNAP/cgroups-effective.json" "cgroup tree /sys/fs/c
 
 log "Running: tc filter show for detailed TC chain ordering..."
 collect_tc_filters_to_file "$TMPDIR_SNAP/tc-filters.json"
+
+log "Running: bpftool net in other network namespaces..."
+collect_netns_to_file "$TMPDIR_SNAP/netns.json"
 
 # ── Determine output file ─────────────────────────────────────────────────────
 SAFE_HOST=$(echo "$HOSTNAME_VAL" | tr -cs 'a-zA-Z0-9_-' '_' | sed 's/_*$//')
@@ -310,6 +389,8 @@ log "Writing snapshot to: $OUTPUT_FILE"
   cat "$TMPDIR_SNAP/cgroups.json"
   printf ',\n    "links": '
   cat "$TMPDIR_SNAP/links.json"
+  printf ',\n    "netns": '
+  cat "$TMPDIR_SNAP/netns.json"
   printf ',\n    "cgroupsEffective": '
   cat "$TMPDIR_SNAP/cgroups-effective.json"
   printf '\n  }\n'

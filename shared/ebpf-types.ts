@@ -68,10 +68,14 @@ export interface RawNetEntry {
   devname: string;
   ifindex: number;
   mode?: string;
-  id: number;
+  /** Legacy tc/xdp entries carry `id`; link-based tcx/netkit entries carry
+   *  `prog_id` instead (bpftool net emits one or the other, never both). */
+  id?: number;
+  prog_id?: number;
   name?: string;
   kind?: string;
   act?: unknown[];
+  link_id?: number;
 }
 
 export interface RawTcFilterEntry {
@@ -115,6 +119,18 @@ export interface RawNetSnapshot {
   /** Synthetic sockmap/sockhash entries (not from bpftool net, but from bpftool prog show).
    *  devname is a virtual name like "sockmap0"; ifindex is 0 for synthetic entries. */
   sockmap?: RawNetEntry[];
+}
+
+/** `bpftool net` output collected inside one non-root network namespace
+ *  (via nsenter). `bpftool net` is netns-scoped, so container/pod datapaths
+ *  (kind nodes, Cilium netkit, docker) are invisible without this. */
+export interface RawNetnsSnapshot {
+  /** netns identity: the nsfs inode number as a string. */
+  id: string;
+  /** Human label: named netns (/var/run/netns), container hostname, or the
+   *  comm of a representative process. Unique within one snapshot. */
+  label: string;
+  net: RawNetSnapshot[];
 }
 
 export interface RawCgroupEntry {
@@ -230,6 +246,9 @@ export interface NetworkInterface {
   /** "nic" = physical/virtual network device (XDP, TC, netfilter, flow_dissector);
    *  "sockmap" = synthetic socket-level attachment point (sk_msg, sk_skb, sk_lookup, sock_ops) */
   kind: "nic" | "sockmap";
+  /** Label of the network namespace this device lives in.
+   *  Absent = the dashboard's own (host) netns. */
+  netns?: string;
   layers: {
     L2: BpfProgram[]; // XDP, netkit (NIC only)
     L3: BpfProgram[]; // TC, netfilter, flow_dissector (NIC only)

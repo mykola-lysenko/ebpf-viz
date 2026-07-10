@@ -1,4 +1,4 @@
-import type { RawBpfLink, RawBpfProg, RawCgroupEntry, RawNetSnapshot } from "../shared/ebpf-types";
+import type { RawBpfLink, RawBpfProg, RawCgroupEntry, RawNetSnapshot, RawNetnsSnapshot } from "../shared/ebpf-types";
 
 const NOW = Math.floor(Date.now() / 1000);
 
@@ -52,6 +52,11 @@ export const MOCK_PROGS: RawBpfProg[] = [
 
   // ktime demo — records per-PID last-seen timestamps via bpf_ktime_get_ns()
   { id: 26, type: "tracing", name: "fentry__tcp_close", tag: "0e0f101112130b00", gpl_compatible: true, loaded_at: NOW - 1200, uid: 0, orphaned: false, bytes_xlated: 448, jited: true, bytes_memlock: 4096, map_ids: [24], btf_id: 88, run_time_ns: 8821000, run_cnt: 3412 },
+
+  // Container-netns datapath (Cilium netkit style) — surfaced via the
+  // per-netns `bpftool net` scan, not the host net snapshot.
+  { id: 27, type: "sched_cls", name: "cil_from_container", tag: "0f10111213140c00", gpl_compatible: true, loaded_at: NOW - 700, uid: 0, orphaned: false, bytes_xlated: 2048, jited: true, bytes_memlock: 8192, map_ids: [13], run_time_ns: 20481000, run_cnt: 15230 },
+  { id: 28, type: "sched_cls", name: "cil_to_netdev", tag: "101112131415000d", gpl_compatible: true, loaded_at: NOW - 700, uid: 0, orphaned: false, bytes_xlated: 1792, jited: true, bytes_memlock: 8192, map_ids: [13], run_time_ns: 18211000, run_cnt: 14992 },
 ];
 
 export const MOCK_NET: RawNetSnapshot[] = [
@@ -91,6 +96,28 @@ export const MOCK_NET: RawNetSnapshot[] = [
       { devname: "sockmap0", ifindex: 0, kind: "sk_skb",   id: 19 },
       { devname: "sockmap0", ifindex: 0, kind: "sk_msg",   id: 20 },
       { devname: "sockmap0", ifindex: 0, kind: "sk_lookup", id: 21 },
+    ],
+  },
+];
+
+/** Per-netns `bpftool net` results, shaped like a Cilium netkit datapath in a
+ *  kind node: netkit/tcx entries carry `prog_id` (not `id`), matching real
+ *  bpftool output for link-based attachments. */
+export const MOCK_NETNS: RawNetnsSnapshot[] = [
+  {
+    id: "4026533042",
+    label: "demo-node-1",
+    net: [
+      {
+        xdp: [],
+        tc: [
+          { devname: "eth0", ifindex: 2, kind: "tcx/ingress", name: "cil_from_container", prog_id: 27 },
+          { devname: "eth0", ifindex: 2, kind: "tcx/egress", name: "cil_to_netdev", prog_id: 28 },
+          { devname: "lxc_demo_pod", ifindex: 9, kind: "netkit/peer", name: "cil_from_container", prog_id: 27 },
+        ],
+        flow_dissector: [],
+        netfilter: [],
+      },
     ],
   },
 ];
