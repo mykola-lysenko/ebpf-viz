@@ -1,13 +1,24 @@
+import { exec } from "child_process";
 import { readdir, readlink, readFile, stat } from "fs/promises";
+import { promisify } from "util";
+
+const execAsync = promisify(exec);
+
+/** How to run a command inside a discovered namespace:
+ *  - nsenter: enter its netns by path (works when the process is in our /proc)
+ *  - docker:  `docker exec` into the container (separate PID namespace, e.g.
+ *    WSL + Docker Desktop, where the workloads live in another WSL VM) */
+export type NetnsReach =
+  | { via: "nsenter"; nsPath: string }
+  | { via: "docker"; container: string };
 
 /** A discovered non-root network namespace and how to enter it. */
 export interface NetnsRef {
-  /** nsfs inode number as a string — the kernel identity of the netns. */
+  /** nsfs inode number, or container id, as a string. */
   id: string;
   /** Human label — see discoverNetNamespaces for the preference order. */
   label: string;
-  /** Path usable with `nsenter --net=<path>`. */
-  nsPath: string;
+  reach: NetnsReach;
 }
 
 /** Upper bound on namespaces scanned per poll. Every namespace costs one
@@ -40,6 +51,36 @@ export function dedupeNetnsLabels(refs: NetnsRef[]): NetnsRef[] {
       ? { ...ref, label: `${ref.label}#${ref.id.slice(-4)}` }
       : ref
   );
+}
+
+/** Enumerate running Docker containers as reachable namespaces. Best-effort:
+ *  returns [] when the `docker` CLI is absent or the daemon is unreachable.
+ *  `seen` is not consulted here (container ids are their own identity), but we
+ *  skip nothing since /proc found nothing when this runs. */
+export async function discoverDockerNamespaces(
+  _seen: Set<string>
+): Promise<NetnsRef[]> {
+  let stdout: string;
+  try {
+    const res = await execAsync("docker ps --format '{{.ID}} {{.Names}}'", {
+      timeout: 5000,
+    });
+    stdout = res.stdout;
+  } catch {
+    return []; // no docker, or daemon down
+  }
+  const refs: NetnsRef[] = [];
+  for (const line of stdout.trim().split("\n")) {
+    if (!line.trim()) continue;
+    const [id, ...nameParts] = line.trim().split(/\s+/);
+    if (!id) continue;
+    refs.push({
+      id,
+      label: nameParts.join(" ") || id,
+      reach: { via: "docker", container: id },
+    });
+  }
+  return refs;
 }
 
 async function readComm(pid: number): Promise<string> {
@@ -93,7 +134,7 @@ export async function discoverNetNamespaces(): Promise<NetnsRef[]> {
         const id = String(st.ino);
         if (seen.has(id)) continue;
         seen.add(id);
-        refs.push({ id, label: name, nsPath });
+        refs.push({ id, label: name, reach: { via: "nsenter", nsPath } });
       } catch { /* vanished mid-scan */ }
     }
   } catch { /* no named namespaces */ }
@@ -126,7 +167,19 @@ export async function discoverNetNamespaces(): Promise<NetnsRef[]> {
     const label =
       (representative && (await readContainerHostname(representative.pid))) ??
       pickNetnsLabel(procs);
-    refs.push({ id: inode, label, nsPath: `/proc/${pids[0]}/ns/net` });
+    refs.push({
+      id: inode,
+      label,
+      reach: { via: "nsenter", nsPath: `/proc/${pids[0]}/ns/net` },
+    });
+  }
+
+  // Docker bridge: when the /proc scan finds nothing beyond our own namespace
+  // but a Docker daemon is reachable (e.g. WSL + Docker Desktop, where the
+  // containers run in a separate WSL VM and are invisible to our /proc),
+  // enumerate running containers and reach them via `docker exec`.
+  if (refs.length === 0) {
+    for (const ref of await discoverDockerNamespaces(seen)) refs.push(ref);
   }
 
   const deduped = dedupeNetnsLabels(refs);

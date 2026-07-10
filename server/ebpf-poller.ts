@@ -12,11 +12,12 @@ import type {
   RawCgroupEntry,
   RawNetSnapshot,
   RawNetnsSnapshot,
+  RawNetnsLink,
   RawTcFilterEntry,
 } from "../shared/ebpf-types";
 import { buildSnapshot } from "./ebpf-parser";
 import { buildMockMaps, parseMaps } from "./ebpf-map-parser";
-import { discoverNetNamespaces } from "./ebpf-netns";
+import { discoverNetNamespaces, type NetnsReach } from "./ebpf-netns";
 import { MOCK_CGROUPS, MOCK_LINKS, MOCK_NET, MOCK_NETNS, MOCK_PROGS } from "./ebpf-mock";
 import {
   ingestSnapshot,
@@ -175,44 +176,103 @@ async function runBpftool(args: string): Promise<string> {
   return stdout.trim();
 }
 
-/** Run `bpftool net` inside another network namespace via nsenter.
- *  Requires root (the live poller already runs as root for bpftool). */
-async function runBpftoolNetInNetns(nsPath: string): Promise<string> {
-  const nsenterArgv = [`--net=${nsPath}`, "--", config.bpftoolPath, "-j", "net", "show"];
-  const cmd = config.sudo ? "sudo" : "nsenter";
-  const fullArgv = config.sudo ? ["nsenter", ...nsenterArgv] : nsenterArgv;
-  const { stdout } = await execFileAsync(cmd, fullArgv, {
+/** Build the command prefix that runs argv inside a discovered namespace. */
+function reachCommand(reach: NetnsReach, argv: string[]): { cmd: string; args: string[] } {
+  if (reach.via === "docker") {
+    // docker talks to its own daemon; no sudo needed with docker-group access.
+    return { cmd: "docker", args: ["exec", reach.container, ...argv] };
+  }
+  const nsenterArgv = [`--net=${reach.nsPath}`, "--", ...argv];
+  return config.sudo
+    ? { cmd: "sudo", args: ["nsenter", ...nsenterArgv] }
+    : { cmd: "nsenter", args: nsenterArgv };
+}
+
+/** Run `bpftool net show` inside a namespace. For docker reach, uses whatever
+ *  bpftool the container provides (kind nodes often lack a working one — the
+ *  caller tolerates an empty result and falls back to ip-link topology). */
+async function runBpftoolNetInNetns(reach: NetnsReach): Promise<string> {
+  const bpftool = reach.via === "docker" ? "bpftool" : config.bpftoolPath;
+  const { cmd, args } = reachCommand(reach, [bpftool, "-j", "net", "show"]);
+  const { stdout } = await execFileAsync(cmd, args, {
     timeout: 10000,
     maxBuffer: 32 * 1024 * 1024,
   });
   return stdout.trim();
 }
 
-/** Does this netns snapshot contain any netdev BPF attachment worth showing?
- *  Namespaces with none (most pods) are dropped to keep the view focused. */
-function hasNetdevPrograms(net: RawNetSnapshot[]): boolean {
-  const snapshot = net[0];
-  if (!snapshot) return false;
-  return [
-    snapshot.xdp,
-    snapshot.tc,
-    snapshot.tcx,
-    snapshot.netkit,
-    snapshot.flow_dissector,
-    snapshot.netfilter,
-  ].some(section => (section?.length ?? 0) > 0);
+/** Run `ip -d -j link show` inside a namespace for device-pair topology. */
+async function runIpLinkInNetns(reach: NetnsReach): Promise<string> {
+  const { cmd, args } = reachCommand(reach, ["ip", "-d", "-j", "link", "show"]);
+  const { stdout } = await execFileAsync(cmd, args, {
+    timeout: 10000,
+    maxBuffer: 32 * 1024 * 1024,
+  });
+  return stdout.trim();
 }
 
-/** Scan all reachable non-root network namespaces with `bpftool net`.
- *  Individual failures (namespace vanished mid-poll, nsenter denied) are
- *  dropped silently — pod churn makes them routine. */
+/** Normalize `ip -d -j link show` JSON into RawNetnsLink[]. */
+function parseIpLinks(stdout: string): RawNetnsLink[] {
+  let raw: unknown;
+  try {
+    raw = JSON.parse(stripNonJson(stdout));
+  } catch {
+    return [];
+  }
+  if (!Array.isArray(raw)) return [];
+  return raw
+    .filter((l): l is Record<string, unknown> => !!l && typeof l === "object")
+    .map(l => ({
+      ifindex: Number(l.ifindex),
+      ifname: String(l.ifname ?? ""),
+      link_index: typeof l.link_index === "number" ? l.link_index : undefined,
+      link_netnsid:
+        typeof l.link_netnsid === "number" ? l.link_netnsid : undefined,
+      kind: (l.linkinfo as { info_kind?: string } | undefined)?.info_kind,
+      operstate: typeof l.operstate === "string" ? l.operstate : undefined,
+    }))
+    .filter(l => Number.isFinite(l.ifindex) && l.ifname);
+}
+
+/** Does this namespace hold anything worth showing — a netdev BPF attachment,
+ *  or a device pair (netkit/veth) that connects it to another namespace? */
+function isInterestingNetns(ns: RawNetnsSnapshot): boolean {
+  const snapshot = ns.net[0];
+  const hasProg =
+    !!snapshot &&
+    [
+      snapshot.xdp,
+      snapshot.tc,
+      snapshot.tcx,
+      snapshot.netkit,
+      snapshot.flow_dissector,
+      snapshot.netfilter,
+    ].some(section => (section?.length ?? 0) > 0);
+  const hasPair = (ns.links ?? []).some(
+    l => (l.kind === "netkit" || l.kind === "veth") && typeof l.link_index === "number"
+  );
+  return hasProg || hasPair;
+}
+
+/** Scan all reachable non-root network namespaces for BPF net attachments and
+ *  device-pair topology. Per-namespace failures (vanished mid-poll, nsenter
+ *  denied, no bpftool in container) degrade gracefully — a namespace with only
+ *  ip-link topology and no bpftool net still contributes to the graph. */
 async function fetchNetnsData(): Promise<RawNetnsSnapshot[]> {
   const refs = await discoverNetNamespaces();
   const scans = await Promise.allSettled(
-    refs.map(async ref => {
-      const out = await runBpftoolNetInNetns(ref.nsPath);
-      const net = JSON.parse(stripNonJson(out)) as RawNetSnapshot[];
-      return { id: ref.id, label: ref.label, net };
+    refs.map(async (ref): Promise<RawNetnsSnapshot> => {
+      const [netRes, linkRes] = await Promise.allSettled([
+        runBpftoolNetInNetns(ref.reach),
+        runIpLinkInNetns(ref.reach),
+      ]);
+      const net =
+        netRes.status === "fulfilled"
+          ? (JSON.parse(stripNonJson(netRes.value)) as RawNetSnapshot[])
+          : [];
+      const links =
+        linkRes.status === "fulfilled" ? parseIpLinks(linkRes.value) : [];
+      return { id: ref.id, label: ref.label, net, links };
     })
   );
   return scans
@@ -221,7 +281,7 @@ async function fetchNetnsData(): Promise<RawNetnsSnapshot[]> {
         s.status === "fulfilled"
     )
     .map(s => s.value)
-    .filter(ns => hasNetdevPrograms(ns.net));
+    .filter(isInterestingNetns);
 }
 
 async function runTcFilterShow(

@@ -119,6 +119,10 @@ export const MOCK_NETNS: RawNetnsSnapshot[] = [
         netfilter: [],
       },
     ],
+    links: [
+      { ifindex: 2, ifname: "eth0", kind: "veth", link_index: 40, link_netnsid: 0 },
+      { ifindex: 9, ifname: "lxc_demo_pod", kind: "netkit", link_index: 8, link_netnsid: 1 },
+    ],
   },
 ];
 

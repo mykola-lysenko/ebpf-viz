@@ -8,6 +8,7 @@ import {
   buildCgroupTree,
   buildKernelZones,
   buildProgramChains,
+  buildNamespaceTopology,
   buildSnapshot,
 } from "./ebpf-parser";
 import { BPF_PROGRAM_TYPE_COLORS } from "../shared/ebpf-constants";
@@ -969,6 +970,108 @@ describe("buildNetworkInterfaces", () => {
     expect(lxc.netns).toBe("ebpfviz-worker");
     expect(lxc.layers.L2.map(p => p.id)).toEqual([30]);
     expect(lxc.layers.L3).toHaveLength(0);
+  });
+});
+
+// ─── buildNamespaceTopology ───────────────────────────────────────────────────
+
+describe("buildNamespaceTopology", () => {
+  it("links a scanned node netns to an inferred pod netns via a netkit pair", () => {
+    // Modelled on a kind node reached over the docker bridge: we scan the node
+    // (ip-link gives the netkit primary + peer info) but not the pod behind it,
+    // and the pod-side program comes from the host-global link list by ifindex.
+    const progs = parseProgList([
+      { ...xdpProg, id: 1687, type: "sched_cls", name: "cil_from_container" },
+    ]);
+    const netns: RawNetnsSnapshot[] = [
+      {
+        id: "c1",
+        label: "ebpfviz-worker",
+        net: [{}], // node bpftool net unavailable (kind node has no bpftool)
+        links: [
+          { ifindex: 7, ifname: "lxc_health", kind: "netkit", link_index: 6, link_netnsid: 1 },
+          { ifindex: 2, ifname: "eth0", kind: "veth", link_index: 42, link_netnsid: 0 },
+        ],
+      },
+    ];
+    const hostLinks = [
+      { id: 98, type: "netkit", prog_id: 1687, devname: "(unknown)", ifindex: 6, attach_type: "netkit_peer" },
+    ];
+    const topo = buildNamespaceTopology(progs, netns, hostLinks);
+
+    // node + inferred pod peer
+    expect(topo.nodes.map(n => n.id).sort()).toEqual([
+      "ebpfviz-worker",
+      "ebpfviz-worker · peer nsid 0",
+      "ebpfviz-worker · peer nsid 1",
+    ]);
+    expect(topo.nodes.find(n => n.id === "ebpfviz-worker")!.inferred).toBe(false);
+    expect(topo.nodes.find(n => n.id === "ebpfviz-worker · peer nsid 1")!.inferred).toBe(true);
+
+    const netkitEdge = topo.edges.find(e => e.kind === "netkit")!;
+    expect(netkitEdge.a).toMatchObject({ namespace: "ebpfviz-worker", ifindex: 7, ifname: "lxc_health" });
+    expect(netkitEdge.b).toMatchObject({ namespace: "ebpfviz-worker · peer nsid 1", ifindex: 6 });
+    // from-container program attributed to the pod side via the host link list
+    expect(netkitEdge.b.programs).toEqual([{ id: 1687, name: "cil_from_container" }]);
+  });
+
+  it("flags ambiguity when host-global ifindex matches multiple programs", () => {
+    // Two nodes' pods both use peer ifindex 6 — host-global links can't tell
+    // them apart, so attribution to a single side is ambiguous.
+    const progs = parseProgList([
+      { ...xdpProg, id: 1687, type: "sched_cls", name: "cil_from_container" },
+      { ...xdpProg, id: 1772, type: "sched_cls", name: "cil_from_container" },
+    ]);
+    const netns: RawNetnsSnapshot[] = [
+      {
+        id: "c1",
+        label: "worker",
+        net: [{}],
+        links: [{ ifindex: 7, ifname: "lxc_a", kind: "netkit", link_index: 6, link_netnsid: 1 }],
+      },
+    ];
+    const hostLinks = [
+      { id: 98, type: "netkit", prog_id: 1687, devname: "(unknown)", ifindex: 6 },
+      { id: 99, type: "netkit", prog_id: 1772, devname: "(unknown)", ifindex: 6 },
+    ];
+    const topo = buildNamespaceTopology(progs, netns, hostLinks);
+    const edge = topo.edges.find(e => e.kind === "netkit")!;
+    expect(edge.ambiguous).toBe(true);
+    expect(edge.b.programs.map(p => p.id).sort()).toEqual([1687, 1772]);
+  });
+
+  it("prefers per-namespace bpftool net over the host-global fallback at the same ifindex", () => {
+    // The node's own bpftool net names the device's program (1772 at ifindex 7);
+    // a stale/foreign host-global link at the same ifindex (9999) is ignored.
+    const progs = parseProgList([
+      { ...xdpProg, id: 1772, type: "sched_cls", name: "cil_local" },
+      { ...xdpProg, id: 9999, type: "sched_cls", name: "cil_host_global" },
+      { ...xdpProg, id: 1687, type: "sched_cls", name: "cil_from_container" },
+    ]);
+    const netns: RawNetnsSnapshot[] = [
+      {
+        id: "c1",
+        label: "worker",
+        net: [{ tc: [{ devname: "lxc_health", ifindex: 7, kind: "netkit/peer", name: "cil_local", prog_id: 1772 }] }],
+        links: [{ ifindex: 7, ifname: "lxc_health", kind: "netkit", link_index: 6, link_netnsid: 1 }],
+      },
+    ];
+    const hostLinks = [
+      { id: 50, type: "netkit", prog_id: 9999, devname: "(unknown)", ifindex: 7 }, // same ifindex as local
+      { id: 98, type: "netkit", prog_id: 1687, devname: "(unknown)", ifindex: 6 }, // single peer-side match
+    ];
+    const topo = buildNamespaceTopology(progs, netns, hostLinks);
+    const edge = topo.edges.find(e => e.kind === "netkit")!;
+    // node side used bpftool net (1772), NOT the host-global 9999 at ifindex 7
+    expect(edge.a.programs).toEqual([{ id: 1772, name: "cil_local" }]);
+    // peer side resolved unambiguously from the single host-global match
+    expect(edge.b.programs).toEqual([{ id: 1687, name: "cil_from_container" }]);
+    expect(edge.ambiguous).toBeUndefined();
+  });
+
+  it("returns an empty topology when no namespaces were scanned", () => {
+    const topo = buildNamespaceTopology(new Map(), [], []);
+    expect(topo).toEqual({ nodes: [], edges: [] });
   });
 });
 

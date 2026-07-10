@@ -18,6 +18,9 @@ import type {
   RawNetSnapshot,
   RawNetnsSnapshot,
   RawTcFilterEntry,
+  NamespaceTopology,
+  NamespaceTopologyEndpoint,
+  NamespaceTopologyNode,
 } from "../shared/ebpf-types";
 import { BPF_PROGRAM_TYPE_COLORS } from "../shared/ebpf-constants";
 
@@ -1516,6 +1519,197 @@ export function buildProgramChains(
 
 // ─── Master parse function ─────────────────────────────────────────────────
 
+// ─── Namespace topology ────────────────────────────────────────────────────
+
+/** Device-pair link kinds that connect two network namespaces. */
+const PAIRED_LINK_KINDS = new Set(["netkit", "veth"]);
+
+/** Index a RawNetSnapshot's netdev entries by ifindex → prog ids. */
+function progIdsByIfindex(net: RawNetSnapshot | undefined): Map<number, number[]> {
+  const byIfindex = new Map<number, number[]>();
+  const snapshot = net ?? {};
+  for (const entry of [
+    ...(snapshot.xdp ?? []),
+    ...(snapshot.tc ?? []),
+    ...(snapshot.tcx ?? []),
+    ...(snapshot.netkit ?? []),
+    ...(snapshot.flow_dissector ?? []),
+  ]) {
+    const id = netEntryProgId(entry);
+    if (id === undefined || typeof entry.ifindex !== "number") continue;
+    const list = byIfindex.get(entry.ifindex);
+    if (list) list.push(id);
+    else byIfindex.set(entry.ifindex, [id]);
+  }
+  return byIfindex;
+}
+
+/** Programs on the given ifindex within one namespace, preferring that
+ *  namespace's own `bpftool net` data and falling back to the host-global
+ *  link list keyed by ifindex (which cannot distinguish namespaces — flagged
+ *  ambiguous when it matches more than one program). */
+function programsAtIfindex(
+  progs: Map<number, BpfProgram>,
+  ifindex: number,
+  localNet: Map<number, number[]> | undefined,
+  hostLinkProgsByIfindex: Map<number, number[]>
+): { programs: NamespaceTopologyEndpoint["programs"]; ambiguous: boolean } {
+  const local = localNet?.get(ifindex);
+  if (local && local.length > 0) {
+    return {
+      programs: local
+        .map(id => progs.get(id))
+        .filter((p): p is BpfProgram => !!p)
+        .map(p => ({ id: p.id, name: p.name })),
+      ambiguous: false,
+    };
+  }
+  const fallback = hostLinkProgsByIfindex.get(ifindex) ?? [];
+  return {
+    programs: fallback
+      .map(id => progs.get(id))
+      .filter((p): p is BpfProgram => !!p)
+      .map(p => ({ id: p.id, name: p.name })),
+    ambiguous: fallback.length > 1,
+  };
+}
+
+/**
+ * Build the namespace connectivity graph from per-namespace `ip link` data.
+ * Each netkit/veth device with a peer becomes an edge linking two namespaces.
+ * The peer namespace is resolved to a scanned namespace when exactly one holds
+ * the peer ifindex; otherwise it is synthesized as an inferred node (e.g. a pod
+ * netns behind a kind node that we could not enter directly).
+ */
+export function buildNamespaceTopology(
+  progs: Map<number, BpfProgram>,
+  netns: RawNetnsSnapshot[],
+  hostLinks: RawBpfLink[]
+): NamespaceTopology {
+  const nodes = new Map<string, NamespaceTopologyNode>();
+  const ensureNode = (id: string, label: string, inferred: boolean): NamespaceTopologyNode => {
+    let node = nodes.get(id);
+    if (!node) {
+      node = { id, label, inferred, deviceCount: 0, programCount: 0 };
+      nodes.set(id, node);
+    } else if (!inferred && node.inferred) {
+      node.inferred = false; // upgrade: we later scanned a node we had inferred
+    }
+    return node;
+  };
+
+  // Host-global netdev links → ifindex → prog ids (peer-side fallback).
+  const hostLinkProgsByIfindex = new Map<number, number[]>();
+  for (const link of hostLinks) {
+    if (
+      !NETDEV_LINK_TYPES.has(link.type) ||
+      typeof link.ifindex !== "number" ||
+      typeof link.prog_id !== "number"
+    ) {
+      continue;
+    }
+    const list = hostLinkProgsByIfindex.get(link.ifindex);
+    if (list) list.push(link.prog_id);
+    else hostLinkProgsByIfindex.set(link.ifindex, [link.prog_id]);
+  }
+
+  const netByLabel = new Map<string, Map<number, number[]>>();
+  for (const ns of netns) {
+    netByLabel.set(ns.label, progIdsByIfindex(ns.net[0]));
+    ensureNode(ns.label, ns.label, false).deviceCount = ns.links?.length ?? 0;
+  }
+
+  // ifindex → labels of scanned namespaces holding a device with that ifindex,
+  // for peer resolution.
+  const labelsByIfindex = new Map<number, string[]>();
+  for (const ns of netns) {
+    for (const link of ns.links ?? []) {
+      const list = labelsByIfindex.get(link.ifindex);
+      if (list) list.push(ns.label);
+      else labelsByIfindex.set(link.ifindex, [ns.label]);
+    }
+  }
+
+  const edges: NamespaceTopology["edges"] = [];
+  const seenEdges = new Set<string>();
+
+  for (const ns of netns) {
+    for (const dev of ns.links ?? []) {
+      if (!dev.kind || !PAIRED_LINK_KINDS.has(dev.kind)) continue;
+      if (typeof dev.link_index !== "number") continue; // no peer → skip
+
+      const peerIfindex = dev.link_index;
+      // Resolve the peer namespace: a scanned namespace (other than this one)
+      // holding exactly one device at the peer ifindex, else an inferred node.
+      const candidates = (labelsByIfindex.get(peerIfindex) ?? []).filter(
+        l => l !== ns.label
+      );
+      let peerLabel: string;
+      let peerInferred: boolean;
+      if (candidates.length === 1) {
+        peerLabel = candidates[0];
+        peerInferred = false;
+      } else {
+        // Behind a namespace we did not enter (e.g. a pod behind a kind node).
+        peerLabel = `${ns.label} · peer nsid ${dev.link_netnsid ?? "?"}`;
+        peerInferred = true;
+      }
+
+      const key = [
+        `${ns.label}#${dev.ifindex}`,
+        `${peerLabel}#${peerIfindex}`,
+      ]
+        .sort()
+        .join("::");
+      if (seenEdges.has(key)) continue;
+      seenEdges.add(key);
+
+      ensureNode(ns.label, ns.label, false);
+      ensureNode(peerLabel, peerLabel, peerInferred);
+
+      const localProgs = programsAtIfindex(
+        progs,
+        dev.ifindex,
+        netByLabel.get(ns.label),
+        hostLinkProgsByIfindex
+      );
+      const peerProgs = programsAtIfindex(
+        progs,
+        peerIfindex,
+        netByLabel.get(peerLabel),
+        hostLinkProgsByIfindex
+      );
+
+      edges.push({
+        kind: dev.kind,
+        a: {
+          namespace: ns.label,
+          ifindex: dev.ifindex,
+          ifname: dev.ifname,
+          programs: localProgs.programs,
+        },
+        b: {
+          namespace: peerLabel,
+          ifindex: peerIfindex,
+          programs: peerProgs.programs,
+        },
+        ...(localProgs.ambiguous || peerProgs.ambiguous ? { ambiguous: true } : {}),
+      });
+    }
+  }
+
+  // Tally program counts per namespace from the edges.
+  for (const node of Array.from(nodes.values())) node.programCount = 0;
+  for (const edge of edges) {
+    const na = nodes.get(edge.a.namespace);
+    const nb = nodes.get(edge.b.namespace);
+    if (na) na.programCount += edge.a.programs.length;
+    if (nb) nb.programCount += edge.b.programs.length;
+  }
+
+  return { nodes: Array.from(nodes.values()), edges };
+}
+
 /** Prog ids with a netdev attachment (xdp/tc/tcx/netkit/…) in any per-netns
  *  scan — used to suppress the ifindex-only link fallback for those progs. */
 function netdevProgIdsFromNetns(netns: RawNetnsSnapshot[]): Set<number> {
@@ -1598,6 +1792,7 @@ export function buildSnapshot(
       rawCgroups,
       rawEffectiveCgroups
     ),
+    namespaceTopology: buildNamespaceTopology(progMap, rawNetns, rawLinks),
     stats: {
       total: programs.length,
       byType,

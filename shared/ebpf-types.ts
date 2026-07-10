@@ -121,16 +121,34 @@ export interface RawNetSnapshot {
   sockmap?: RawNetEntry[];
 }
 
+/** One device from `ip -d -j link show`, trimmed to the fields the topology
+ *  graph needs: identity, peering, and link kind. */
+export interface RawNetnsLink {
+  ifindex: number;
+  ifname: string;
+  /** Peer device's ifindex (netkit/veth pairs). From ip's `link_index`. */
+  link_index?: number;
+  /** Peer namespace's nsid, local to THIS namespace (ip's `link_netnsid`).
+   *  -1 / absent means the peer is in this same namespace. */
+  link_netnsid?: number;
+  /** linkinfo.info_kind — "netkit", "veth", "vxlan", … */
+  kind?: string;
+  operstate?: string;
+}
+
 /** `bpftool net` output collected inside one non-root network namespace
- *  (via nsenter). `bpftool net` is netns-scoped, so container/pod datapaths
- *  (kind nodes, Cilium netkit, docker) are invisible without this. */
+ *  (via nsenter or docker exec). `bpftool net` is netns-scoped, so
+ *  container/pod datapaths (kind nodes, Cilium netkit, docker) are invisible
+ *  without this. `links` carries the same namespace's `ip link` topology. */
 export interface RawNetnsSnapshot {
-  /** netns identity: the nsfs inode number as a string. */
+  /** netns identity: the nsfs inode number, or a container id, as a string. */
   id: string;
   /** Human label: named netns (/var/run/netns), container hostname, or the
    *  comm of a representative process. Unique within one snapshot. */
   label: string;
   net: RawNetSnapshot[];
+  /** Devices in this namespace (from `ip -d -j link show`), for topology. */
+  links?: RawNetnsLink[];
 }
 
 export interface RawCgroupEntry {
@@ -256,6 +274,43 @@ export interface NetworkInterface {
     L7: BpfProgram[]; // sk_msg, sock_ops (sockmap only)
   };
   allPrograms: BpfProgram[];
+}
+
+// ─── Namespace topology model ───────────────────────────────────────────────
+// How network namespaces are wired together: each netkit/veth pair is an edge
+// linking two namespaces, with the BPF programs that run on each side.
+
+export interface NamespaceTopologyNode {
+  /** Stable id — a netns label, or "host" for the dashboard's own namespace. */
+  id: string;
+  label: string;
+  /** true for a peer namespace we inferred from a device pair but never
+   *  scanned directly (e.g. a pod netns behind a kind node). */
+  inferred: boolean;
+  deviceCount: number;
+  programCount: number;
+}
+
+export interface NamespaceTopologyEndpoint {
+  namespace: string; // NamespaceTopologyNode.id
+  ifindex: number;
+  ifname?: string;
+  programs: Array<{ id: number; name: string }>;
+}
+
+export interface NamespaceTopologyEdge {
+  /** "netkit" | "veth" — the device-pair kind that links the two namespaces. */
+  kind: string;
+  a: NamespaceTopologyEndpoint;
+  b: NamespaceTopologyEndpoint;
+  /** true when programs could only be matched by ifindex across namespaces
+   *  we could not enter, so attribution to a side may be ambiguous. */
+  ambiguous?: boolean;
+}
+
+export interface NamespaceTopology {
+  nodes: NamespaceTopologyNode[];
+  edges: NamespaceTopologyEdge[];
 }
 
 // ─── Cgroup tree model ─────────────────────────────────────────────────────
@@ -491,6 +546,9 @@ export interface EbpfSnapshot {
   kernelZones: KernelAttachmentZone[];
   /** Ordered program chains — multiple programs on the same hook point */
   programChains: ProgramChain[];
+  /** How network namespaces are connected by netkit/veth device pairs.
+   *  Empty when only the host namespace is visible. */
+  namespaceTopology?: NamespaceTopology;
   stats: {
     total: number;
     byType: Record<string, number>;

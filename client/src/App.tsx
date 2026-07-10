@@ -9,6 +9,7 @@ import EbpfLayout from "./components/EbpfLayout";
 const Dashboard = lazy(() => import("./pages/Dashboard"));
 const KernelView = lazy(() => import("./pages/KernelView"));
 const NetworkView = lazy(() => import("./pages/NetworkView"));
+const TopologyView = lazy(() => import("./pages/TopologyView"));
 const CgroupView = lazy(() => import("./pages/CgroupView"));
 const ProgramsView = lazy(() => import("./pages/ProgramsView"));
 const SettingsView = lazy(() => import("./pages/SettingsView"));
@@ -34,6 +35,7 @@ function Router() {
           <Route path="/" component={Dashboard} />
           <Route path="/kernel" component={KernelView} />
           <Route path="/network" component={NetworkView} />
+          <Route path="/topology" component={TopologyView} />
           <Route path="/cgroups" component={CgroupView} />
           <Route path="/programs" component={ProgramsView} />
           <Route path="/settings" component={SettingsView} />

@@ -39,10 +39,16 @@ export const rawBpfMapSchema = z.object({
 
 export const rawNetSnapshotSchema = z.record(z.string(), z.unknown());
 
+export const rawNetnsLinkSchema = z.object({
+  ifindex: finiteNumberSchema,
+  ifname: z.string().max(256),
+}).catchall(z.unknown());
+
 export const rawNetnsSnapshotSchema = z.object({
-  id: z.string().min(1).max(64),
+  id: z.string().min(1).max(128),
   label: z.string().min(1).max(256),
   net: z.array(rawNetSnapshotSchema).max(MAX_SNAPSHOT_NET_ENTRIES),
+  links: z.array(rawNetnsLinkSchema).max(MAX_SNAPSHOT_NET_ENTRIES).optional(),
 }).catchall(z.unknown());
 
 export const rawBpfLinkSchema = z.object({
