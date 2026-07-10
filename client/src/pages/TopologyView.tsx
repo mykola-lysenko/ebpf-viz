@@ -33,7 +33,7 @@ function NamespaceNode({ data }: NodeProps<Node<NsNodeData>>) {
   const Icon = data.isHost ? Server : Box;
   return (
     <div
-      className="rounded-xl border px-4 py-3 shadow-lg min-w-[190px]"
+      className="rounded-xl border px-4 py-3 shadow-lg min-w-[190px] w-max"
       style={{
         background: data.inferred ? "oklch(0.30 0.02 250 / 0.4)" : "oklch(0.32 0.05 220 / 0.55)",
         borderColor: data.inferred ? "oklch(0.55 0.03 250 / 0.5)" : "oklch(0.72 0.15 220 / 0.7)",
@@ -44,7 +44,7 @@ function NamespaceNode({ data }: NodeProps<Node<NsNodeData>>) {
       <Handle type="source" position={Position.Right} className="!bg-transparent !border-0" />
       <div className="flex items-center gap-2">
         <Icon size={15} style={{ color: "oklch(0.80 0.15 220)" }} />
-        <span className="font-semibold text-sm text-foreground truncate max-w-[220px]">
+        <span className="font-semibold text-sm text-foreground whitespace-nowrap">
           {data.label}
         </span>
       </div>
@@ -66,7 +66,7 @@ const NODE_TYPES = { namespace: NamespaceNode };
 
 // ─── Layout ───────────────────────────────────────────────────────────────────
 
-const COL_W = 380;
+const COL_W = 480;
 const ROW_H = 96;
 
 /** Layered layout: scanned namespaces in a left column, each inferred peer to
