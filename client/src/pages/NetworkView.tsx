@@ -1251,21 +1251,28 @@ export default function NetworkView() {
       />
 
       {/* ── Per-netns sections (containers, pods, named namespaces) ──────── */}
-      {Array.from(netnsGroups.entries()).map(([netns, ifaces]) => (
-        <InterfaceSection
-          key={`netns-${netns}`}
-          title={`Namespace: ${netns}`}
-          description="Devices inside this network namespace — scanned via nsenter"
-          icon={<Box size={15} style={{ color: "oklch(0.72 0.15 220)" }} />}
-          interfaces={ifaces}
-          accentColor="#38bdf8"
-          tcChains={tcChains}
-          returnAnalysisById={returnAnalysisById}
-          returnAnalysisLoading={returnAnalysisLoading}
-          progArrayTargets={progArrayTargets}
-          emptyMessage="No interfaces match the current filter."
-        />
-      ))}
+      {Array.from(netnsGroups.entries()).map(([netns, ifaces]) => {
+        const unresolved = netns === "other (unresolved)";
+        return (
+          <InterfaceSection
+            key={`netns-${netns}`}
+            title={unresolved ? "Other namespaces (unresolved)" : `Namespace: ${netns}`}
+            description={
+              unresolved
+                ? "Netdev programs attached in namespaces this host cannot enter — device names unknown, grouped by ifindex"
+                : "Devices inside this network namespace — scanned via nsenter"
+            }
+            icon={<Box size={15} style={{ color: "oklch(0.72 0.15 220)" }} />}
+            interfaces={ifaces}
+            accentColor="#38bdf8"
+            tcChains={tcChains}
+            returnAnalysisById={returnAnalysisById}
+            returnAnalysisLoading={returnAnalysisLoading}
+            progArrayTargets={progArrayTargets}
+            emptyMessage="No interfaces match the current filter."
+          />
+        );
+      })}
 
       {/* ── Sockmap section (hidden when empty in live mode) ─────────────── */}
       {(sockmapInterfaces.length > 0 || searchQuery) && (

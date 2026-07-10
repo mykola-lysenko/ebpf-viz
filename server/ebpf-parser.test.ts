@@ -2322,6 +2322,28 @@ describe("buildSnapshot", () => {
     expect(snapshot.kernelZones.length).toBeGreaterThan(0);
   });
 
+  it("synthesizes ifindex pseudo-interfaces from unresolvable foreign netdev links", () => {
+    // WSL + Docker Desktop: the netkit devices live in a separate WSL VM's
+    // PID namespace, so no netns scan can reach them — only the host-global
+    // `bpftool link list` sees them, with devname "(unknown)".
+    const cil: RawBpfProg = { ...xdpProg, id: 1687, type: "sched_cls", name: "cil_from_container" };
+    const cilTcx: RawBpfProg = { ...xdpProg, id: 1681, type: "sched_cls", name: "cil_from_overlay" };
+    const meta = { hostname: "h", kernelVersion: "6.18", bpftoolVersion: "7.8", demoMode: false };
+    const links = [
+      { id: 98, type: "netkit", prog_id: 1687, devname: "(unknown)", ifindex: 6, attach_type: "netkit_peer" },
+      { id: 87, type: "tcx", prog_id: 1681, devname: "(unknown)", ifindex: 5, attach_type: "tcx_ingress" },
+    ];
+    const snap = buildSnapshot([cil, cilTcx], [{}], [], meta, [], links);
+
+    const netkitIface = snap.networkInterfaces.find(i => i.ifindex === 6)!;
+    expect(netkitIface.netns).toBe("other (unresolved)");
+    expect(netkitIface.name).toBe("ifindex 6");
+    expect(netkitIface.layers.L2.map(p => p.id)).toEqual([1687]); // netkit → L2
+
+    const tcxIface = snap.networkInterfaces.find(i => i.ifindex === 5)!;
+    expect(tcxIface.layers.L3.map(p => p.id)).toEqual([1681]); // tcx → L3
+  });
+
   it("prefers netns scan attachments over the foreign-link ifindex fallback", () => {
     const cil: RawBpfProg = {
       ...xdpProg,

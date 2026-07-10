@@ -659,10 +659,19 @@ export function enrichWithCgroupAttachments(
 
 // ─── Build network interface view ─────────────────────────────────────────
 
+/** Label used for pseudo-interfaces synthesized from foreign netdev links
+ *  whose real namespace could not be entered (e.g. containers in a separate
+ *  PID namespace, as in WSL + Docker Desktop). */
+export const UNRESOLVED_NETNS_LABEL = "other (unresolved)";
+
 export function buildNetworkInterfaces(
   progs: Map<number, BpfProgram>,
   net: RawNetSnapshot[],
-  netns: RawNetnsSnapshot[] = []
+  netns: RawNetnsSnapshot[] = [],
+  /** Foreign netdev links (xdp/tcx/netkit with an unresolvable device) that
+   *  no netns scan covered — rendered as ifindex-only pseudo-interfaces so
+   *  the attachment is at least visible when we cannot name its device. */
+  unresolvedNetdevLinks: RawBpfLink[] = []
 ): NetworkInterface[] {
   const ifaceMap = new Map<string, NetworkInterface>();
 
@@ -741,6 +750,35 @@ export function buildNetworkInterfaces(
   collect(net[0] ?? {});
   for (const ns of netns) {
     collect(ns.net[0] ?? {}, ns.label);
+  }
+
+  // Fallback: foreign netdev links we could not resolve to a named device.
+  // Group by ifindex into pseudo-interfaces under a single "unresolved" netns
+  // so the Network view still shows the attachment (device name unknown).
+  for (const link of unresolvedNetdevLinks) {
+    if (typeof link.prog_id !== "number" || typeof link.ifindex !== "number") continue;
+    const p = progs.get(link.prog_id);
+    if (!p) continue;
+    const name = `ifindex ${link.ifindex}`;
+    const key = `${UNRESOLVED_NETNS_LABEL}::${name}`;
+    let iface = ifaceMap.get(key);
+    if (!iface) {
+      iface = {
+        name,
+        ifindex: link.ifindex,
+        kind: "nic",
+        netns: UNRESOLVED_NETNS_LABEL,
+        layers: { L2: [], L3: [], L4: [], L7: [] },
+        allPrograms: [],
+      };
+      ifaceMap.set(key, iface);
+    }
+    // netkit and xdp hook the device (L2); tcx sits at the tc layer (L3).
+    const layer = link.type === "tcx" ? "L3" : "L2";
+    if (!iface.allPrograms.some(ap => ap.id === p.id)) {
+      iface.layers[layer].push(p);
+      iface.allPrograms.push(p);
+    }
   }
 
   return Array.from(ifaceMap.values() as Iterable<NetworkInterface>);
@@ -1514,14 +1552,24 @@ export function buildSnapshot(
   rawNetns: RawNetnsSnapshot[] = []
 ): EbpfSnapshot {
   const progMap = parseProgList(rawProgs);
+  const netnsProgIds = netdevProgIdsFromNetns(rawNetns);
   // Links first: they refine coarse prog types (tracing → fentry/fexit,
   // kprobe → kretprobe/uprobe) that zone/interface building depends on.
-  enrichWithLinkAttachments(progMap, rawLinks, netdevProgIdsFromNetns(rawNetns));
+  enrichWithLinkAttachments(progMap, rawLinks, netnsProgIds);
   enrichWithNetAttachments(progMap, rawNet);
   for (const ns of rawNetns) {
     enrichWithNetAttachments(progMap, ns.net, ns.label);
   }
   enrichWithCgroupAttachments(progMap, rawCgroups);
+
+  // Netdev links on devices in namespaces we could not enter (no netns scan
+  // covered them) — surfaced as ifindex-only pseudo-interfaces.
+  const unresolvedNetdevLinks = rawLinks.filter(
+    link =>
+      isForeignNetdevLink(link) &&
+      typeof link.prog_id === "number" &&
+      !netnsProgIds.has(link.prog_id)
+  );
 
   const programs = Array.from(progMap.values());
   const byType: Record<string, number> = {};
@@ -1536,7 +1584,12 @@ export function buildSnapshot(
     bpftoolVersion: meta.bpftoolVersion,
     demoMode: meta.demoMode,
     programs,
-    networkInterfaces: buildNetworkInterfaces(progMap, rawNet, rawNetns),
+    networkInterfaces: buildNetworkInterfaces(
+      progMap,
+      rawNet,
+      rawNetns,
+      unresolvedNetdevLinks
+    ),
     cgroupTree: buildCgroupTree(progMap, rawCgroups),
     kernelZones: buildKernelZones(progMap),
     programChains: buildProgramChains(
