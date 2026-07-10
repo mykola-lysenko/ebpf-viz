@@ -66,47 +66,68 @@ const NODE_TYPES = { namespace: NamespaceNode };
 
 // ─── Layout ───────────────────────────────────────────────────────────────────
 
-const COL_W = 340;
-const ROW_H = 130;
+const COL_W = 380;
+const ROW_H = 96;
 
-/** Simple layered layout: host + scanned namespaces in a left column, each
- *  inferred peer placed to the right of a namespace it connects to. */
+/** Layered layout: scanned namespaces in a left column, each inferred peer to
+ *  the right of the namespace it connects to. Every scanned node reserves a
+ *  vertical band tall enough for all its peers, so nothing overlaps. */
 function layout(topo: NamespaceTopology): { nodes: Node<NsNodeData>[]; edges: Edge[] } {
+  const scannedIds = new Set(topo.nodes.filter(n => !n.inferred).map(n => n.id));
   const scanned = topo.nodes.filter(n => !n.inferred);
-  const inferred = topo.nodes.filter(n => n.inferred);
-
-  const pos = new Map<string, { x: number; y: number }>();
-  scanned.forEach((n, i) => pos.set(n.id, { x: 0, y: i * ROW_H }));
 
   // Which scanned namespace does each inferred peer hang off of?
   const parentOf = new Map<string, string>();
   for (const e of topo.edges) {
-    const aInf = inferred.some(n => n.id === e.a.namespace);
-    const bInf = inferred.some(n => n.id === e.b.namespace);
+    const aInf = !scannedIds.has(e.a.namespace);
+    const bInf = !scannedIds.has(e.b.namespace);
     if (aInf && !bInf) parentOf.set(e.a.namespace, e.b.namespace);
     else if (bInf && !aInf) parentOf.set(e.b.namespace, e.a.namespace);
   }
 
-  const childRow = new Map<string, number>(); // stacking offset per parent
-  inferred.forEach(n => {
-    const parent = parentOf.get(n.id);
-    const base = parent ? pos.get(parent) : undefined;
-    const row = childRow.get(parent ?? "") ?? 0;
-    childRow.set(parent ?? "", row + 1);
-    pos.set(n.id, {
-      x: COL_W,
-      y: (base?.y ?? 0) + row * (ROW_H * 0.9),
-    });
+  // Children per scanned parent, preserving topology order.
+  const childrenOf = new Map<string, string[]>();
+  for (const n of topo.nodes) {
+    if (scannedIds.has(n.id)) continue;
+    const parent = parentOf.get(n.id) ?? "__orphans__";
+    const list = childrenOf.get(parent);
+    if (list) list.push(n.id);
+    else childrenOf.set(parent, [n.id]);
+  }
+
+  const pos = new Map<string, { x: number; y: number }>();
+  let cursor = 0;
+  const placeBand = (parentId: string) => {
+    const kids = childrenOf.get(parentId) ?? [];
+    const bandRows = Math.max(1, kids.length);
+    const bandTop = cursor;
+    // Parent centered vertically in its band.
+    pos.set(parentId, { x: 0, y: bandTop + ((bandRows - 1) * ROW_H) / 2 });
+    kids.forEach((kid, i) => pos.set(kid, { x: COL_W, y: bandTop + i * ROW_H }));
+    cursor = bandTop + bandRows * ROW_H + ROW_H * 0.4; // gap between bands
+  };
+  scanned.forEach(n => placeBand(n.id));
+  // Any inferred nodes without a scanned parent (rare) — stack in a 3rd column.
+  (childrenOf.get("__orphans__") ?? []).forEach((id, i) => {
+    pos.set(id, { x: COL_W * 2, y: i * ROW_H });
   });
 
   const isHost = (n: NamespaceTopologyNode) => n.id === "host";
+
+  // Inferred peers are positioned right next to their parent, so drop the
+  // redundant parent prefix from their label: "worker · peer nsid 1" → "peer nsid 1".
+  const displayLabel = (n: NamespaceTopologyNode): string => {
+    if (!n.inferred) return n.label;
+    const m = /· (peer nsid .+)$/.exec(n.label);
+    return m ? m[1] : n.label;
+  };
 
   const nodes: Node<NsNodeData>[] = topo.nodes.map(n => ({
     id: n.id,
     type: "namespace",
     position: pos.get(n.id) ?? { x: 0, y: 0 },
     data: {
-      label: n.label,
+      label: displayLabel(n),
       inferred: n.inferred,
       deviceCount: n.deviceCount,
       programCount: n.programCount,
