@@ -1784,6 +1784,74 @@ export function buildNamespaceTopology(
   return { nodes: Array.from(nodes.values()), edges };
 }
 
+/** Infer a best-effort owner for a program with no visible owning process,
+ *  from attachment evidence only (never from program names). Cgroup BPF
+ *  programs normally outlive their loader's fd, and on split setups (Docker
+ *  Desktop's VM, containers with private /proc) the loader's processes are
+ *  invisible — the attachment points still say who manages them. */
+export function inferOwnerHint(
+  prog: BpfProgram
+): { label: string; reason: string } | undefined {
+  if (prog.pids && prog.pids.length > 0) return undefined;
+
+  // Strongest signal: a bpffs pin — whoever owns that pin directory keeps
+  // the program alive deliberately (Tetragon, Cilium, labs).
+  const pin = prog.pinnedPaths?.[0];
+  if (pin) {
+    const m = /^\/sys\/fs\/bpf\/([^/]+)/.exec(pin);
+    if (m) {
+      return {
+        label: `pinned: ${m[1]}`,
+        reason:
+          `No process holds a program fd; it is kept alive by a bpffs pin under ` +
+          `/sys/fs/bpf/${m[1]} — the tool that created that pin owns it.`,
+      };
+    }
+  }
+
+  // Cgroup attachments: the manager of the cgroup attached the program.
+  for (const att of prog.attachments) {
+    const path = att.cgroupPath;
+    if (!path) continue;
+    if (/\/docker\//.test(path) || path.endsWith("/docker")) {
+      return {
+        label: "Docker (cgroup-managed)",
+        reason:
+          `Attached to a Docker-managed cgroup (${path}). The Docker runtime ` +
+          `attaches these and holds no fd afterwards; on Docker Desktop the ` +
+          `daemon runs in a separate VM, so no owning PID is visible here.`,
+      };
+    }
+    if (/\/kubepods/.test(path)) {
+      return {
+        label: "Kubernetes (cgroup-managed)",
+        reason: `Attached to a Kubernetes pod cgroup (${path}).`,
+      };
+    }
+    const unit = /\/system\.slice\/([^/]+)/.exec(path);
+    if (unit) {
+      return {
+        label: `systemd: ${unit[1]}`,
+        reason: `Attached to the cgroup of systemd unit ${unit[1]} (${path}).`,
+      };
+    }
+  }
+
+  // Netdev links whose device no scan could see: the loader lives in a
+  // namespace (or separate VM) whose /proc is not visible from here.
+  if (prog.attachments.some(att => att.detail.includes("(other netns)"))) {
+    return {
+      label: "another namespace/VM",
+      reason:
+        "Attached to a device in a network namespace no scan could enter — " +
+        "the owning process lives in a container or VM whose /proc is not " +
+        "visible from this host.",
+    };
+  }
+
+  return undefined;
+}
+
 export function buildSnapshot(
   rawProgs: RawBpfProg[],
   rawNet: RawNetSnapshot[],
@@ -1812,6 +1880,10 @@ export function buildSnapshot(
     enrichWithNetAttachments(progMap, ns.net, ns.label);
   }
   enrichWithCgroupAttachments(progMap, rawCgroups);
+  for (const prog of Array.from(progMap.values())) {
+    const hint = inferOwnerHint(prog);
+    if (hint) prog.ownerHint = hint;
+  }
 
   // Netdev links whose attachment no scan reported (device in a namespace we
   // could not see into) — surfaced as ifindex-only pseudo-interfaces.

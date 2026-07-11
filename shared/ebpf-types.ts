@@ -231,6 +231,11 @@ export interface BpfProgram {
    *  its links under /sys/fs/bpf/tetragon and closes the fds). Optional for
    *  backward compatibility with older captured snapshots. */
   pinnedPaths?: string[];
+  /** When no owning process is visible (`pids` empty), a best-effort owner
+   *  inferred from attachment evidence — bpffs pin directory, the manager of
+   *  the cgroup it is attached to (docker/kubernetes/systemd), or a loader
+   *  in another namespace/VM. Absent when pids exist or nothing matched. */
+  ownerHint?: { label: string; reason: string };
   // enriched
   attachments: BpfAttachment[];
   osiLayer: OsiLayer;

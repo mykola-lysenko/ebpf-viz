@@ -11,6 +11,7 @@ import {
   buildNamespaceTopology,
   buildSnapshot,
   computeNetdevCoverage,
+  inferOwnerHint,
 } from "./ebpf-parser";
 import { BPF_PROGRAM_TYPE_COLORS } from "../shared/ebpf-constants";
 import type {
@@ -1254,6 +1255,64 @@ describe("buildNamespaceTopology", () => {
 
     const topo = buildNamespaceTopology(new Map(), [], []);
     expect(topo).toEqual({ nodes: [], edges: [] });
+  });
+});
+
+// ─── inferOwnerHint ───────────────────────────────────────────────────────────
+
+describe("inferOwnerHint", () => {
+  const base = (over: Partial<Parameters<typeof inferOwnerHint>[0]>) =>
+    inferOwnerHint({
+      ...Array.from(parseProgList([xdpProg]).values())[0],
+      pids: undefined,
+      attachments: [],
+      ...over,
+    });
+
+  it("returns nothing when a real owner process exists", () => {
+    expect(base({ pids: [{ pid: 42, comm: "cilium-agent" }] })).toBeUndefined();
+  });
+
+  it("prefers the bpffs pin directory", () => {
+    const hint = base({
+      pinnedPaths: ["/sys/fs/bpf/tetragon/link_pin"],
+      attachments: [{ kind: "cgroup", detail: "cgroup_device", cgroupPath: "/sys/fs/cgroup/docker/x" }],
+    });
+    expect(hint?.label).toBe("pinned: tetragon");
+  });
+
+  it("attributes docker-managed cgroups (Docker Desktop's invisible daemon)", () => {
+    const hint = base({
+      attachments: [
+        { kind: "cgroup", detail: "cgroup_device [multi]", cgroupPath: "/sys/fs/cgroup/docker/89d0e52cd4e5" },
+      ],
+    });
+    expect(hint?.label).toBe("Docker (cgroup-managed)");
+    expect(hint?.reason).toContain("separate VM");
+  });
+
+  it("attributes systemd unit cgroups", () => {
+    const hint = base({
+      attachments: [
+        { kind: "cgroup", detail: "cgroup_inet_egress", cgroupPath: "/sys/fs/cgroup/system.slice/systemd-journald.service" },
+      ],
+    });
+    expect(hint?.label).toBe("systemd: systemd-journald.service");
+  });
+
+  it("attributes foreign-netns link attachments to another namespace/VM", () => {
+    const hint = base({
+      attachments: [
+        { kind: "link", detail: "netkit_peer · ifindex 6 (other netns)" },
+      ],
+    });
+    expect(hint?.label).toBe("another namespace/VM");
+  });
+
+  it("returns nothing when no evidence matches", () => {
+    expect(
+      base({ attachments: [{ kind: "link", detail: "kprobe do_sys_open" }] })
+    ).toBeUndefined();
   });
 });
 

@@ -865,6 +865,24 @@ export function ProgramDetailPanel({ program, history, onClose }: Props) {
             </>
           )}
 
+          {/* Inferred owner — attachment-evidence attribution when no PID is visible */}
+          {(!program.pids || program.pids.length === 0) && program.ownerHint && (
+            <>
+              <Separator className="bg-border/50" />
+              <section>
+                <h3 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2">
+                  Inferred Owner
+                </h3>
+                <div className="text-xs font-mono text-foreground mb-1.5">
+                  {program.ownerHint.label}
+                </div>
+                <p className="text-[11px] leading-relaxed text-muted-foreground">
+                  {program.ownerHint.reason}
+                </p>
+              </section>
+            </>
+          )}
+
           {program.orphaned && (
             <>
               <Separator className="bg-border/50" />
