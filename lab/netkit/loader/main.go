@@ -7,7 +7,8 @@
 //     inside the pod netns (L3, policy forward)
 //   - addresses both ends (node 10.244.<i>.1/24, pod 10.244.<i>.2/24) and adds
 //     the pod's default route via the node
-//   - attaches nk_to_pod to the primary and nk_from_pod to the peer
+//   - attaches nk_to_pod (primary hook) and nk_from_pod (peer hook), both
+//     created against the primary ifindex as the kernel requires
 //   - pins both links under /sys/fs/bpf/nklab so the programs survive exit
 //
 // Run as root in the host mount namespace (NOT under `ip netns exec`, which
@@ -125,9 +126,11 @@ func wirePod(
 	primaryName := "nk-" + name
 
 	// Node side: create the netkit pair (primary here, peer moved into the pod
-	// netns), address the primary, and attach the primary program — all inside
-	// the node netns.
-	var primIdx int
+	// netns), address the primary, and attach BOTH programs — all inside the
+	// node netns. Both attachments target the PRIMARY ifindex: the kernel
+	// routes BPF_NETKIT_PEER to the peer device itself and refuses (-EACCES)
+	// link creation against the peer's own ifindex (netkit_dev_fetch: "only
+	// the primary device can be used").
 	if err := inNetns(nodeNs, func() error {
 		nk := &netlink.Netkit{
 			LinkAttrs:  netlink.LinkAttrs{Name: primaryName},
@@ -147,15 +150,18 @@ func wirePod(
 		if err := addrUp(primary, fmt.Sprintf("10.244.%d.1/24", subnet)); err != nil {
 			return fmt.Errorf("address node side: %w", err)
 		}
-		primIdx = primary.Attrs().Index
-		return attachAndPin(toPod, primIdx, ebpf.AttachNetkitPrimary,
-			filepath.Join(pinDir, name+"-to_pod"))
+		primIdx := primary.Attrs().Index
+		if err := attachAndPin(toPod, primIdx, ebpf.AttachNetkitPrimary,
+			filepath.Join(pinDir, name+"-to_pod")); err != nil {
+			return err
+		}
+		return attachAndPin(fromPod, primIdx, ebpf.AttachNetkitPeer,
+			filepath.Join(pinDir, name+"-from_pod"))
 	}); err != nil {
 		return err
 	}
 
-	// Pod side: address + up + default route + attach the peer program, all
-	// inside the pod netns.
+	// Pod side: address + up + default route, inside the pod netns.
 	if err := inNetns(podNs, func() error {
 		peerLink, err := netlink.LinkByName("eth0")
 		if err != nil {
@@ -175,8 +181,7 @@ func wirePod(
 		}); err != nil {
 			return fmt.Errorf("add default route: %w", err)
 		}
-		return attachAndPin(fromPod, peerLink.Attrs().Index, ebpf.AttachNetkitPeer,
-			filepath.Join(pinDir, name+"-from_pod"))
+		return nil
 	}); err != nil {
 		return fmt.Errorf("configure pod side: %w", err)
 	}
