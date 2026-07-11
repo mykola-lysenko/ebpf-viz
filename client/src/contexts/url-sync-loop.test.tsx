@@ -1,107 +1,113 @@
 // @vitest-environment happy-dom
-import React, { useEffect, useState } from "react";
+import React from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { cleanup, render } from "@testing-library/react";
-import { Router, useSearchParams } from "wouter";
+import { act, cleanup, render } from "@testing-library/react";
+import { Router, useSearchParams, useLocation } from "wouter";
 
 afterEach(cleanup);
 
-/** id from a URL query param, or null. */
-function initIdFromUrl(key: string): number | null {
-  const v = new URLSearchParams(window.location.search).get(key);
-  const n = v != null && v !== "" ? Number(v) : NaN;
+/** Detect an "update loop" whether React logs it via console.error or throws
+ *  it asynchronously in a queued effect flush. */
+async function withLoopDetection(fn: () => void | Promise<void>): Promise<boolean> {
+  const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+  const seen: string[] = [];
+  const onErr = (e: ErrorEvent) => seen.push(String(e.message ?? e.error));
+  window.addEventListener("error", onErr);
+  try {
+    await act(async () => {
+      await fn();
+    });
+  } catch (e) {
+    seen.push(String(e));
+  }
+  window.removeEventListener("error", onErr);
+  const hit = (s: unknown) => typeof s === "string" && s.includes("Maximum update depth");
+  const looped =
+    seen.some(hit) || errSpy.mock.calls.some(args => args.some(hit));
+  errSpy.mockRestore();
+  return looped;
+}
+
+/** URL-as-single-source-of-truth (mirrors EbpfContext): selection is DERIVED
+ *  from the query, and setters write the query. No selection state, no sync
+ *  effects — nothing can fight the URL, so navigation (which drops the query)
+ *  can't loop. */
+function paramId(sp: URLSearchParams, key: string): number | null {
+  const raw = sp.get(key);
+  const n = raw != null && raw !== "" ? Number(raw) : NaN;
   return Number.isFinite(n) ? n : null;
 }
 
-/** Replica of EbpfContext's URL<->selection sync, in isolation. State is
- *  initialized FROM the URL so the write effect never runs with stale nulls. */
 function UrlSyncHarness() {
-  const [selectedProgramId, setSelectedProgramId] = useState<number | null>(() => initIdFromUrl("prog"));
-  const [selectedMapId, setSelectedMapId] = useState<number | null>(() => initIdFromUrl("map"));
+  const [, navigate] = useLocation();
   const [searchParams, setSearchParams] = useSearchParams();
-  const progParam = searchParams.get("prog");
-  const mapParam = searchParams.get("map");
+  const selectedProgramId = paramId(searchParams, "prog");
+  const selectedMapId = paramId(searchParams, "map");
 
-  useEffect(() => {
-    const id = progParam != null && progParam !== "" ? Number(progParam) : null;
-    if (id != null && Number.isNaN(id)) return;
-    setSelectedProgramId(prev => (prev === id ? prev : id));
-  }, [progParam]);
-  useEffect(() => {
-    const id = mapParam != null && mapParam !== "" ? Number(mapParam) : null;
-    if (id != null && Number.isNaN(id)) return;
-    setSelectedMapId(prev => (prev === id ? prev : id));
-  }, [mapParam]);
-  useEffect(() => {
-    const desired = new URLSearchParams(searchParams);
-    if (selectedProgramId != null) desired.set("prog", String(selectedProgramId));
-    else desired.delete("prog");
-    if (selectedMapId != null) desired.set("map", String(selectedMapId));
-    else desired.delete("map");
-    if (desired.toString() !== searchParams.toString()) {
-      setSearchParams(desired, { replace: true });
-    }
-  }, [selectedProgramId, selectedMapId, searchParams, setSearchParams]);
+  const setParam = (key: string, value: number | null) => {
+    setSearchParams(prev => {
+      const next = new URLSearchParams(prev);
+      if (value != null) next.set(key, String(value));
+      else next.delete(key);
+      return next;
+    }, { replace: true });
+  };
 
   return (
     <div>
       <div data-testid="state">{`${selectedProgramId}|${selectedMapId}`}</div>
-      <button data-testid="select-map" onClick={() => setSelectedMapId(42)}>
-        select map
-      </button>
+      <button data-testid="select-map" onClick={() => setParam("map", 42)}>select map</button>
+      <button data-testid="nav-programs" onClick={() => navigate("/programs")}>go programs</button>
     </div>
   );
 }
 
-function renderAt(url: string) {
+function mountAt(url: string) {
   window.history.replaceState(null, "", url);
-  const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
-  const r = render(
+  return render(
     <Router>
       <UrlSyncHarness />
     </Router>
   );
-  const looped = errSpy.mock.calls.some(args =>
-    args.some(a => typeof a === "string" && a.includes("Maximum update depth"))
-  );
-  errSpy.mockRestore();
-  return { looped, text: r.getByTestId("state").textContent };
 }
 
 describe("EbpfContext URL<->selection sync", () => {
-  it("does not loop when mounted on a clean URL", () => {
-    const { looped } = renderAt("/maps");
+  it("does not loop when mounted on a clean URL", async () => {
+    let r!: ReturnType<typeof render>;
+    const looped = await withLoopDetection(() => { r = mountAt("/maps"); });
     expect(looped).toBe(false);
+    expect(r.getByTestId("state").textContent).toBe("null|null");
   });
-  it("does not loop when mounted with ?map=5", () => {
-    const { looped, text } = renderAt("/maps?map=5");
+
+  it("resolves selection from ?map=5 without looping", async () => {
+    let r!: ReturnType<typeof render>;
+    const looped = await withLoopDetection(() => { r = mountAt("/maps?map=5"); });
     expect(looped, "update loop on ?map=5").toBe(false);
-    expect(text).toBe("null|5");
+    expect(r.getByTestId("state").textContent).toBe("null|5");
   });
-  it("does not loop when mounted with ?prog=7&map=3", () => {
-    const { looped, text } = renderAt("/maps?prog=7&map=3");
+
+  it("resolves both selections from ?prog=7&map=3 without looping", async () => {
+    let r!: ReturnType<typeof render>;
+    const looped = await withLoopDetection(() => { r = mountAt("/maps?prog=7&map=3"); });
     expect(looped, "update loop on ?prog=7&map=3").toBe(false);
-    expect(text).toBe("7|3");
+    expect(r.getByTestId("state").textContent).toBe("7|3");
   });
 
   it("keeps a selection made at runtime and writes it to the URL", async () => {
-    window.history.replaceState(null, "", "/maps");
-    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
-    const r = render(
-      <Router>
-        <UrlSyncHarness />
-      </Router>
-    );
-    r.getByTestId("select-map").click();
-    // let effects flush
-    await new Promise(resolve => setTimeout(resolve, 0));
-    const looped = errSpy.mock.calls.some(args =>
-      args.some(a => typeof a === "string" && a.includes("Maximum update depth"))
-    );
-    errSpy.mockRestore();
+    const r = mountAt("/maps");
+    const looped = await withLoopDetection(() => { r.getByTestId("select-map").click(); });
     expect(looped, "update loop after selecting a map").toBe(false);
-    // selection persisted (panel does NOT force-close) and the URL reflects it
     expect(r.getByTestId("state").textContent).toBe("null|42");
     expect(new URLSearchParams(window.location.search).get("map")).toBe("42");
+  });
+
+  it("does not loop when navigating to another tab with a selection active", async () => {
+    // Reproduces "going around tabs": a map is selected on /maps, then the
+    // user navigates to /programs (which drops the query). A two-way state<->URL
+    // sync used to fight itself here; deriving selection from the URL doesn't.
+    const r = mountAt("/maps?map=5");
+    const looped = await withLoopDetection(() => { r.getByTestId("nav-programs").click(); });
+    expect(looped, "update loop when navigating tabs with a selection").toBe(false);
+    expect(r.getByTestId("state").textContent).toBe("null|null"); // selection cleared
   });
 });

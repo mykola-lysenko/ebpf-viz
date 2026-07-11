@@ -87,34 +87,56 @@ interface EbpfContextValue {
 
 const EbpfContext = createContext<EbpfContextValue | null>(null);
 
-/** Read a numeric id from a URL query param at first render, else null. */
-function initIdFromUrl(key: string): number | null {
-  if (typeof window === "undefined") return null;
-  const raw = new URLSearchParams(window.location.search).get(key);
+/** Numeric id from a URLSearchParams entry, else null. */
+function paramId(params: URLSearchParams, key: string): number | null {
+  const raw = params.get(key);
   const n = raw != null && raw !== "" ? Number(raw) : NaN;
   return Number.isFinite(n) ? n : null;
 }
 
 export function EbpfProvider({ children }: { children: React.ReactNode }) {
-  // Pin the SELECTION by id (not the object): storing the full BpfProgram
-  // froze the detail panel while the live view updated, and an id is what the
-  // URL carries. lastKnownProgram is the fallback shown if the program unloads
-  // while its panel is open.
-  //
-  // Initialize FROM the URL (not null): otherwise, on a mount with ?prog/?map
-  // already set, the state→URL write effect runs one commit before the
-  // URL→state read effects apply their queued updates, sees stale nulls, and
-  // wipes the params — the read effects then wipe the state to match, and the
-  // two fight forever ("Maximum update depth exceeded"). See the regression in
-  // client/src/contexts/url-sync-loop.test.tsx.
-  const [selectedProgramId, setSelectedProgramId] = useState<number | null>(() => initIdFromUrl("prog"));
-  const lastKnownProgramRef = useRef<BpfProgram | null>(null);
-  const setSelectedProgram = useCallback((p: BpfProgram | null) => {
-    if (p) lastKnownProgramRef.current = p;
-    setSelectedProgramId(p?.id ?? null);
-  }, []);
-  const [selectedMapId, setSelectedMapId] = useState<number | null>(() => initIdFromUrl("map"));
   const [, navigate] = useLocation();
+  // The URL query is the SINGLE SOURCE OF TRUTH for selection: `?prog=<id>`
+  // opens a program's drawer, `?map=<id>` selects a map. Deriving selection
+  // from the URL (rather than mirroring it into React state with sync effects)
+  // is what makes deep links work AND avoids an infinite loop — a prior
+  // two-way sync fought itself whenever navigation dropped the query while a
+  // selection was active ("Maximum update depth exceeded"). See the regression
+  // in client/src/contexts/url-sync-loop.test.tsx.
+  const [searchParams, setSearchParams] = useSearchParams();
+  const selectedProgramId = paramId(searchParams, "prog");
+  const selectedMapId = paramId(searchParams, "map");
+
+  // Write a single selection param (replace, so per-click doesn't spam history).
+  const setParam = useCallback(
+    (key: string, value: number | null) => {
+      setSearchParams(
+        prev => {
+          const next = new URLSearchParams(prev);
+          if (value != null) next.set(key, String(value));
+          else next.delete(key);
+          return next;
+        },
+        { replace: true }
+      );
+    },
+    [setSearchParams]
+  );
+
+  // Detail panel keeps showing a program's last-known state if it unloads.
+  const lastKnownProgramRef = useRef<BpfProgram | null>(null);
+  const setSelectedProgram = useCallback(
+    (p: BpfProgram | null) => {
+      if (p) lastKnownProgramRef.current = p;
+      setParam("prog", p?.id ?? null);
+    },
+    [setParam]
+  );
+  const setSelectedMapId = useCallback(
+    (id: number | null) => setParam("map", id),
+    [setParam]
+  );
+
   const [searchQuery, setSearchQuery] = useState("");
   const [typeFilter, setTypeFilter] = useState<string[]>([]);
   // refreshInterval is kept for the Settings page UI but no longer drives polling
@@ -173,51 +195,15 @@ export function EbpfProvider({ children }: { children: React.ReactNode }) {
     if (selectedProgram) lastKnownProgramRef.current = selectedProgram;
   }, [selectedProgram]);
 
-  // Cross-navigation. focusMap navigates to the Maps page (map detail lives
-  // only there) and closes the global program drawer.
-  const focusProgram = useCallback((id: number) => setSelectedProgramId(id), []);
+  // Cross-navigation. focusProgram opens a program's drawer (stays on the
+  // current page — the drawer is global). focusMap goes to the Maps page with
+  // the map selected, atomically (path + query in one navigation), which also
+  // clears any open program drawer.
+  const focusProgram = useCallback((id: number) => setParam("prog", id), [setParam]);
   const focusMap = useCallback(
-    (id: number) => {
-      setSelectedMapId(id);
-      setSelectedProgramId(null);
-      navigate("/maps");
-    },
+    (id: number) => navigate(`/maps?map=${id}`),
     [navigate]
   );
-
-  // ── URL ↔ selection sync (deep links) ──────────────────────────────────────
-  // `?prog=<id>` and `?map=<id>` mirror the selection so a view can be
-  // bookmarked/shared and browser back/forward restores it. Selection changes
-  // replace (don't push) the URL so per-click history isn't polluted; the
-  // path (view) is still pushed by wouter <Link>s.
-  const [searchParams, setSearchParams] = useSearchParams();
-  const progParam = searchParams.get("prog");
-  const mapParam = searchParams.get("map");
-  // URL → state (browser back/forward; also reconciles deep-link params that
-  // arrive after mount). State is already URL-initialized above, so on mount
-  // these are no-ops and don't fight the write effect.
-  useEffect(() => {
-    const id = progParam != null && progParam !== "" ? Number(progParam) : null;
-    if (id != null && Number.isNaN(id)) return;
-    setSelectedProgramId(prev => (prev === id ? prev : id));
-  }, [progParam]);
-  useEffect(() => {
-    const id = mapParam != null && mapParam !== "" ? Number(mapParam) : null;
-    if (id != null && Number.isNaN(id)) return;
-    setSelectedMapId(prev => (prev === id ? prev : id));
-  }, [mapParam]);
-  // state → URL. Idempotent: only writes when the query actually differs, so
-  // it can't churn history.replaceState on every render.
-  useEffect(() => {
-    const desired = new URLSearchParams(searchParams);
-    if (selectedProgramId != null) desired.set("prog", String(selectedProgramId));
-    else desired.delete("prog");
-    if (selectedMapId != null) desired.set("map", String(selectedMapId));
-    else desired.delete("map");
-    if (desired.toString() !== searchParams.toString()) {
-      setSearchParams(desired, { replace: true });
-    }
-  }, [selectedProgramId, selectedMapId, searchParams, setSearchParams]);
   const maps: BpfMap[] = loadedSnapshot ? snapshotMaps : liveMaps;
   const isLoading =
     loadedSnapshot === null &&
