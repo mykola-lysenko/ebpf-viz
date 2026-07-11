@@ -477,6 +477,9 @@ async function poll(): Promise<void> {
         kernelVersion,
         bpftoolVersion,
         demoMode: config.demoMode,
+        // Demo data always carries pids; live data only when the bpftool
+        // build can report them (skeleton support).
+        pidsReliable: config.demoMode || bpftoolHasSkeletons === true,
       },
       cgroupsEffective,
       links,

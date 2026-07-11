@@ -1790,7 +1790,11 @@ export function buildNamespaceTopology(
  *  Desktop's VM, containers with private /proc) the loader's processes are
  *  invisible — the attachment points still say who manages them. */
 export function inferOwnerHint(
-  prog: BpfProgram
+  prog: BpfProgram,
+  /** True when the pids field is trustworthy (skeleton-enabled bpftool) —
+   *  gates the "invisible holder" inference, which would otherwise label
+   *  every program on hosts whose bpftool cannot report pids at all. */
+  pidsReliable = false
 ): { label: string; reason: string } | undefined {
   if (prog.pids && prog.pids.length > 0) return undefined;
 
@@ -1849,6 +1853,25 @@ export function inferOwnerHint(
     };
   }
 
+  // Link-attached, not orphaned, no pin, yet nobody visible holds the fd:
+  // a live holder must exist (the kernel unloads a program when its last
+  // reference drops), so it is outside this PID namespace. Only asserted
+  // when the pids field is trustworthy for other programs on this host.
+  if (
+    pidsReliable &&
+    !prog.orphaned &&
+    prog.attachments.some(att => att.kind === "link")
+  ) {
+    return {
+      label: "process outside this PID namespace",
+      reason:
+        "A live process must hold this program's link fd (the kernel would " +
+        "otherwise have unloaded it), but its PID is not visible from this " +
+        "namespace — typical for loaders in another container or WSL VM " +
+        "(e.g. Docker Desktop's agents).",
+    };
+  }
+
   return undefined;
 }
 
@@ -1861,6 +1884,8 @@ export function buildSnapshot(
     kernelVersion: string;
     bpftoolVersion: string;
     demoMode: boolean;
+    /** pids field trustworthy (skeleton-enabled bpftool / demo data). */
+    pidsReliable?: boolean;
   },
   rawEffectiveCgroups: RawCgroupEntry[] = [],
   rawLinks: RawBpfLink[] = [],
@@ -1881,7 +1906,7 @@ export function buildSnapshot(
   }
   enrichWithCgroupAttachments(progMap, rawCgroups);
   for (const prog of Array.from(progMap.values())) {
-    const hint = inferOwnerHint(prog);
+    const hint = inferOwnerHint(prog, meta.pidsReliable ?? false);
     if (hint) prog.ownerHint = hint;
   }
 

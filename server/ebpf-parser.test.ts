@@ -1309,6 +1309,22 @@ describe("inferOwnerHint", () => {
     expect(hint?.label).toBe("another namespace/VM");
   });
 
+  it("labels link-held programs with invisible holders when pids are reliable", () => {
+    // Docker Desktop's oom-kill kprobe / sched trackers: link-attached, not
+    // orphaned, no pin, loader in another WSL VM's PID namespace.
+    const prog = {
+      ...Array.from(parseProgList([xdpProg]).values())[0],
+      pids: undefined,
+      attachments: [{ kind: "link" as const, detail: "kprobe __oom_kill_process" }],
+    };
+    expect(inferOwnerHint(prog, true)?.label).toBe("process outside this PID namespace");
+    // ...but never without the reliability guard (skeleton-less bpftool
+    // makes EVERY program pid-less, and this would mislabel them all).
+    expect(inferOwnerHint(prog, false)).toBeUndefined();
+    // ...and never for orphaned programs (owner died; nothing holds it).
+    expect(inferOwnerHint({ ...prog, orphaned: true }, true)).toBeUndefined();
+  });
+
   it("returns nothing when no evidence matches", () => {
     expect(
       base({ attachments: [{ kind: "link", detail: "kprobe do_sys_open" }] })
