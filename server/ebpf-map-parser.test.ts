@@ -43,6 +43,21 @@ function makeProgWithMaps(id: number, mapIds: number[]): BpfProgram {
 // ─── Tests ────────────────────────────────────────────────────────────────────
 
 describe("parseMaps", () => {
+  it("filters out bpftool's own skeleton/libbpf internal maps", () => {
+    // Concurrent poll invocations leak transient owner-less copies of these.
+    const maps = parseMaps(
+      [
+        makeRaw({ id: 137648, type: "array", name: "libbpf_global" }),
+        makeRaw({ id: 137649, type: "array", name: "pid_iter.rodata", frozen: true }),
+        makeRaw({ id: 137650, type: "array", name: "libbpf_det_bind" }),
+        makeRaw({ id: 137653, type: "array", name: "libbpf_global" }), // 2nd concurrent copy
+        makeRaw({ id: 42, type: "hash", name: "cilium_lb4_services" }), // a real map
+      ],
+      NO_PROGS
+    );
+    expect(maps.map(m => m.name)).toEqual(["cilium_lb4_services"]);
+  });
+
   it("parses a basic hash map with correct fields", () => {
     const maps = parseMaps([makeRaw({ id: 1, type: "hash", name: "my_hash", bytes_key: 4, bytes_value: 8, bytes_memlock: 32768 })], NO_PROGS);
     expect(maps).toHaveLength(1);

@@ -20,6 +20,26 @@ function normalizeType(raw: string): BpfMapType {
   return "unknown";
 }
 
+// bpftool's own skeleton machinery. When bpftool is built with skeleton
+// support it loads a `pid_iter` BPF program (to resolve object ownership),
+// which brings libbpf's internal maps. These exist only for the lifetime of a
+// bpftool process, so concurrent poll invocations leak transient, owner-less,
+// ever-changing-id copies into `map list` — the observer watching its own
+// tooling. A real program map is astronomically unlikely to use these exact
+// names, so filtering them removes the noise without hiding user maps.
+const BPFTOOL_INTERNAL_MAP_NAMES = new Set([
+  "libbpf_global",
+  "libbpf_det_bind",
+]);
+
+function isBpftoolInternalMap(raw: RawBpfMap): boolean {
+  const name = raw.name?.trim() ?? "";
+  return (
+    BPFTOOL_INTERNAL_MAP_NAMES.has(name) ||
+    name.startsWith("pid_iter.") // pid_iter.rodata / .bss / .data
+  );
+}
+
 // ─── Parser ────────────────────────────────────────────────────────────────
 
 /**
@@ -37,7 +57,7 @@ export function parseMaps(rawMaps: RawBpfMap[], programs: BpfProgram[]): BpfMap[
     }
   }
 
-  return rawMaps.map(raw => {
+  return rawMaps.filter(raw => !isBpftoolInternalMap(raw)).map(raw => {
     const type = normalizeType(raw.type ?? "unknown");
     const meta = MAP_TYPE_META[type] ?? MAP_TYPE_META["unknown"]!;
     const usedByProgIds = Array.from(mapToProgs.get(raw.id) ?? []);
