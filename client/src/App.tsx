@@ -15,6 +15,7 @@ const ProgramsView = lazy(() => import("./pages/ProgramsView"));
 const SettingsView = lazy(() => import("./pages/SettingsView"));
 const OsMapView = lazy(() => import("./pages/OsMapView"));
 const MapsView = lazy(() => import("./pages/MapsView"));
+const DiffView = lazy(() => import("./pages/DiffView"));
 const NotFound = lazy(() => import("./pages/NotFound"));
 
 function RouteLoading() {
@@ -41,6 +42,7 @@ function Router() {
           <Route path="/settings" component={SettingsView} />
           <Route path="/map" component={OsMapView} />
           <Route path="/maps" component={MapsView} />
+          <Route path="/diff" component={DiffView} />
           <Route path="/404" component={NotFound} />
           <Route component={NotFound} />
         </Switch>

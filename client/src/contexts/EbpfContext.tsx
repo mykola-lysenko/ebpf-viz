@@ -66,6 +66,10 @@ interface EbpfContextValue {
   snapshotMeta: SnapshotMeta | null;
   /** Load a snapshot JSON file into snapshot mode */
   loadSnapshot: (file: File) => Promise<void>;
+  /** Parse a snapshot file WITHOUT entering snapshot mode (for the diff view). */
+  parseSnapshotFile: (
+    file: File
+  ) => Promise<{ snapshot: EbpfSnapshot; maps: BpfMap[]; meta: SnapshotMeta }>;
   /** Load a map dump file (from capture-snapshot.sh --dump-maps) into snapshot mode */
   loadMapDumps: (file: File) => Promise<{ loaded: number }> | never;
   /** Clear the loaded snapshot and return to live/demo mode */
@@ -227,74 +231,80 @@ export function EbpfProvider({ children }: { children: React.ReactNode }) {
     refetchRef.current();
   }, [loadedSnapshot]);
 
-  // ── Snapshot loading ───────────────────────────────────────────────────────
-  const loadSnapshot = useCallback(async (file: File) => {
-    const { formatValidationError, snapshotUploadSchema } = await import(
-      "../../../shared/snapshot-validation"
-    );
-    const text = await file.text();
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(text);
-    } catch {
-      throw new Error("Invalid JSON file");
-    }
-
-    const validation = snapshotUploadSchema.safeParse(parsed);
-    if (!validation.success) {
-      throw new Error(
-        formatValidationError(
-          "Invalid eBPF Viz snapshot file.",
-          validation.error
-        )
+  // ── Snapshot parsing (shared by loadSnapshot and the diff view) ────────────
+  // Parses a snapshot File into an EbpfSnapshot + maps + meta WITHOUT touching
+  // any global state, so the diff page can parse two files independently.
+  const parseSnapshotFile = useCallback(
+    async (
+      file: File
+    ): Promise<{ snapshot: EbpfSnapshot; maps: BpfMap[]; meta: SnapshotMeta }> => {
+      const { formatValidationError, snapshotUploadSchema } = await import(
+        "../../../shared/snapshot-validation"
       );
-    }
-    const obj = validation.data;
+      const text = await file.text();
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(text);
+      } catch {
+        throw new Error("Invalid JSON file");
+      }
 
-    // Two supported formats:
-    // 1. UI export / capture-snapshot.sh with _ebpfVizSnapshot:true and a "snapshot" key
-    //    (full pre-parsed EbpfSnapshot — can be used directly)
-    // 2. capture-snapshot.sh with "raw" key (raw bpftool outputs — server-side parsing needed)
-    //    For now we support format 1 only; format 2 requires server-side parsing.
-    let ebpfSnapshot: EbpfSnapshot;
+      const validation = snapshotUploadSchema.safeParse(parsed);
+      if (!validation.success) {
+        throw new Error(
+          formatValidationError("Invalid eBPF Viz snapshot file.", validation.error)
+        );
+      }
+      const obj = validation.data;
 
-    let parsedMaps: BpfMap[] = [];
+      // Two formats: a pre-parsed "snapshot" key, or "raw" bpftool outputs
+      // that the server parses via the parseSnapshot mutation.
+      let ebpfSnapshot: EbpfSnapshot;
+      let parsedMaps: BpfMap[] = [];
+      if (obj.snapshot) {
+        ebpfSnapshot = obj.snapshot as EbpfSnapshot;
+        parsedMaps = (obj.maps ?? []) as BpfMap[];
+      } else if (obj.raw) {
+        const result = await parseSnapshotRef.current({
+          raw: obj.raw,
+          hostname: obj.hostname,
+          kernelVersion: obj.kernelVersion,
+          bpftoolVersion: obj.bpftoolVersion,
+          capturedAt: obj.capturedAt,
+          timestamp: obj.timestamp,
+        });
+        ebpfSnapshot = result.snapshot;
+        parsedMaps = result.maps;
+      } else {
+        throw new Error("Snapshot file is missing the 'snapshot' or 'raw' field.");
+      }
 
-    if (obj.snapshot) {
-      // Format 1: pre-parsed snapshot embedded in the file
-      ebpfSnapshot = obj.snapshot as EbpfSnapshot;
-      // Format 1 files may also carry a top-level "maps" array (exported via Download Topology)
-      parsedMaps = (obj.maps ?? []) as BpfMap[];
-    } else if (obj.raw) {
-      // Format 2: raw bpftool outputs — send to server for parsing via parseSnapshot mutation
-      const result = await parseSnapshotRef.current({
-        raw: obj.raw,
-        hostname: obj.hostname,
-        kernelVersion: obj.kernelVersion,
-        bpftoolVersion: obj.bpftoolVersion,
-        capturedAt: obj.capturedAt,
-        timestamp: obj.timestamp,
-      });
-      ebpfSnapshot = result.snapshot;
-      parsedMaps = result.maps;
-    } else {
-      throw new Error(
-        "Snapshot file is missing the 'snapshot' or 'raw' field."
-      );
-    }
+      const capturedAt =
+        (obj.capturedAt as string) ?? new Date(ebpfSnapshot.timestamp).toISOString();
+      return {
+        snapshot: ebpfSnapshot,
+        maps: parsedMaps,
+        meta: {
+          filename: file.name,
+          capturedAt,
+          hostname: ebpfSnapshot.hostname ?? "unknown",
+          kernelVersion: ebpfSnapshot.kernelVersion ?? "unknown",
+        },
+      };
+    },
+    []
+  );
 
-    const capturedAt =
-      (obj.capturedAt as string) ??
-      new Date(ebpfSnapshot.timestamp).toISOString();
-    setLoadedSnapshot(ebpfSnapshot);
-    setSnapshotMaps(parsedMaps);
-    setSnapshotMeta({
-      filename: file.name,
-      capturedAt,
-      hostname: ebpfSnapshot.hostname ?? "unknown",
-      kernelVersion: ebpfSnapshot.kernelVersion ?? "unknown",
-    });
-  }, []);
+  // ── Snapshot loading (into snapshot mode) ──────────────────────────────────
+  const loadSnapshot = useCallback(
+    async (file: File) => {
+      const { snapshot, maps, meta } = await parseSnapshotFile(file);
+      setLoadedSnapshot(snapshot);
+      setSnapshotMaps(maps);
+      setSnapshotMeta(meta);
+    },
+    [parseSnapshotFile]
+  );
 
   // ── Map dump loading ───────────────────────────────────────────────────────
   const snapshotMapsRef = useRef(snapshotMaps);
@@ -433,6 +443,7 @@ export function EbpfProvider({ children }: { children: React.ReactNode }) {
       appMode,
       snapshotMeta,
       loadSnapshot,
+      parseSnapshotFile,
       loadMapDumps,
       clearSnapshot,
       snapshotMapDumps,
@@ -462,6 +473,7 @@ export function EbpfProvider({ children }: { children: React.ReactNode }) {
       snapshotMeta,
       loadSnapshot,
       loadMapDumps,
+      parseSnapshotFile,
       clearSnapshot,
       snapshotMapDumps,
       historyMap,

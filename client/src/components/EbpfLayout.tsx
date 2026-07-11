@@ -4,7 +4,7 @@ import {
   Cpu, Network, FolderTree, List, Settings,
   LayoutDashboard, RefreshCw, Wifi, WifiOff,
   ChevronLeft, ChevronRight, Search, X, Map, Database,
-  Radio, Upload, FolderOpen, Camera, XCircle, Share2
+  Radio, Upload, FolderOpen, Camera, XCircle, Share2, GitCompare
 } from "lucide-react";
 import { EbpfProvider, useEbpf } from "@/contexts/EbpfContext";
 import type { StreamStatus } from "@/hooks/useEbpfStream";
@@ -29,6 +29,7 @@ const NAV_ITEMS = [
   { path: "/cgroups",  icon: FolderTree,      label: "Cgroups",    },
   { path: "/programs", icon: List,            label: "Programs",   },
   { path: "/maps",     icon: Database,        label: "Maps",       },
+  { path: "/diff",     icon: GitCompare,      label: "Diff",       },
   { path: "/map",      icon: Map,             label: "OS Map",     },
   { path: "/settings", icon: Settings,        label: "Settings",   },
 ];
