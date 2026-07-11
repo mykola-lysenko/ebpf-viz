@@ -3,9 +3,10 @@ import { useEbpf } from "@/contexts/EbpfContext";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { Activity, SortAsc, SortDesc, Filter, X, Zap, AlertTriangle } from "lucide-react";
+import { Activity, SortAsc, SortDesc, Filter, X, Zap, AlertTriangle, Clock } from "lucide-react";
 import { cn } from "@/lib/utils";
-import type { BpfProgram, ProgHistory } from "../../../shared/ebpf-types";
+import type { BpfProgram, ProgHistory, ProgRates } from "../../../shared/ebpf-types";
+import { progRatesAtOffset, ringIntervalCount } from "../../../shared/prog-rates";
 import { BPF_PROGRAM_TYPE_COLORS } from "../../../shared/ebpf-constants";
 import Sparkline, { samplesToCallsPerSec, fmtCps, fmtNs, fmtCpu } from "@/components/Sparkline";
 import { formatRelativeTime, formatFullTimestamp, useNow } from "@/lib/time";
@@ -134,6 +135,7 @@ function TruncatedProgramName({ name }: { name: string }) {
 const ProgramRow = React.memo(function ProgramRow({
   prog,
   history,
+  rates,
   maxCallsPerSec,
   tagCount,
   onTagFilter,
@@ -142,6 +144,9 @@ const ProgramRow = React.memo(function ProgramRow({
 }: {
   prog: BpfProgram;
   history?: ProgHistory | null;
+  /** Effective rates for the numeric columns — the live `latest`, or the
+   *  historical interval when the time scrubber is active. */
+  rates: ProgRates | null;
   maxCallsPerSec: number;
   tagCount: Map<string, number>;
   onTagFilter: (tag: string) => void;
@@ -152,9 +157,9 @@ const ProgramRow = React.memo(function ProgramRow({
   const color = BPF_PROGRAM_TYPE_COLORS[prog.rawType] ?? BPF_PROGRAM_TYPE_COLORS.unknown;
   const displayName = prog.name || `prog_${prog.id}`;
 
-  const callsPerSec = history?.latest?.callsPerSec ?? 0;
-  const avgLatencyNs = history?.latest?.avgLatencyNs ?? 0;
-  const cpuFraction = history?.latest?.cpuFraction ?? 0;
+  const callsPerSec = rates?.callsPerSec ?? 0;
+  const avgLatencyNs = rates?.avgLatencyNs ?? 0;
+  const cpuFraction = rates?.cpuFraction ?? 0;
   const hasStats = callsPerSec > 0 || avgLatencyNs > 0;
 
   const sparkData = useMemo(() => {
@@ -348,14 +353,52 @@ export default function ProgramsView() {
     return progs;
   }, [filteredPrograms, tagFilter, orphanFilter]);
 
+  // ── Time scrubbing ─────────────────────────────────────────────────────────
+  // Offset 0 = live (latest interval); k>0 = k intervals back in the ring.
+  const [scrubOffset, setScrubOffset] = useState(0);
+  // Deepest interval available across all visible programs' rings.
+  const maxScrub = useMemo(
+    () =>
+      visiblePrograms.reduce(
+        (m, p) => Math.max(m, ringIntervalCount(historyMap.get(p.id)) - 1),
+        0
+      ),
+    [visiblePrograms, historyMap]
+  );
+  // Clamp when the ring shrinks / programs change under a held scrub.
+  const effectiveOffset = Math.min(scrubOffset, Math.max(0, maxScrub));
+  // Per-program effective rates: latest when live, else the scrubbed interval.
+  const ratesById = useMemo(() => {
+    const m = new Map<number, ProgRates | null>();
+    for (const p of visiblePrograms) {
+      const h = historyMap.get(p.id);
+      m.set(
+        p.id,
+        effectiveOffset === 0
+          ? h?.latest ?? null
+          : progRatesAtOffset(h, effectiveOffset)?.rates ?? null
+      );
+    }
+    return m;
+  }, [visiblePrograms, historyMap, effectiveOffset]);
+  // Timestamp at the scrubbed point (from the longest ring), for the label.
+  const scrubTs = useMemo(() => {
+    if (effectiveOffset === 0) return null;
+    let ts: number | null = null;
+    for (const p of visiblePrograms) {
+      const at = progRatesAtOffset(historyMap.get(p.id), effectiveOffset);
+      if (at && (ts === null || at.ts > ts)) ts = at.ts;
+    }
+    return ts;
+  }, [visiblePrograms, historyMap, effectiveOffset]);
+
   // Compute max calls/sec across all visible programs for bar scaling
   // NOTE: must be before any early returns to satisfy Rules of Hooks
   const maxCallsPerSec = useMemo(() => {
     return visiblePrograms.reduce((max, p) => {
-      const h = historyMap.get(p.id);
-      return Math.max(max, h?.latest?.callsPerSec ?? 0);
+      return Math.max(max, ratesById.get(p.id)?.callsPerSec ?? 0);
     }, 0);
-  }, [visiblePrograms, historyMap]);
+  }, [visiblePrograms, ratesById]);
 
   const tableMinWidth = useMemo(
     () => PROGRAM_COLUMN_ORDER.reduce((total, key) => total + columnWidths[key], 0),
@@ -431,8 +474,8 @@ export default function ProgramsView() {
 
   const sorted = [...visiblePrograms].sort((a, b) => {
     let av: string | number = 0, bv: string | number = 0;
-    const ha = historyMap.get(a.id);
-    const hb = historyMap.get(b.id);
+    const ra = ratesById.get(a.id);
+    const rb = ratesById.get(b.id);
     switch (sortKey) {
       case "id": av = a.id; bv = b.id; break;
       case "name": av = a.name; bv = b.name; break;
@@ -440,9 +483,9 @@ export default function ProgramsView() {
       case "loadedAt": av = a.loadedAt; bv = b.loadedAt; break;
       case "runCnt": av = a.runCnt ?? -1; bv = b.runCnt ?? -1; break;
       case "bytesXlated": av = a.bytesXlated; bv = b.bytesXlated; break;
-      case "callsPerSec": av = ha?.latest?.callsPerSec ?? -1; bv = hb?.latest?.callsPerSec ?? -1; break;
-      case "avgLatency": av = ha?.latest?.avgLatencyNs ?? -1; bv = hb?.latest?.avgLatencyNs ?? -1; break;
-      case "cpuFraction": av = ha?.latest?.cpuFraction ?? -1; bv = hb?.latest?.cpuFraction ?? -1; break;
+      case "callsPerSec": av = ra?.callsPerSec ?? -1; bv = rb?.callsPerSec ?? -1; break;
+      case "avgLatency": av = ra?.avgLatencyNs ?? -1; bv = rb?.avgLatencyNs ?? -1; break;
+      case "cpuFraction": av = ra?.cpuFraction ?? -1; bv = rb?.cpuFraction ?? -1; break;
     }
     const cmp = av < bv ? -1 : av > bv ? 1 : 0;
     return sortDir === "asc" ? cmp : -cmp;
@@ -510,6 +553,41 @@ export default function ProgramsView() {
           </p>
         </div>
       </div>
+
+      {/* Time scrubber — replay recent per-program rates from the history ring */}
+      {statsEnabled && maxScrub > 0 && (
+        <div className="flex items-center gap-3 rounded-lg border border-border bg-card/40 px-3 py-2">
+          <Clock size={13} className="shrink-0 text-muted-foreground" />
+          <input
+            type="range"
+            min={0}
+            max={maxScrub}
+            value={maxScrub - effectiveOffset}
+            onChange={e => setScrubOffset(maxScrub - Number(e.target.value))}
+            aria-label="Scrub through recent history"
+            className="h-1.5 flex-1 cursor-pointer accent-primary"
+          />
+          <span className="w-32 shrink-0 text-right text-xs font-mono tabular-nums text-muted-foreground">
+            {effectiveOffset === 0 ? (
+              <span className="text-emerald-400">live</span>
+            ) : scrubTs != null ? (
+              `${formatRelativeTime(scrubTs / 1000, now)} · ${new Date(scrubTs).toLocaleTimeString()}`
+            ) : (
+              `−${effectiveOffset} poll${effectiveOffset === 1 ? "" : "s"}`
+            )}
+          </span>
+          {effectiveOffset !== 0 && (
+            <Button
+              size="sm"
+              variant="ghost"
+              className="h-6 px-2 text-xs"
+              onClick={() => setScrubOffset(0)}
+            >
+              Live
+            </Button>
+          )}
+        </div>
+      )}
 
       {/* Type filter chips */}
       <div className="flex flex-wrap gap-2 items-center">
@@ -605,6 +683,7 @@ export default function ProgramsView() {
                   key={prog.id}
                   prog={prog}
                   history={historyMap.get(prog.id)}
+                  rates={ratesById.get(prog.id) ?? null}
                   maxCallsPerSec={maxCallsPerSec}
                   tagCount={tagCount}
                   onTagFilter={setTagFilter}

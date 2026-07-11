@@ -18,6 +18,7 @@ import type {
   BpfProgram,
 } from "../shared/ebpf-types";
 import { PROG_HISTORY_RING_SIZE } from "../shared/ebpf-constants";
+import { computeProgRates } from "../shared/prog-rates";
 
 // ─── Internal ring storage ────────────────────────────────────────────────────
 
@@ -60,26 +61,9 @@ function readSamples(ring: RingEntry): ProgSample[] {
 }
 
 // ─── Rate computation ─────────────────────────────────────────────────────────
-
-function computeRates(prev: ProgSample, curr: ProgSample): ProgRates {
-  const dtMs = curr.ts - prev.ts;
-  if (dtMs <= 0) {
-    return { callsPerSec: 0, avgLatencyNs: 0, cpuFraction: 0, recursionRate: 0 };
-  }
-  const dtSec = dtMs / 1000;
-  const dtNs = dtMs * 1_000_000;
-
-  const deltaCnt = Math.max(0, curr.runCnt - prev.runCnt);
-  const deltaTime = Math.max(0, curr.runTimeNs - prev.runTimeNs);
-  const deltaMisses = Math.max(0, curr.recursionMisses - prev.recursionMisses);
-
-  const callsPerSec = deltaCnt / dtSec;
-  const avgLatencyNs = deltaCnt > 0 ? deltaTime / deltaCnt : 0;
-  const cpuFraction = Math.min(1, deltaTime / dtNs);
-  const recursionRate = deltaCnt > 0 ? deltaMisses / deltaCnt : 0;
-
-  return { callsPerSec, avgLatencyNs, cpuFraction, recursionRate };
-}
+// The interval-rate formula lives in shared/ so the client's time-scrubbing
+// derives identical numbers.
+const computeRates = computeProgRates;
 
 // ─── Public API ───────────────────────────────────────────────────────────────
 
