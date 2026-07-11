@@ -3,10 +3,11 @@ import React, {
   useContext,
   useState,
   useCallback,
+  useEffect,
   useMemo,
   useRef,
 } from "react";
-import { useLocation } from "wouter";
+import { useLocation, useSearchParams } from "wouter";
 import { trpc } from "@/lib/trpc";
 import { useEbpfStream } from "@/hooks/useEbpfStream";
 import type {
@@ -83,12 +84,15 @@ interface EbpfContextValue {
 const EbpfContext = createContext<EbpfContextValue | null>(null);
 
 export function EbpfProvider({ children }: { children: React.ReactNode }) {
-  // Pin the SELECTION, not the object: storing the full BpfProgram froze the
-  // detail panel at click-time state while the live view kept updating. The
-  // pinned object is only the fallback for programs that unload mid-view.
-  const [pinnedProgram, setPinnedProgram] = useState<BpfProgram | null>(null);
+  // Pin the SELECTION by id (not the object): storing the full BpfProgram
+  // froze the detail panel while the live view updated, and an id is what the
+  // URL carries. lastKnownProgram is the fallback shown if the program unloads
+  // while its panel is open.
+  const [selectedProgramId, setSelectedProgramId] = useState<number | null>(null);
+  const lastKnownProgramRef = useRef<BpfProgram | null>(null);
   const setSelectedProgram = useCallback((p: BpfProgram | null) => {
-    setPinnedProgram(p);
+    if (p) lastKnownProgramRef.current = p;
+    setSelectedProgramId(p?.id ?? null);
   }, []);
   const [selectedMapId, setSelectedMapId] = useState<number | null>(null);
   const [, navigate] = useLocation();
@@ -135,32 +139,64 @@ export function EbpfProvider({ children }: { children: React.ReactNode }) {
   const snapshot = loadedSnapshot ?? liveSnapshot ?? null;
 
   // Live-resolve the selected program from the current snapshot so the detail
-  // panel tracks poll updates; fall back to the pinned object when the
-  // program has unloaded (panel keeps showing its last-known state).
+  // panel tracks poll updates; fall back to the last-known object when the
+  // program has unloaded (panel keeps showing its last state) or is not yet in
+  // the snapshot (deep-linked before the stream connected → resolves on load).
   const selectedProgram = useMemo(() => {
-    if (!pinnedProgram) return null;
-    return (
-      snapshot?.programs.find(p => p.id === pinnedProgram.id) ?? pinnedProgram
-    );
-  }, [pinnedProgram, snapshot]);
+    if (selectedProgramId == null) return null;
+    const live = snapshot?.programs.find(p => p.id === selectedProgramId) ?? null;
+    if (live) return live;
+    return lastKnownProgramRef.current?.id === selectedProgramId
+      ? lastKnownProgramRef.current
+      : null;
+  }, [selectedProgramId, snapshot]);
+  useEffect(() => {
+    if (selectedProgram) lastKnownProgramRef.current = selectedProgram;
+  }, [selectedProgram]);
 
-  // Cross-navigation. focusProgram resolves via a ref so the callback stays
-  // stable across polls; focusMap navigates to the Maps page (map detail
-  // lives only there) and closes the global program drawer.
-  const snapshotRef = useRef(snapshot);
-  snapshotRef.current = snapshot;
-  const focusProgram = useCallback((id: number) => {
-    const prog = snapshotRef.current?.programs.find(p => p.id === id) ?? null;
-    if (prog) setPinnedProgram(prog);
-  }, []);
+  // Cross-navigation. focusMap navigates to the Maps page (map detail lives
+  // only there) and closes the global program drawer.
+  const focusProgram = useCallback((id: number) => setSelectedProgramId(id), []);
   const focusMap = useCallback(
     (id: number) => {
       setSelectedMapId(id);
-      setPinnedProgram(null);
+      setSelectedProgramId(null);
       navigate("/maps");
     },
     [navigate]
   );
+
+  // ── URL ↔ selection sync (deep links) ──────────────────────────────────────
+  // `?prog=<id>` and `?map=<id>` mirror the selection so a view can be
+  // bookmarked/shared and browser back/forward restores it. Selection changes
+  // replace (don't push) the URL so per-click history isn't polluted; the
+  // path (view) is still pushed by wouter <Link>s.
+  const [searchParams, setSearchParams] = useSearchParams();
+  const progParam = searchParams.get("prog");
+  const mapParam = searchParams.get("map");
+  // URL → state (initial load and browser navigation).
+  useEffect(() => {
+    const id = progParam != null && progParam !== "" ? Number(progParam) : null;
+    if (id != null && Number.isNaN(id)) return;
+    setSelectedProgramId(prev => (prev === id ? prev : id));
+  }, [progParam]);
+  useEffect(() => {
+    const id = mapParam != null && mapParam !== "" ? Number(mapParam) : null;
+    if (id != null && Number.isNaN(id)) return;
+    setSelectedMapId(prev => (prev === id ? prev : id));
+  }, [mapParam]);
+  // state → URL. Idempotent: only writes when the query actually differs, so
+  // it can't churn history.replaceState on every render.
+  useEffect(() => {
+    const desired = new URLSearchParams(searchParams);
+    if (selectedProgramId != null) desired.set("prog", String(selectedProgramId));
+    else desired.delete("prog");
+    if (selectedMapId != null) desired.set("map", String(selectedMapId));
+    else desired.delete("map");
+    if (desired.toString() !== searchParams.toString()) {
+      setSearchParams(desired, { replace: true });
+    }
+  }, [selectedProgramId, selectedMapId, searchParams, setSearchParams]);
   const maps: BpfMap[] = loadedSnapshot ? snapshotMaps : liveMaps;
   const isLoading =
     loadedSnapshot === null &&
