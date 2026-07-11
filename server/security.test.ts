@@ -4,6 +4,7 @@ import {
   checkRateLimit,
   getRequestAdminToken,
   hasOperatorAccess,
+  isAllowedHost,
   resetRateLimitsForTests,
 } from "./_core/security";
 
@@ -100,5 +101,39 @@ describe("protected tRPC procedures", () => {
     });
 
     await expect(caller.ebpf.mapEntryCounts({ ids: [] })).resolves.toEqual([]);
+  });
+});
+
+
+describe("host-header allowlist (anti-DNS-rebinding)", () => {
+  const old = process.env.EBPF_VIZ_ALLOWED_HOSTS;
+  afterEach(() => {
+    if (old === undefined) delete process.env.EBPF_VIZ_ALLOWED_HOSTS;
+    else process.env.EBPF_VIZ_ALLOWED_HOSTS = old;
+  });
+
+  const withHost = (host?: string) => ({ headers: host === undefined ? {} : { host } });
+
+  it("accepts loopback hostnames with or without a port", () => {
+    for (const h of ["localhost", "localhost:3000", "127.0.0.1:3000", "[::1]:3000", "127.0.0.1"]) {
+      expect(isAllowedHost(withHost(h))).toBe(true);
+    }
+  });
+
+  it("rejects a rebound attacker host even when it resolves to loopback", () => {
+    // The browser still sends the attacker's Host after rebinding to 127.0.0.1.
+    expect(isAllowedHost(withHost("evil.example"))).toBe(false);
+    expect(isAllowedHost(withHost("evil.example:3000"))).toBe(false);
+  });
+
+  it("rejects a missing Host header", () => {
+    expect(isAllowedHost(withHost(undefined))).toBe(false);
+  });
+
+  it("honors EBPF_VIZ_ALLOWED_HOSTS for intentional wider binds", () => {
+    process.env.EBPF_VIZ_ALLOWED_HOSTS = "dev.box.local, 10.0.0.5";
+    expect(isAllowedHost(withHost("dev.box.local:3000"))).toBe(true);
+    expect(isAllowedHost(withHost("10.0.0.5:3000"))).toBe(true);
+    expect(isAllowedHost(withHost("other.host"))).toBe(false);
   });
 });

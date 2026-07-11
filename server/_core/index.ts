@@ -9,6 +9,7 @@ import { createContext } from "./context";
 import { serveStatic, setupVite } from "./vite";
 import { restoreKernelSettings, startPoller, stopPoller } from "../ebpf-poller";
 import { sseHandler } from "../sse";
+import { isAllowedHost } from "./security";
 
 function isPortAvailable(port: number): Promise<boolean> {
   return new Promise(resolve => {
@@ -33,13 +34,30 @@ async function startServer() {
   const app = express();
   const server = createServer(app);
 
-  app.use(express.json({ limit: "50mb" }));
-  app.use(express.urlencoded({ limit: "50mb", extended: true }));
-
-  // Health check endpoint — useful for monitoring and load-balancer probes
+  // Health check endpoint — exempt from the Host guard below (it exposes only
+  // uptime, and load-balancer probes hit it by IP with a non-matching Host).
   app.get("/healthz", (_req, res) => {
     res.json({ status: "ok", uptime: process.uptime(), timestamp: new Date().toISOString() });
   });
+
+  // Host-header allowlist — rejects DNS-rebinding / cross-origin requests
+  // before anything sensitive runs (see server/_core/security.ts). Applies to
+  // every route below so a rebound page can't reach the API, SSE, or the SPA
+  // that would then XHR the API. Add trusted hostnames via EBPF_VIZ_ALLOWED_HOSTS.
+  app.use((req, res, next) => {
+    if (isAllowedHost(req)) return next();
+    res
+      .status(403)
+      .type("text/plain")
+      .send(
+        "Forbidden: untrusted Host header. Reach the dashboard at " +
+        "http://localhost:<port>/, or set EBPF_VIZ_ALLOWED_HOSTS to trust " +
+        "additional hostnames."
+      );
+  });
+
+  app.use(express.json({ limit: "50mb" }));
+  app.use(express.urlencoded({ limit: "50mb", extended: true }));
 
   // SSE live-stream endpoint (must be before Vite catch-all)
   app.get("/api/sse", sseHandler);
@@ -223,21 +241,16 @@ async function startServer() {
   }
 
   // HOST controls the network interface to bind on.
-  // Use "::" to listen on all IPv6 interfaces (also accepts IPv4 on dual-stack
-  // systems via IPv4-mapped addresses). Use "0.0.0.0" for IPv4-only. When HOST
-  // is unset Node.js defaults to 0.0.0.0 (all IPv4 interfaces).
-  const host = process.env.HOST;
-
-  if (host) {
-    const displayHost = host.includes(":") ? `[${host}]` : host;
-    server.listen(port, host, () => {
-      console.log(`Server running on http://${displayHost}:${port}/`);
-    });
-  } else {
-    server.listen(port, () => {
-      console.log(`Server running on http://localhost:${port}/`);
-    });
-  }
+  // Defaults to loopback (127.0.0.1) so an accidental run never exposes the
+  // dashboard — and the kernel BPF state it serves — to the LAN/WSL bridge.
+  // Set HOST explicitly to bind wider: "0.0.0.0" (all IPv4), "::" (all IPv6,
+  // also IPv4 on dual-stack). When binding beyond loopback, also set
+  // EBPF_VIZ_ALLOWED_HOSTS or the Host-header guard will 403 those clients.
+  const host = process.env.HOST || "127.0.0.1";
+  const displayHost = host.includes(":") ? `[${host}]` : host;
+  server.listen(port, host, () => {
+    console.log(`Server running on http://${displayHost}:${port}/`);
+  });
 }
 
 startServer().catch(console.error);
