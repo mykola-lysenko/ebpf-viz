@@ -1202,7 +1202,56 @@ describe("buildNamespaceTopology", () => {
     expect(topo.nodes.find(n => n.id === "nsA · peer nsid 0")!.inferred).toBe(true);
   });
 
+  it("rejects cross-kind mirrored-index matches and covered-link fallback pollution", () => {
+    // Live regression: kind-worker's veth (ifindex 3 → peer 2) mirrors the
+    // netkit lab's pod eth0 (ifindex 2 → primary 3), which used to produce a
+    // confident veth edge between unrelated namespaces; and the inferred
+    // kind-pod endpoints pulled in tcx programs that node scans had already
+    // covered, plus netkit programs onto veth edges.
+    const progs = parseProgList([
+      { ...xdpProg, id: 100, type: "sched_cls", name: "nk_to_pod" },
+      { ...xdpProg, id: 200, type: "sched_cls", name: "cil_from_netdev" },
+    ]);
+    const netns: RawNetnsSnapshot[] = [
+      {
+        id: "n1", label: "nklab-node", net: [{}],
+        links: [{ ifindex: 3, ifname: "nk-pod2", kind: "netkit", link_index: 2, link_netnsid: 2 }],
+      },
+      {
+        id: "p2", label: "nklab-pod2", net: [{}],
+        links: [{ ifindex: 2, ifname: "eth0", kind: "netkit", link_index: 3, link_netnsid: 0 }],
+      },
+      {
+        id: "kw", label: "kind-worker",
+        // The node scan covers its own eth0 tcx attachment (link id 55).
+        net: [{ tc: [{ devname: "eth0", ifindex: 2, kind: "tcx/ingress", name: "cil_from_netdev", prog_id: 200, link_id: 55 }] }],
+        links: [{ ifindex: 3, ifname: "veth1", kind: "veth", link_index: 2, link_netnsid: 1 }],
+      },
+    ];
+    const hostLinks = [
+      { id: 55, type: "tcx", prog_id: 200, devname: "(unknown)", ifindex: 2 },
+      { id: 60, type: "netkit", prog_id: 100, devname: "(unknown)", ifindex: 2 },
+    ];
+    const coverage = computeNetdevCoverage([{}], netns);
+    const topo = buildNamespaceTopology(progs, netns, hostLinks, coverage);
+
+    // netkit pair resolves node↔pod despite the veth mirroring the indexes...
+    const nkEdge = topo.edges.find(e => e.kind === "netkit")!;
+    expect([nkEdge.a.namespace, nkEdge.b.namespace].sort()).toEqual(["nklab-node", "nklab-pod2"]);
+    // ...and the veth's peer stays inferred instead of latching onto the pod.
+    const vethEdge = topo.edges.find(e => e.kind === "veth")!;
+    expect(vethEdge.b.namespace).toBe("kind-worker · peer nsid 1");
+
+    // Scanned pod endpoint trusts its own (empty) scan — no fallback noise.
+    const podEnd = nkEdge.a.namespace === "nklab-pod2" ? nkEdge.a : nkEdge.b;
+    expect(podEnd.programs).toEqual([]);
+    // Inferred veth peer: covered tcx link (55) excluded; netkit link (60)
+    // excluded by kind — nothing left to mislead with.
+    expect(vethEdge.b.programs).toEqual([]);
+  });
+
   it("returns an empty topology when no namespaces were scanned", () => {
+
     const topo = buildNamespaceTopology(new Map(), [], []);
     expect(topo).toEqual({ nodes: [], edges: [] });
   });

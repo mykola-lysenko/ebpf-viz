@@ -1573,32 +1573,36 @@ function pushMapList<K, V>(map: Map<K, V[]>, key: K, value: V): void {
   else map.set(key, [value]);
 }
 
-/** Programs on the given ifindex within one namespace, preferring that
- *  namespace's own `bpftool net` data. The fallback — the host-global link
- *  list keyed by bare ifindex — cannot distinguish namespaces at all (every
- *  pod's eth0 tends to be ifindex 2), so anything it supplies is marked
- *  ambiguous even when only one program matches: a single match can still
- *  belong to a different namespace's device at the same ifindex. */
+/** Programs on the given ifindex within one namespace. A SCANNED namespace's
+ *  own `bpftool net` data is authoritative — including "nothing attached
+ *  here" (netkit peer programs, for instance, are reported on the primary
+ *  side). Only UNSCANNED (inferred) peers use the fallback: uncovered
+ *  host-global links keyed by bare ifindex, filtered to the edge's device
+ *  kind (netkit links can't sit on a veth pair). The fallback cannot
+ *  distinguish namespaces (every pod's eth0 tends to be ifindex 2), so
+ *  anything it supplies is marked ambiguous even for a single match. */
 function programsAtIfindex(
   progs: Map<number, BpfProgram>,
   ifindex: number,
   localNet: Map<number, number[]> | undefined,
-  hostLinkProgsByIfindex: Map<number, number[]>
+  uncoveredLinksByIfindex: Map<number, Array<{ progId: number; type: string }>>,
+  edgeKind: string
 ): { programs: NamespaceTopologyEndpoint["programs"]; ambiguous: boolean } {
-  const local = localNet?.get(ifindex);
-  if (local && local.length > 0) {
+  if (localNet) {
     return {
-      programs: local
+      programs: (localNet.get(ifindex) ?? [])
         .map(id => progs.get(id))
         .filter((p): p is BpfProgram => !!p)
         .map(p => ({ id: p.id, name: p.name })),
       ambiguous: false,
     };
   }
-  const fallback = hostLinkProgsByIfindex.get(ifindex) ?? [];
+  const fallback = (uncoveredLinksByIfindex.get(ifindex) ?? []).filter(entry =>
+    edgeKind === "netkit" ? entry.type === "netkit" : entry.type !== "netkit"
+  );
   return {
     programs: fallback
-      .map(id => progs.get(id))
+      .map(entry => progs.get(entry.progId))
       .filter((p): p is BpfProgram => !!p)
       .map(p => ({ id: p.id, name: p.name })),
     ambiguous: fallback.length > 0,
@@ -1615,7 +1619,11 @@ function programsAtIfindex(
 export function buildNamespaceTopology(
   progs: Map<number, BpfProgram>,
   netns: RawNetnsSnapshot[],
-  hostLinks: RawBpfLink[]
+  hostLinks: RawBpfLink[],
+  /** Attachments the bpftool net scans already reported — links they cover
+   *  are excluded from the inferred-peer fallback (a scan saw them with a
+   *  real device, so re-guessing them onto unknown peers only misleads). */
+  coverage: NetdevCoverage = EMPTY_NETDEV_COVERAGE
 ): NamespaceTopology {
   const nodes = new Map<string, NamespaceTopologyNode>();
   const ensureNode = (
@@ -1638,17 +1646,22 @@ export function buildNamespaceTopology(
     return node;
   };
 
-  // Host-global netdev links → ifindex → prog ids (peer-side fallback).
-  const hostLinkProgsByIfindex = new Map<number, number[]>();
+  // Host-global netdev links no scan covered → ifindex → prog ids, for the
+  // inferred-peer fallback.
+  const uncoveredLinksByIfindex = new Map<number, Array<{ progId: number; type: string }>>();
   for (const link of hostLinks) {
     if (
       !NETDEV_LINK_TYPES.has(link.type) ||
       typeof link.ifindex !== "number" ||
-      typeof link.prog_id !== "number"
+      typeof link.prog_id !== "number" ||
+      isCoveredNetdevLink(link, coverage)
     ) {
       continue;
     }
-    pushMapList(hostLinkProgsByIfindex, link.ifindex, link.prog_id);
+    pushMapList(uncoveredLinksByIfindex, link.ifindex, {
+      progId: link.prog_id,
+      type: link.type,
+    });
   }
 
   const netByLabel = new Map<string, Map<number, number[]>>();
@@ -1686,11 +1699,17 @@ export function buildNamespaceTopology(
       // bare same-ifindex device in some other scanned namespace proves
       // nothing (ifindexes repeat everywhere), so without a back-reference
       // the peer stays an inferred node rather than a confident wrong edge.
-      const backMatches = (labelsByIfindex.get(peerIfindex) ?? []).filter(
-        l =>
-          l !== ns.label &&
-          devByNsIfindex.get(l)?.get(peerIfindex)?.link_index === dev.ifindex
-      );
+      const backMatches = (labelsByIfindex.get(peerIfindex) ?? []).filter(l => {
+        if (l === ns.label) return false;
+        const candidate = devByNsIfindex.get(l)?.get(peerIfindex);
+        // Small ifindexes mirror across namespaces often enough that even a
+        // bidirectional index match can lie (worker veth 3→2 vs pod netkit
+        // 2→3) — the pair's device kind must match too.
+        return (
+          candidate?.link_index === dev.ifindex &&
+          netnsLinkKind(candidate) === devKind
+        );
+      });
       let peerLabel: string;
       let peerInferred: boolean;
       let peerDisplayLabel: string | undefined;
@@ -1725,13 +1744,15 @@ export function buildNamespaceTopology(
         progs,
         dev.ifindex,
         netByLabel.get(ns.label),
-        hostLinkProgsByIfindex
+        uncoveredLinksByIfindex,
+        devKind
       );
       const peerProgs = programsAtIfindex(
         progs,
         peerIfindex,
         netByLabel.get(peerLabel),
-        hostLinkProgsByIfindex
+        uncoveredLinksByIfindex,
+        devKind
       );
 
       edges.push({
@@ -1828,7 +1849,12 @@ export function buildSnapshot(
       rawCgroups,
       rawEffectiveCgroups
     ),
-    namespaceTopology: buildNamespaceTopology(progMap, netnsSnapshots, rawLinks),
+    namespaceTopology: buildNamespaceTopology(
+      progMap,
+      netnsSnapshots,
+      rawLinks,
+      coverage
+    ),
     stats: {
       total: programs.length,
       byType,
