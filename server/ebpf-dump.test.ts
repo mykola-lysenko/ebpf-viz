@@ -336,6 +336,51 @@ describe("createScopedSysctl", () => {
     expect(sysctl.writes).toEqual(["0", "2"]);
   });
 
+  it("re-lowers when a scope enters during the previous scope's in-flight restore", async () => {
+    // Regression: scope B entering while scope A's restore write is pending
+    // used to read the still-lowered value, skip saving, and then run with
+    // the sysctl re-raised under it once A's restore landed.
+    const writes: string[] = [];
+    let value = "1";
+    let releaseRestore: (() => void) | null = null;
+    const read = async () => value;
+    const write = async (v: string) => {
+      // Only the FIRST restore write (back to "1") hangs until released,
+      // like a slow `sudo sysctl` exec; all other writes are immediate.
+      if (v === "1" && releaseRestore === null) {
+        await new Promise<void>(resolve => { releaseRestore = resolve; });
+      }
+      writes.push(v);
+      value = v;
+    };
+    const scoped = createScopedSysctl(read, write, "0");
+
+    let releaseA: (() => void) | null = null;
+    const scopeA = scoped(async () => {
+      await new Promise<void>(resolve => { releaseA = resolve; });
+    });
+    await new Promise(resolve => setTimeout(resolve, 0)); // A enters + lowers
+    expect(value).toBe("0");
+    releaseA!();
+    // A's finally now starts the hanging restore write. Enter B during it.
+    await new Promise(resolve => setTimeout(resolve, 0));
+    let valueDuringB: string | null = null;
+    const scopeB = scoped(async () => {
+      valueDuringB = value;
+    });
+    await new Promise(resolve => setTimeout(resolve, 0));
+    releaseRestore!(); // A's restore lands
+    await scopeA;
+    await scopeB;
+
+    // B must have observed the lowered value for its whole scope...
+    expect(valueDuringB).toBe("0");
+    // ...and the final state is restored.
+    expect(value).toBe("1");
+    // Sequence: A lowers, A restores, B re-lowers, B restores.
+    expect(writes).toEqual(["0", "1", "0", "1"]);
+  });
+
   it("does not write when the value is already at the target", async () => {
     const sysctl = makeFakeSysctl("0");
     const scoped = createScopedSysctl(sysctl.read, sysctl.write, "0");

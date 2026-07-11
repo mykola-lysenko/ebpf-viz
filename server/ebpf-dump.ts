@@ -55,6 +55,12 @@ function getCachedCfgSummary(
  * scopes are reference-counted: the first entry saves + sets, the last exit
  * restores. If the value cannot be read or set, the scope still runs (the
  * operation inside may work anyway or fail with its own message).
+ *
+ * All enter/exit transitions are serialized through one promise chain: a
+ * scope entering while the previous scope's restore write is still in flight
+ * must wait for the restore to land, then re-read and re-lower — otherwise it
+ * would see the still-lowered value, skip saving, and run with the sysctl
+ * re-raised under it once the pending restore completes.
  */
 export function createScopedSysctl(
   read: () => Promise<string | null>,
@@ -63,43 +69,48 @@ export function createScopedSysctl(
 ): <T>(fn: () => Promise<T>) => Promise<T> {
   let depth = 0;
   let saved: string | null = null;
-  let entering: Promise<void> | null = null;
+  // Serializes enter/exit transitions (never user fns — those run outside
+  // the lock so concurrent scopes still overlap).
+  let transitions: Promise<void> = Promise.resolve();
+  const locked = <T>(fn: () => Promise<T>): Promise<T> => {
+    const result = transitions.then(fn);
+    transitions = result.then(
+      () => undefined,
+      () => undefined
+    );
+    return result;
+  };
+
   return async function withScopedValue<T>(fn: () => Promise<T>): Promise<T> {
-    depth++;
-    if (depth === 1) {
-      // All scopes (including later concurrent entrants) await this shared
-      // promise so nobody runs before the value is actually set.
-      entering = (async () => {
-        const current = await read();
-        if (current !== null && current !== scopedValue) {
-          try {
-            await write(scopedValue);
-            saved = current;
-          } catch {
-            saved = null; // couldn't set — proceed best-effort
-          }
-        }
-      })();
-    }
-    try {
-      await entering;
-      return await fn();
-    } finally {
-      depth--;
-      if (depth === 0) {
-        entering = null;
-        if (saved !== null) {
-          const value = saved;
-          saved = null;
-          try {
-            await write(value);
-          } catch {
-            console.error(
-              `[ebpf-dump] failed to restore sysctl value ${value} — check it manually`
-            );
-          }
+    await locked(async () => {
+      depth++;
+      if (depth !== 1) return;
+      const current = await read();
+      if (current !== null && current !== scopedValue) {
+        try {
+          await write(scopedValue);
+          saved = current;
+        } catch {
+          saved = null; // couldn't set — proceed best-effort
         }
       }
+    });
+    try {
+      return await fn();
+    } finally {
+      await locked(async () => {
+        depth--;
+        if (depth !== 0 || saved === null) return;
+        const value = saved;
+        saved = null;
+        try {
+          await write(value);
+        } catch {
+          console.error(
+            `[ebpf-dump] failed to restore sysctl value ${value} — check it manually`
+          );
+        }
+      });
     }
   };
 }
