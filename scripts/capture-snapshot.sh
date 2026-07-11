@@ -259,20 +259,30 @@ collect_netns_to_file() {
   emit_netns() { # <inode> <label> <nsPath>
     local ino="$1" label="$2" ns_path="$3"
     local net_tmp="$TMPDIR_SNAP/netns_${ino}.json"
-    local cmd_parts=()
+    local links_tmp="$TMPDIR_SNAP/netns_${ino}_links.json"
+    local prefix_parts=()
     if [[ -n "$TIMEOUT_CMD" ]]; then
-      cmd_parts+=("$TIMEOUT_CMD" "$CMD_TIMEOUT")
+      prefix_parts+=("$TIMEOUT_CMD" "$CMD_TIMEOUT")
     fi
     if [[ ${#SUDO_PREFIX[@]} -gt 0 ]]; then
-      cmd_parts+=("${SUDO_PREFIX[@]}")
+      prefix_parts+=("${SUDO_PREFIX[@]}")
     fi
-    cmd_parts+=(nsenter "--net=$ns_path" -- "$BPFTOOL" -j net show)
-    if ! "${cmd_parts[@]}" 2>/dev/null | grep -v '^libbpf:' > "$net_tmp"; then
-      return 0
+    if ! "${prefix_parts[@]}" nsenter "--net=$ns_path" -- "$BPFTOOL" -j net show \
+        2>/dev/null | grep -v '^libbpf:' > "$net_tmp"; then
+      echo '[{}]' > "$net_tmp"
     fi
-    [[ -s "$net_tmp" ]] || return 0
-    # Drop namespaces with no netdev attachments (most pods)
-    if ! grep -qE '"(prog_)?id"[[:space:]]*:[[:space:]]*[0-9]' "$net_tmp"; then
+    [[ -s "$net_tmp" ]] || echo '[{}]' > "$net_tmp"
+    # Device topology for the namespace graph (netkit/veth peer wiring).
+    # The parser also uses this to keep namespaces that have paired devices
+    # but no programs, matching the live poller's behavior.
+    if ! "${prefix_parts[@]}" nsenter "--net=$ns_path" -- ip -d -j link show \
+        2>/dev/null > "$links_tmp"; then
+      echo '[]' > "$links_tmp"
+    fi
+    [[ -s "$links_tmp" ]] || echo '[]' > "$links_tmp"
+    # Drop namespaces with neither netdev attachments nor a device pair
+    if ! grep -qE '"(prog_)?id"[[:space:]]*:[[:space:]]*[0-9]' "$net_tmp" \
+       && ! grep -qE '"info_kind"[[:space:]]*:[[:space:]]*"(netkit|veth)"' "$links_tmp"; then
       return 0
     fi
     if [[ $first -eq 0 ]]; then
@@ -282,6 +292,32 @@ collect_netns_to_file() {
     printf '    {"id":"%s","label":"%s","net":' \
       "$(json_escape_string "$ino")" "$(json_escape_string "$label")" >> "$outfile"
     cat "$net_tmp" >> "$outfile"
+    printf ',"links":' >> "$outfile"
+    # Trim to the fields RawNetnsLink uses when python3 is available (the ip
+    # output carries dozens of fields per device); otherwise pass through.
+    if command -v python3 &>/dev/null; then
+      python3 -c '
+import json, sys
+try:
+    links = json.load(open(sys.argv[1]))
+except Exception:
+    links = []
+out = []
+for l in links if isinstance(links, list) else []:
+    if not isinstance(l, dict) or "ifindex" not in l or "ifname" not in l:
+        continue
+    e = {"ifindex": l["ifindex"], "ifname": l["ifname"]}
+    if isinstance(l.get("link_index"), int): e["link_index"] = l["link_index"]
+    if isinstance(l.get("link_netnsid"), int): e["link_netnsid"] = l["link_netnsid"]
+    kind = (l.get("linkinfo") or {}).get("info_kind")
+    if kind: e["kind"] = kind
+    if l.get("operstate"): e["operstate"] = l["operstate"]
+    out.append(e)
+print(json.dumps(out))
+' "$links_tmp" >> "$outfile"
+    else
+      cat "$links_tmp" >> "$outfile"
+    fi
     printf '}' >> "$outfile"
   }
 
