@@ -15,7 +15,7 @@ import type {
   RawNetnsLink,
   RawTcFilterEntry,
 } from "../shared/ebpf-types";
-import { buildSnapshot } from "./ebpf-parser";
+import { buildSnapshot, netnsLinkKind, PAIRED_LINK_KINDS } from "./ebpf-parser";
 import { buildMockMaps, parseMaps } from "./ebpf-map-parser";
 import { discoverNetNamespaces, type NetnsReach } from "./ebpf-netns";
 import { MOCK_CGROUPS, MOCK_LINKS, MOCK_NET, MOCK_NETNS, MOCK_PROGS } from "./ebpf-mock";
@@ -249,17 +249,27 @@ function isInterestingNetns(ns: RawNetnsSnapshot): boolean {
       snapshot.netfilter,
     ].some(section => (section?.length ?? 0) > 0);
   const hasPair = (ns.links ?? []).some(
-    l => (l.kind === "netkit" || l.kind === "veth") && typeof l.link_index === "number"
+    l => PAIRED_LINK_KINDS.has(netnsLinkKind(l) ?? "") && typeof l.link_index === "number"
   );
   return hasProg || hasPair;
 }
 
+/** Namespaces that recently had nothing to show are skipped for a while —
+ *  most pods never carry netdev BPF programs, and each scan costs two execs. */
+const UNINTERESTING_NETNS_TTL_MS = 60_000;
+const uninterestingNetns = new Map<string, number>();
+
 /** Scan all reachable non-root network namespaces for BPF net attachments and
  *  device-pair topology. Per-namespace failures (vanished mid-poll, nsenter
- *  denied, no bpftool in container) degrade gracefully — a namespace with only
- *  ip-link topology and no bpftool net still contributes to the graph. */
+ *  denied, no bpftool in container, non-JSON bpftool output) degrade
+ *  gracefully — a namespace with only ip-link topology and no bpftool net
+ *  still contributes to the graph. */
 async function fetchNetnsData(): Promise<RawNetnsSnapshot[]> {
-  const refs = await discoverNetNamespaces();
+  const now = Date.now();
+  const refs = (await discoverNetNamespaces()).filter(ref => {
+    const boringSince = uninterestingNetns.get(ref.id);
+    return !(boringSince && now - boringSince < UNINTERESTING_NETNS_TTL_MS);
+  });
   const scans = await Promise.allSettled(
     refs.map(async (ref): Promise<RawNetnsSnapshot> => {
       const [netRes, linkRes] = await Promise.allSettled([
@@ -268,20 +278,28 @@ async function fetchNetnsData(): Promise<RawNetnsSnapshot[]> {
       ]);
       const net =
         netRes.status === "fulfilled"
-          ? (JSON.parse(stripNonJson(netRes.value)) as RawNetSnapshot[])
+          ? parseJsonOr<RawNetSnapshot[]>(netRes.value, [])
           : [];
       const links =
         linkRes.status === "fulfilled" ? parseIpLinks(linkRes.value) : [];
       return { id: ref.id, label: ref.label, net, links };
     })
   );
-  return scans
+  const snapshots = scans
     .filter(
       (s): s is PromiseFulfilledResult<RawNetnsSnapshot> =>
         s.status === "fulfilled"
     )
-    .map(s => s.value)
-    .filter(isInterestingNetns);
+    .map(s => s.value);
+  for (const ns of snapshots) {
+    if (isInterestingNetns(ns)) uninterestingNetns.delete(ns.id);
+    else uninterestingNetns.set(ns.id, now);
+  }
+  // Drop stale suppressions so the map doesn't grow with pod churn.
+  for (const [id, t] of Array.from(uninterestingNetns.entries())) {
+    if (now - t > UNINTERESTING_NETNS_TTL_MS * 5) uninterestingNetns.delete(id);
+  }
+  return snapshots.filter(isInterestingNetns);
 }
 
 async function runTcFilterShow(
@@ -315,6 +333,16 @@ async function runTcFilterShow(
       direction,
       order,
     })) as RawTcFilterEntry[];
+}
+
+/** Parse bpftool/tc JSON output, tolerating warning noise and non-JSON
+ *  stdout — callers get the fallback instead of a throw. */
+function parseJsonOr<T>(raw: string, fallback: T): T {
+  try {
+    return JSON.parse(stripNonJson(raw)) as T;
+  } catch {
+    return fallback;
+  }
 }
 
 // Strip libbpf warning lines that pollute JSON output
@@ -362,24 +390,14 @@ async function fetchLiveData(): Promise<{
   const netns: RawNetnsSnapshot[] =
     netnsOut.status === "fulfilled" ? netnsOut.value : [];
 
-  if (progOut.status === "fulfilled") {
-    try { progs = JSON.parse(stripNonJson(progOut.value)); } catch { progs = []; }
-  }
-  if (netOut.status === "fulfilled") {
-    try { net = JSON.parse(stripNonJson(netOut.value)); } catch { net = []; }
-  }
-  if (cgroupOut.status === "fulfilled") {
-    try { cgroups = JSON.parse(stripNonJson(cgroupOut.value)); } catch { cgroups = []; }
-  }
+  if (progOut.status === "fulfilled") progs = parseJsonOr(progOut.value, []);
+  if (netOut.status === "fulfilled") net = parseJsonOr(netOut.value, []);
+  if (cgroupOut.status === "fulfilled") cgroups = parseJsonOr(cgroupOut.value, []);
   if (cgroupEffectiveOut.status === "fulfilled") {
-    try { cgroupsEffective = JSON.parse(stripNonJson(cgroupEffectiveOut.value)); } catch { cgroupsEffective = []; }
+    cgroupsEffective = parseJsonOr(cgroupEffectiveOut.value, []);
   }
-  if (mapOut.status === "fulfilled") {
-    try { rawMaps = JSON.parse(stripNonJson(mapOut.value)); } catch { rawMaps = []; }
-  }
-  if (linkOut.status === "fulfilled") {
-    try { links = JSON.parse(stripNonJson(linkOut.value)); } catch { links = []; }
-  }
+  if (mapOut.status === "fulfilled") rawMaps = parseJsonOr(mapOut.value, []);
+  if (linkOut.status === "fulfilled") links = parseJsonOr(linkOut.value, []);
 
   const netSnapshot = net[0];
   const tcDevices = new Map<string, number>();
