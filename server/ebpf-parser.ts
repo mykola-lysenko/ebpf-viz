@@ -23,7 +23,8 @@ import type {
   NamespaceTopologyEndpoint,
   NamespaceTopologyNode,
 } from "../shared/ebpf-types";
-import { BPF_PROGRAM_TYPE_COLORS } from "../shared/ebpf-constants";
+import { BPF_PROGRAM_TYPE_COLORS, UNRESOLVED_NETNS_LABEL } from "../shared/ebpf-constants";
+import { dedupeNetnsLabels } from "./ebpf-netns";
 
 // ─── Type normalization ────────────────────────────────────────────────────
 
@@ -404,29 +405,76 @@ const TRACING_ATTACH_TYPE_MAP: Record<string, BpfProgType> = {
   fexit: "fexit",
 };
 
-/** Link types whose attachments are already surfaced by `bpftool net` or
- *  `bpftool cgroup tree` — skip the attachment (but still use the link for
- *  type refinement and pid attribution) to avoid duplicate entries. */
-const LINK_TYPES_COVERED_ELSEWHERE = new Set([
-  "xdp",
-  "tcx",
-  "netkit",
-  "cgroup",
-  "netns",
-  "netfilter",
-]);
+/** Link types whose attachments are always surfaced by another source
+ *  (`bpftool cgroup tree` is cgroup-global) — skip the attachment (but still
+ *  use the link for type refinement and pid attribution) to avoid duplicates. */
+const LINK_TYPES_COVERED_ELSEWHERE = new Set(["cgroup", "netns", "netfilter"]);
 
-/** Netdev-scoped link types are only covered by `bpftool net` when the device
- *  is in bpftool's own netns. bpftool reports devname "(unknown)" for devices
- *  in other namespaces (container/pod interfaces — e.g. Cilium's netkit or
- *  tcx attachments inside kind nodes), so those links are the sole evidence
- *  of the attachment and must not be skipped. */
-const NETDEV_LINK_TYPES = new Set(["xdp", "tcx", "netkit"]);
+/** Netdev-scoped link types: covered by `bpftool net` only when the scan that
+ *  ran could actually see the device's namespace — decided per attachment via
+ *  NetdevCoverage, never by devname (bpftool resolves a link's ifindex in its
+ *  OWN netns, so a foreign ifindex that collides with a host ifindex gets a
+ *  plausible-looking but wrong host devname). */
+export const NETDEV_LINK_TYPES = new Set(["xdp", "tcx", "netkit"]);
 
-function isForeignNetdevLink(link: RawBpfLink): boolean {
+/** Which netdev attachments the `bpftool net` scans (host + per-netns)
+ *  already reported. Matched by link id when the net entry carries one
+ *  (link-based tcx/netkit rows do), else by (prog id, ifindex) — the pair
+ *  fallback can rarely over-match across namespaces with colliding ifindexes,
+ *  but only for legacy non-link entries that carry no link id. */
+export interface NetdevCoverage {
+  linkIds: Set<number>;
+  progIfindexPairs: Set<string>;
+}
+
+const EMPTY_NETDEV_COVERAGE: NetdevCoverage = {
+  linkIds: new Set(),
+  progIfindexPairs: new Set(),
+};
+
+/** All netdev-scoped sections of one `bpftool net` snapshot. netfilter
+ *  entries carry no ifindex, so ifindex-keyed consumers skip them naturally. */
+function netdevNetEntries(snapshot: RawNetSnapshot): RawNetEntry[] {
+  return [
+    ...(snapshot.xdp ?? []),
+    ...(snapshot.tc ?? []),
+    ...(snapshot.tcx ?? []),
+    ...(snapshot.netkit ?? []),
+    ...(snapshot.flow_dissector ?? []),
+    ...(snapshot.netfilter ?? []),
+  ];
+}
+
+export function computeNetdevCoverage(
+  rawNet: RawNetSnapshot[],
+  rawNetns: RawNetnsSnapshot[]
+): NetdevCoverage {
+  const coverage: NetdevCoverage = {
+    linkIds: new Set(),
+    progIfindexPairs: new Set(),
+  };
+  const snapshots = [rawNet[0] ?? {}, ...rawNetns.map(ns => ns.net[0] ?? {})];
+  for (const snapshot of snapshots) {
+    for (const entry of netdevNetEntries(snapshot)) {
+      if (typeof entry.link_id === "number") coverage.linkIds.add(entry.link_id);
+      const progId = netEntryProgId(entry);
+      if (progId !== undefined && typeof entry.ifindex === "number") {
+        coverage.progIfindexPairs.add(`${progId}:${entry.ifindex}`);
+      }
+    }
+  }
+  return coverage;
+}
+
+function isCoveredNetdevLink(
+  link: RawBpfLink,
+  coverage: NetdevCoverage
+): boolean {
+  if (coverage.linkIds.has(link.id)) return true;
   return (
-    NETDEV_LINK_TYPES.has(link.type) &&
-    (!link.devname || link.devname === "(unknown)")
+    typeof link.prog_id === "number" &&
+    typeof link.ifindex === "number" &&
+    coverage.progIfindexPairs.has(`${link.prog_id}:${link.ifindex}`)
   );
 }
 
@@ -477,8 +525,8 @@ function describeLink(link: RawBpfLink): string {
     case "xdp":
     case "tcx":
     case "netkit":
-      // Only foreign-netns links of these types reach here (see
-      // isForeignNetdevLink); same-netns ones are covered by `bpftool net`.
+      // Only links no `bpftool net` scan covered reach here (see
+      // NetdevCoverage); the device is in a namespace we could not see into.
       return `${link.attach_type ?? link.type} · ifindex ${link.ifindex ?? "?"} (other netns)`;
     default:
       return `${link.type} link`;
@@ -516,10 +564,9 @@ function refineTypeFromLink(prog: BpfProgram, link: RawBpfLink): void {
 export function enrichWithLinkAttachments(
   progs: Map<number, BpfProgram>,
   links: RawBpfLink[],
-  /** Prog ids whose netdev attachments were observed by a per-netns
-   *  `bpftool net` scan — their foreign links are covered there, with real
-   *  device names, so the ifindex-only fallback would be a duplicate. */
-  netdevProgIdsCoveredByNetns: Set<number> = new Set()
+  /** Attachments already reported by the `bpftool net` scans (host and
+   *  per-netns) — their links don't need a fallback attachment entry. */
+  coverage: NetdevCoverage = EMPTY_NETDEV_COVERAGE
 ): void {
   for (const link of links) {
     if (typeof link?.prog_id !== "number") continue;
@@ -542,11 +589,10 @@ export function enrichWithLinkAttachments(
       if (!prog.pinnedPaths.includes(pin)) prog.pinnedPaths.push(pin);
     }
 
-    if (
-      !LINK_TYPES_COVERED_ELSEWHERE.has(link.type) ||
-      (isForeignNetdevLink(link) &&
-        !netdevProgIdsCoveredByNetns.has(link.prog_id))
-    ) {
+    const covered = NETDEV_LINK_TYPES.has(link.type)
+      ? isCoveredNetdevLink(link, coverage)
+      : LINK_TYPES_COVERED_ELSEWHERE.has(link.type);
+    if (!covered) {
       prog.attachments.push({
         kind: "link",
         detail: describeLink(link),
@@ -572,73 +618,44 @@ export function enrichWithNetAttachments(
   const snapshot = net[0] ?? {};
   const suffix = netnsLabel ? ` · netns ${netnsLabel}` : "";
 
-  for (const entry of snapshot.xdp ?? []) {
-    const p = progs.get(netEntryProgId(entry) ?? -1);
-    if (!p) continue;
-    p.attachments.push({
-      kind: "xdp",
-      detail: `${entry.devname} (${entry.mode ?? "driver"})${suffix}`,
-      ifname: entry.devname,
-    });
-  }
-
-  for (const entry of snapshot.tc ?? []) {
-    const p = progs.get(netEntryProgId(entry) ?? -1);
-    if (!p) continue;
-    const kindStr = entry.kind ?? "";
-    const direction: "ingress" | "egress" | undefined = kindStr.includes(
-      "ingress"
-    )
-      ? "ingress"
-      : kindStr.includes("egress")
-        ? "egress"
+  const push = (
+    entries: RawNetEntry[] | undefined,
+    kind: BpfAttachment["kind"],
+    detail: (entry: RawNetEntry) => string,
+    withDirection = false
+  ): void => {
+    for (const entry of entries ?? []) {
+      const p = progs.get(netEntryProgId(entry) ?? -1);
+      if (!p) continue;
+      const direction = withDirection
+        ? directionFromKind(entry.kind)
         : undefined;
-    p.attachments.push({
-      kind: "tc",
-      detail:
-        `${entry.devname} ${kindStr || "tc"} ${entry.name ? `[${entry.name}]` : ""}`.trim() + suffix,
-      ifname: entry.devname,
-      direction,
-    });
-  }
+      p.attachments.push({
+        kind,
+        detail: detail(entry) + suffix,
+        ...(entry.devname ? { ifname: entry.devname } : {}),
+        ...(direction ? { direction } : {}),
+      });
+    }
+  };
 
-  for (const entry of snapshot.tcx ?? []) {
-    const p = progs.get(netEntryProgId(entry) ?? -1);
-    if (!p) continue;
-    const kindStr = entry.kind ?? "";
-    const direction: "ingress" | "egress" | undefined = kindStr.includes(
-      "ingress"
-    )
-      ? "ingress"
-      : kindStr.includes("egress")
-        ? "egress"
-        : undefined;
-    p.attachments.push({
-      kind: "tcx",
-      detail: `${entry.devname} tcx${kindStr ? ` ${kindStr}` : ""}${suffix}`,
-      ifname: entry.devname,
-      direction,
-    });
-  }
+  push(snapshot.xdp, "xdp", e => `${e.devname} (${e.mode ?? "driver"})`);
+  push(
+    snapshot.tc,
+    "tc",
+    e => `${e.devname} ${e.kind ?? "tc"} ${e.name ? `[${e.name}]` : ""}`.trim(),
+    true
+  );
+  push(snapshot.tcx, "tcx", e => `${e.devname} tcx${e.kind ? ` ${e.kind}` : ""}`, true);
+  push(snapshot.netkit, "netkit", e => `${e.devname} netkit${e.kind ? ` ${e.kind}` : ""}`, true);
+  push(snapshot.flow_dissector, "flow_dissector", e => `${e.devname} flow_dissector`);
+  push(snapshot.netfilter, "netfilter", e => `netfilter id=${netEntryProgId(e)}`);
+}
 
-  for (const entry of snapshot.flow_dissector ?? []) {
-    const p = progs.get(netEntryProgId(entry) ?? -1);
-    if (!p) continue;
-    p.attachments.push({
-      kind: "flow_dissector",
-      detail: `${entry.devname} flow_dissector${suffix}`,
-      ifname: entry.devname,
-    });
-  }
-
-  for (const entry of snapshot.netfilter ?? []) {
-    const p = progs.get(netEntryProgId(entry) ?? -1);
-    if (!p) continue;
-    p.attachments.push({
-      kind: "netfilter",
-      detail: `netfilter id=${netEntryProgId(entry)}${suffix}`,
-    });
-  }
+/** "tcx/ingress", "clsact/egress", "netkit/peer" → packet direction. */
+function directionFromKind(kind: string | undefined): "ingress" | "egress" | undefined {
+  const direction = tcDirectionFromKind(kind ?? "");
+  return direction === "ingress" || direction === "egress" ? direction : undefined;
 }
 
 // ─── Enrich with cgroup attachments ───────────────────────────────────────
@@ -663,10 +680,6 @@ export function enrichWithCgroupAttachments(
 
 // ─── Build network interface view ─────────────────────────────────────────
 
-/** Label used for pseudo-interfaces synthesized from foreign netdev links
- *  whose real namespace could not be entered (e.g. containers in a separate
- *  PID namespace, as in WSL + Docker Desktop). */
-export const UNRESOLVED_NETNS_LABEL = "other (unresolved)";
 
 export function buildNetworkInterfaces(
   progs: Map<number, BpfProgram>,
@@ -756,32 +769,44 @@ export function buildNetworkInterfaces(
     collect(ns.net[0] ?? {}, ns.label);
   }
 
-  // Fallback: foreign netdev links we could not resolve to a named device.
-  // Group by ifindex into pseudo-interfaces under a single "unresolved" netns
-  // so the Network view still shows the attachment (device name unknown).
+  // Fallback: foreign netdev links we could not resolve to a named device,
+  // shown as pseudo-interfaces under a single "unresolved" netns. ifindex is
+  // only unique within a namespace, so links sharing an ifindex may be
+  // DIFFERENT devices in different unreachable namespaces — when that
+  // happens, each link gets its own pseudo-interface (suffixed by link id)
+  // instead of silently merging into one.
+  const linksByIfindex = new Map<number, RawBpfLink[]>();
   for (const link of unresolvedNetdevLinks) {
     if (typeof link.prog_id !== "number" || typeof link.ifindex !== "number") continue;
-    const p = progs.get(link.prog_id);
-    if (!p) continue;
-    const name = `ifindex ${link.ifindex}`;
-    const key = `${UNRESOLVED_NETNS_LABEL}::${name}`;
-    let iface = ifaceMap.get(key);
-    if (!iface) {
-      iface = {
-        name,
-        ifindex: link.ifindex,
-        kind: "nic",
-        netns: UNRESOLVED_NETNS_LABEL,
-        layers: { L2: [], L3: [], L4: [], L7: [] },
-        allPrograms: [],
-      };
-      ifaceMap.set(key, iface);
-    }
-    // netkit and xdp hook the device (L2); tcx sits at the tc layer (L3).
-    const layer = link.type === "tcx" ? "L3" : "L2";
-    if (!iface.allPrograms.some(ap => ap.id === p.id)) {
-      iface.layers[layer].push(p);
-      iface.allPrograms.push(p);
+    if (!progs.has(link.prog_id)) continue;
+    const list = linksByIfindex.get(link.ifindex);
+    if (list) list.push(link);
+    else linksByIfindex.set(link.ifindex, [link]);
+  }
+  for (const [ifindex, links] of Array.from(linksByIfindex.entries())) {
+    for (const link of links) {
+      const p = progs.get(link.prog_id!)!;
+      const name =
+        links.length > 1 ? `ifindex ${ifindex} · link ${link.id}` : `ifindex ${ifindex}`;
+      const key = `${UNRESOLVED_NETNS_LABEL}::${name}`;
+      let iface = ifaceMap.get(key);
+      if (!iface) {
+        iface = {
+          name,
+          ifindex,
+          kind: "nic",
+          netns: UNRESOLVED_NETNS_LABEL,
+          layers: { L2: [], L3: [], L4: [], L7: [] },
+          allPrograms: [],
+        };
+        ifaceMap.set(key, iface);
+      }
+      // netkit and xdp hook the device (L2); tcx sits at the tc layer (L3).
+      const layer = link.type === "tcx" ? "L3" : "L2";
+      if (!iface.allPrograms.some(ap => ap.id === p.id)) {
+        iface.layers[layer].push(p);
+        iface.allPrograms.push(p);
+      }
     }
   }
 
@@ -1523,32 +1548,37 @@ export function buildProgramChains(
 // ─── Namespace topology ────────────────────────────────────────────────────
 
 /** Device-pair link kinds that connect two network namespaces. */
-const PAIRED_LINK_KINDS = new Set(["netkit", "veth"]);
+export const PAIRED_LINK_KINDS = new Set(["netkit", "veth"]);
+
+/** Device kind, tolerating both the poller's normalized shape and raw
+ *  `ip -d -j link show` passthrough from snapshot captures. */
+export function netnsLinkKind(dev: RawNetnsLink): string | undefined {
+  return dev.kind ?? dev.linkinfo?.info_kind;
+}
 
 /** Index a RawNetSnapshot's netdev entries by ifindex → prog ids. */
 function progIdsByIfindex(net: RawNetSnapshot | undefined): Map<number, number[]> {
   const byIfindex = new Map<number, number[]>();
-  const snapshot = net ?? {};
-  for (const entry of [
-    ...(snapshot.xdp ?? []),
-    ...(snapshot.tc ?? []),
-    ...(snapshot.tcx ?? []),
-    ...(snapshot.netkit ?? []),
-    ...(snapshot.flow_dissector ?? []),
-  ]) {
+  for (const entry of netdevNetEntries(net ?? {})) {
     const id = netEntryProgId(entry);
     if (id === undefined || typeof entry.ifindex !== "number") continue;
-    const list = byIfindex.get(entry.ifindex);
-    if (list) list.push(id);
-    else byIfindex.set(entry.ifindex, [id]);
+    pushMapList(byIfindex, entry.ifindex, id);
   }
   return byIfindex;
 }
 
+function pushMapList<K, V>(map: Map<K, V[]>, key: K, value: V): void {
+  const list = map.get(key);
+  if (list) list.push(value);
+  else map.set(key, [value]);
+}
+
 /** Programs on the given ifindex within one namespace, preferring that
- *  namespace's own `bpftool net` data and falling back to the host-global
- *  link list keyed by ifindex (which cannot distinguish namespaces — flagged
- *  ambiguous when it matches more than one program). */
+ *  namespace's own `bpftool net` data. The fallback — the host-global link
+ *  list keyed by bare ifindex — cannot distinguish namespaces at all (every
+ *  pod's eth0 tends to be ifindex 2), so anything it supplies is marked
+ *  ambiguous even when only one program matches: a single match can still
+ *  belong to a different namespace's device at the same ifindex. */
 function programsAtIfindex(
   progs: Map<number, BpfProgram>,
   ifindex: number,
@@ -1571,7 +1601,7 @@ function programsAtIfindex(
       .map(id => progs.get(id))
       .filter((p): p is BpfProgram => !!p)
       .map(p => ({ id: p.id, name: p.name })),
-    ambiguous: fallback.length > 1,
+    ambiguous: fallback.length > 0,
   };
 }
 
@@ -1588,13 +1618,22 @@ export function buildNamespaceTopology(
   hostLinks: RawBpfLink[]
 ): NamespaceTopology {
   const nodes = new Map<string, NamespaceTopologyNode>();
-  const ensureNode = (id: string, label: string, inferred: boolean): NamespaceTopologyNode => {
+  const ensureNode = (
+    id: string,
+    inferred: boolean,
+    displayLabel?: string
+  ): NamespaceTopologyNode => {
     let node = nodes.get(id);
     if (!node) {
-      node = { id, label, inferred, deviceCount: 0, programCount: 0 };
+      node = {
+        id,
+        label: id,
+        inferred,
+        deviceCount: 0,
+        programCount: 0,
+        ...(displayLabel ? { displayLabel } : {}),
+      };
       nodes.set(id, node);
-    } else if (!inferred && node.inferred) {
-      node.inferred = false; // upgrade: we later scanned a node we had inferred
     }
     return node;
   };
@@ -1609,15 +1648,13 @@ export function buildNamespaceTopology(
     ) {
       continue;
     }
-    const list = hostLinkProgsByIfindex.get(link.ifindex);
-    if (list) list.push(link.prog_id);
-    else hostLinkProgsByIfindex.set(link.ifindex, [link.prog_id]);
+    pushMapList(hostLinkProgsByIfindex, link.ifindex, link.prog_id);
   }
 
   const netByLabel = new Map<string, Map<number, number[]>>();
   for (const ns of netns) {
     netByLabel.set(ns.label, progIdsByIfindex(ns.net[0]));
-    ensureNode(ns.label, ns.label, false).deviceCount = ns.links?.length ?? 0;
+    ensureNode(ns.label, false).deviceCount = ns.links?.length ?? 0;
   }
 
   // Per-namespace device index (ifindex → its own peer_ifindex), for peer
@@ -1629,9 +1666,7 @@ export function buildNamespaceTopology(
     const byIf = new Map<number, RawNetnsLink>();
     for (const link of ns.links ?? []) {
       byIf.set(link.ifindex, link);
-      const list = labelsByIfindex.get(link.ifindex);
-      if (list) list.push(ns.label);
-      else labelsByIfindex.set(link.ifindex, [ns.label]);
+      pushMapList(labelsByIfindex, link.ifindex, ns.label);
     }
     devByNsIfindex.set(ns.label, byIf);
   }
@@ -1641,32 +1676,37 @@ export function buildNamespaceTopology(
 
   for (const ns of netns) {
     for (const dev of ns.links ?? []) {
-      if (!dev.kind || !PAIRED_LINK_KINDS.has(dev.kind)) continue;
+      const devKind = netnsLinkKind(dev);
+      if (!devKind || !PAIRED_LINK_KINDS.has(devKind)) continue;
       if (typeof dev.link_index !== "number") continue; // no peer → skip
 
       const peerIfindex = dev.link_index;
-      // Resolve the peer namespace. Prefer a bidirectional match: the peer's
-      // device points back at THIS device's (namespace-unique) ifindex — this
-      // disambiguates even when several namespaces share the peer ifindex.
-      const byIfindexCandidates = (labelsByIfindex.get(peerIfindex) ?? []).filter(
-        l => l !== ns.label
-      );
-      const backMatches = byIfindexCandidates.filter(
-        l => devByNsIfindex.get(l)?.get(peerIfindex)?.link_index === dev.ifindex
+      // Resolve the peer namespace ONLY on a bidirectional match: the peer's
+      // device points back at THIS device's (namespace-unique) ifindex. A
+      // bare same-ifindex device in some other scanned namespace proves
+      // nothing (ifindexes repeat everywhere), so without a back-reference
+      // the peer stays an inferred node rather than a confident wrong edge.
+      const backMatches = (labelsByIfindex.get(peerIfindex) ?? []).filter(
+        l =>
+          l !== ns.label &&
+          devByNsIfindex.get(l)?.get(peerIfindex)?.link_index === dev.ifindex
       );
       let peerLabel: string;
       let peerInferred: boolean;
+      let peerDisplayLabel: string | undefined;
       if (backMatches.length === 1) {
         peerLabel = backMatches[0];
         peerInferred = false;
-      } else if (backMatches.length === 0 && byIfindexCandidates.length === 1) {
-        // One-way match (peer didn't report a back-reference) — still unique.
-        peerLabel = byIfindexCandidates[0];
-        peerInferred = false;
       } else {
-        // Behind a namespace we did not enter (e.g. a pod behind a kind node),
-        // or genuinely ambiguous — synthesize an inferred peer node.
-        peerLabel = `${ns.label} · peer nsid ${dev.link_netnsid ?? "?"}`;
+        // Behind a namespace we did not enter (e.g. a pod behind a kind
+        // node). Key by nsid when the kernel reported one (several devices
+        // into the SAME peer namespace merge correctly); fall back to a
+        // per-device id so two nsid-less peers never collapse into one node.
+        peerDisplayLabel =
+          dev.link_netnsid !== undefined
+            ? `peer nsid ${dev.link_netnsid}`
+            : `${dev.ifname} peer`;
+        peerLabel = `${ns.label} · ${peerDisplayLabel}`;
         peerInferred = true;
       }
 
@@ -1679,8 +1719,7 @@ export function buildNamespaceTopology(
       if (seenEdges.has(key)) continue;
       seenEdges.add(key);
 
-      ensureNode(ns.label, ns.label, false);
-      ensureNode(peerLabel, peerLabel, peerInferred);
+      ensureNode(peerLabel, peerInferred, peerDisplayLabel);
 
       const localProgs = programsAtIfindex(
         progs,
@@ -1696,7 +1735,7 @@ export function buildNamespaceTopology(
       );
 
       edges.push({
-        kind: dev.kind,
+        kind: devKind,
         a: {
           namespace: ns.label,
           ifindex: dev.ifindex,
@@ -1714,7 +1753,6 @@ export function buildNamespaceTopology(
   }
 
   // Tally program counts per namespace from the edges.
-  for (const node of Array.from(nodes.values())) node.programCount = 0;
   for (const edge of edges) {
     const na = nodes.get(edge.a.namespace);
     const nb = nodes.get(edge.b.namespace);
@@ -1723,27 +1761,6 @@ export function buildNamespaceTopology(
   }
 
   return { nodes: Array.from(nodes.values()), edges };
-}
-
-/** Prog ids with a netdev attachment (xdp/tc/tcx/netkit/…) in any per-netns
- *  scan — used to suppress the ifindex-only link fallback for those progs. */
-function netdevProgIdsFromNetns(netns: RawNetnsSnapshot[]): Set<number> {
-  const ids = new Set<number>();
-  for (const ns of netns) {
-    const snapshot = ns.net[0] ?? {};
-    for (const entry of [
-      ...(snapshot.xdp ?? []),
-      ...(snapshot.tc ?? []),
-      ...(snapshot.tcx ?? []),
-      ...(snapshot.netkit ?? []),
-      ...(snapshot.flow_dissector ?? []),
-      ...(snapshot.netfilter ?? []),
-    ]) {
-      const id = netEntryProgId(entry);
-      if (id !== undefined) ids.add(id);
-    }
-  }
-  return ids;
 }
 
 export function buildSnapshot(
@@ -1761,23 +1778,27 @@ export function buildSnapshot(
   rawNetns: RawNetnsSnapshot[] = []
 ): EbpfSnapshot {
   const progMap = parseProgList(rawProgs);
-  const netnsProgIds = netdevProgIdsFromNetns(rawNetns);
+  // Labels key interfaces and topology maps, so they must be unique. The live
+  // poller dedupes at discovery time; snapshot uploads (capture-snapshot.sh)
+  // arrive raw, so enforce it here for every producer.
+  const netnsSnapshots = dedupeNetnsLabels(rawNetns);
+  const coverage = computeNetdevCoverage(rawNet, netnsSnapshots);
   // Links first: they refine coarse prog types (tracing → fentry/fexit,
   // kprobe → kretprobe/uprobe) that zone/interface building depends on.
-  enrichWithLinkAttachments(progMap, rawLinks, netnsProgIds);
+  enrichWithLinkAttachments(progMap, rawLinks, coverage);
   enrichWithNetAttachments(progMap, rawNet);
-  for (const ns of rawNetns) {
+  for (const ns of netnsSnapshots) {
     enrichWithNetAttachments(progMap, ns.net, ns.label);
   }
   enrichWithCgroupAttachments(progMap, rawCgroups);
 
-  // Netdev links on devices in namespaces we could not enter (no netns scan
-  // covered them) — surfaced as ifindex-only pseudo-interfaces.
+  // Netdev links whose attachment no scan reported (device in a namespace we
+  // could not see into) — surfaced as ifindex-only pseudo-interfaces.
   const unresolvedNetdevLinks = rawLinks.filter(
     link =>
-      isForeignNetdevLink(link) &&
+      NETDEV_LINK_TYPES.has(link.type) &&
       typeof link.prog_id === "number" &&
-      !netnsProgIds.has(link.prog_id)
+      !isCoveredNetdevLink(link, coverage)
   );
 
   const programs = Array.from(progMap.values());
@@ -1796,7 +1817,7 @@ export function buildSnapshot(
     networkInterfaces: buildNetworkInterfaces(
       progMap,
       rawNet,
-      rawNetns,
+      netnsSnapshots,
       unresolvedNetdevLinks
     ),
     cgroupTree: buildCgroupTree(progMap, rawCgroups),
@@ -1807,7 +1828,7 @@ export function buildSnapshot(
       rawCgroups,
       rawEffectiveCgroups
     ),
-    namespaceTopology: buildNamespaceTopology(progMap, rawNetns, rawLinks),
+    namespaceTopology: buildNamespaceTopology(progMap, netnsSnapshots, rawLinks),
     stats: {
       total: programs.length,
       byType,

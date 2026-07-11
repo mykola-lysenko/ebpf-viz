@@ -33,3 +33,9 @@ export const BPF_PROGRAM_TYPE_COLORS: Record<string, string> = {
 };
 
 export const PROG_HISTORY_RING_SIZE = 60;
+
+/** Netns label for pseudo-interfaces synthesized from netdev BPF links whose
+ *  device lives in a namespace no scan could enter (e.g. containers in a
+ *  separate WSL VM). Shared because it travels through snapshot data: the
+ *  server labels interfaces with it and the client special-cases the section. */
+export const UNRESOLVED_NETNS_LABEL = "other (unresolved)";

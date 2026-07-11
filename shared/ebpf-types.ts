@@ -133,6 +133,9 @@ export interface RawNetnsLink {
   link_netnsid?: number;
   /** linkinfo.info_kind — "netkit", "veth", "vxlan", … */
   kind?: string;
+  /** Raw `ip -d -j link show` passthrough (snapshot captures without a
+   *  normalizer keep the nested shape); prefer `kind` when set. */
+  linkinfo?: { info_kind?: string };
   operstate?: string;
 }
 
@@ -281,9 +284,12 @@ export interface NetworkInterface {
 // linking two namespaces, with the BPF programs that run on each side.
 
 export interface NamespaceTopologyNode {
-  /** Stable id — a netns label, or "host" for the dashboard's own namespace. */
+  /** Stable id — the (unique) netns label. */
   id: string;
   label: string;
+  /** Short label for rendering next to the node's parent (inferred peers
+   *  only, e.g. "peer nsid 1"); falls back to `label` when absent. */
+  displayLabel?: string;
   /** true for a peer namespace we inferred from a device pair but never
    *  scanned directly (e.g. a pod netns behind a kind node). */
   inferred: boolean;

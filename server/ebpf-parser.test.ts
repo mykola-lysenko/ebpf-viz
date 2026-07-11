@@ -10,6 +10,7 @@ import {
   buildProgramChains,
   buildNamespaceTopology,
   buildSnapshot,
+  computeNetdevCoverage,
 } from "./ebpf-parser";
 import { BPF_PROGRAM_TYPE_COLORS } from "../shared/ebpf-constants";
 import type {
@@ -349,48 +350,92 @@ describe("enrichWithLinkAttachments", () => {
     expect(progs.get(50)!.pids).toEqual([{ pid: 42, comm: "loader" }]);
   });
 
-  it("skips attachments for link types covered by net/cgroup sources", () => {
+  it("skips attachments for links whose netdev/cgroup coverage reports them", () => {
     const progs = parseProgList([xdpProg, cgroupSkbProg]);
-    enrichWithLinkAttachments(progs, [
-      { id: 8, type: "xdp", prog_id: 1, devname: "eth0", ifindex: 2 },
-      { id: 9, type: "cgroup", prog_id: 2, cgroup_id: 4321, attach_type: "cgroup_inet_ingress" },
-    ]);
+    // Host `bpftool net` reported the xdp attachment (prog 1 @ ifindex 2).
+    const coverage = computeNetdevCoverage(
+      [{ xdp: [{ devname: "eth0", ifindex: 2, mode: "generic", id: 1 }] }],
+      []
+    );
+    enrichWithLinkAttachments(
+      progs,
+      [
+        { id: 8, type: "xdp", prog_id: 1, devname: "eth0", ifindex: 2 },
+        { id: 9, type: "cgroup", prog_id: 2, cgroup_id: 4321, attach_type: "cgroup_inet_ingress" },
+      ],
+      coverage
+    );
     expect(progs.get(1)!.attachments).toEqual([]);
     expect(progs.get(2)!.attachments).toEqual([]);
   });
 
-  it("keeps netdev link attachments whose device is in another netns", () => {
+  it("keeps netdev link attachments no bpftool net scan covered", () => {
     // Verbatim from `bpftool -j link list` run against a Cilium 1.19 netkit
-    // datapath in a kind node: devname is "(unknown)" because the netkit
-    // device lives in the pod netns, so `bpftool net` will never report it —
-    // the link is the only evidence of the attachment.
+    // datapath in a kind node. Coverage — not devname — decides: bpftool
+    // resolves a link's ifindex in its OWN netns, so a foreign ifindex that
+    // collides with a host ifindex would carry a plausible-looking host
+    // devname while the attachment is really in a pod netns.
     const progs = parseProgList([
       { ...xdpProg, id: 1687, type: "sched_cls", name: "cil_from_container" },
       { ...xdpProg, id: 1681, type: "sched_cls", name: "cil_to_netdev" },
     ]);
-    enrichWithLinkAttachments(progs, [
-      {
-        id: 98,
-        type: "netkit",
-        prog_id: 1687,
-        devname: "(unknown)",
-        ifindex: 6,
-        attach_type: "netkit_peer",
-      },
-      // Same shape but resolvable in our netns → covered by `bpftool net`.
-      {
-        id: 87,
-        type: "tcx",
-        prog_id: 1681,
-        devname: "cilium_vxlan",
-        ifindex: 5,
-        attach_type: "tcx_ingress",
-      },
-    ]);
+    // Host net reported the tcx attachment on cilium_vxlan with its link id.
+    const coverage = computeNetdevCoverage(
+      [{ tc: [{ devname: "cilium_vxlan", ifindex: 5, kind: "tcx/ingress", name: "cil_to_netdev", prog_id: 1681, link_id: 87 }] }],
+      []
+    );
+    enrichWithLinkAttachments(
+      progs,
+      [
+        {
+          id: 98,
+          type: "netkit",
+          prog_id: 1687,
+          devname: "(unknown)",
+          ifindex: 6,
+          attach_type: "netkit_peer",
+        },
+        {
+          id: 87,
+          type: "tcx",
+          prog_id: 1681,
+          devname: "cilium_vxlan",
+          ifindex: 5,
+          attach_type: "tcx_ingress",
+        },
+      ],
+      coverage
+    );
     expect(progs.get(1687)!.attachments).toEqual([
       { kind: "link", detail: "netkit_peer · ifindex 6 (other netns)", linkId: 98 },
     ]);
     expect(progs.get(1681)!.attachments).toEqual([]);
+  });
+
+  it("keeps a netdev link even when its ifindex collides with a covered host device", () => {
+    // Regression for the "(unknown)" devname sentinel: a container's netkit
+    // link at ifindex 2 resolves to the HOST's eth0 name in bpftool's netns,
+    // but the host net scan reported a DIFFERENT program/link there — the
+    // container attachment must still surface.
+    const progs = parseProgList([
+      { ...xdpProg, id: 1, name: "host_xdp" },
+      { ...xdpProg, id: 500, type: "sched_cls", name: "cil_from_container" },
+    ]);
+    const coverage = computeNetdevCoverage(
+      [{ xdp: [{ devname: "eth0", ifindex: 2, mode: "generic", id: 1 }] }],
+      []
+    );
+    enrichWithLinkAttachments(
+      progs,
+      [
+        // Foreign link that LOOKS like host eth0 (ifindex collision).
+        { id: 77, type: "netkit", prog_id: 500, devname: "eth0", ifindex: 2, attach_type: "netkit_peer" },
+      ],
+      coverage
+    );
+    expect(progs.get(500)!.attachments).toEqual([
+      { kind: "link", detail: "netkit_peer · ifindex 2 (other netns)", linkId: 77 },
+    ]);
   });
 
   it("still adopts pids from net/cgroup-covered link types", () => {
@@ -1064,9 +1109,10 @@ describe("buildNamespaceTopology", () => {
     const edge = topo.edges.find(e => e.kind === "netkit")!;
     // node side used bpftool net (1772), NOT the host-global 9999 at ifindex 7
     expect(edge.a.programs).toEqual([{ id: 1772, name: "cil_local" }]);
-    // peer side resolved unambiguously from the single host-global match
+    // peer side comes from the ns-blind host-global fallback — a single
+    // match can still belong to another namespace, so it stays ambiguous
     expect(edge.b.programs).toEqual([{ id: 1687, name: "cil_from_container" }]);
-    expect(edge.ambiguous).toBeUndefined();
+    expect(edge.ambiguous).toBe(true);
   });
 
   it("resolves peers bidirectionally when pod ifindexes collide", () => {
@@ -1113,6 +1159,47 @@ describe("buildNamespaceTopology", () => {
     const e2 = topo.edges.find(e => e.a.ifindex === 9 || e.b.ifindex === 9)!;
     const peer2 = e2.a.ifindex === 9 ? e2.b : e2.a;
     expect(peer2.namespace).toBe("nklab-pod2");
+  });
+
+  it("keeps distinct nsid-less peers as separate inferred nodes", () => {
+    // Two netkit devices whose peers report no link_netnsid must not merge
+    // into one "peer nsid ?" node — they are different pod namespaces.
+    const progs = parseProgList([]);
+    const netns: RawNetnsSnapshot[] = [
+      {
+        id: "node", label: "worker", net: [{}],
+        links: [
+          { ifindex: 7, ifname: "lxc_a", kind: "netkit", link_index: 6 },
+          { ifindex: 9, ifname: "lxc_b", kind: "netkit", link_index: 8 },
+        ],
+      },
+    ];
+    const topo = buildNamespaceTopology(progs, netns, []);
+    const inferred = topo.nodes.filter(n => n.inferred);
+    expect(inferred).toHaveLength(2);
+    expect(inferred.map(n => n.displayLabel).sort()).toEqual(["lxc_a peer", "lxc_b peer"]);
+    expect(topo.edges).toHaveLength(2);
+  });
+
+  it("does not draw a solid edge from a one-way ifindex coincidence", () => {
+    // nsA's eth0 peers with an UNSCANNED host-side veth at ifindex 5; nsB
+    // merely owns some unrelated device at ifindex 5 (no back-reference).
+    // The peer must stay inferred — not a confident edge to nsB.
+    const progs = parseProgList([]);
+    const netns: RawNetnsSnapshot[] = [
+      {
+        id: "a", label: "nsA", net: [{}],
+        links: [{ ifindex: 2, ifname: "eth0", kind: "veth", link_index: 5, link_netnsid: 0 }],
+      },
+      {
+        id: "b", label: "nsB", net: [{}],
+        links: [{ ifindex: 5, ifname: "cilium_vxlan", kind: "vxlan" }],
+      },
+    ];
+    const topo = buildNamespaceTopology(progs, netns, []);
+    const edge = topo.edges.find(e => e.a.namespace === "nsA")!;
+    expect(edge.b.namespace).toBe("nsA · peer nsid 0");
+    expect(topo.nodes.find(n => n.id === "nsA · peer nsid 0")!.inferred).toBe(true);
   });
 
   it("returns an empty topology when no namespaces were scanned", () => {
@@ -2507,7 +2594,7 @@ describe("buildSnapshot", () => {
         net: [
           {
             tc: [
-              { devname: "lxc_health", ifindex: 7, kind: "netkit/peer", name: "cil_from_container", prog_id: 1687 },
+              { devname: "lxc_health", ifindex: 7, kind: "netkit/peer", name: "cil_from_container", prog_id: 1687, link_id: 98 },
             ],
           },
         ],
@@ -2537,6 +2624,46 @@ describe("buildSnapshot", () => {
     ]);
     expect(withNetns.networkInterfaces).toHaveLength(1);
     expect(withNetns.networkInterfaces[0].netns).toBe("ebpfviz-worker");
+  });
+
+  it("keeps foreign links of a program that is also attached in a scanned netns", () => {
+    // Coverage is per attachment (link id / prog+ifindex), not per program:
+    // one cil program attached in a scanned pod AND in pods beyond the scan
+    // cap must still show the unscanned attachments as foreign links.
+    const cil: RawBpfProg = { ...xdpProg, id: 1687, type: "sched_cls", name: "cil_from_container" };
+    const meta = { hostname: "h", kernelVersion: "6.18", bpftoolVersion: "7.8", demoMode: false };
+    const netns: RawNetnsSnapshot[] = [
+      {
+        id: "pod1", label: "pod1",
+        net: [{ tc: [{ devname: "eth0", ifindex: 2, kind: "netkit/peer", name: "cil_from_container", prog_id: 1687, link_id: 98 }] }],
+      },
+    ];
+    const links = [
+      { id: 98, type: "netkit", prog_id: 1687, devname: "(unknown)", ifindex: 2, attach_type: "netkit_peer" },
+      // Same program, different link in an UNSCANNED namespace.
+      { id: 99, type: "netkit", prog_id: 1687, devname: "(unknown)", ifindex: 14, attach_type: "netkit_peer" },
+    ];
+    const snap = buildSnapshot([cil], [{}], [], meta, [], links, netns);
+    const details = snap.programs[0].attachments.map(a => a.detail);
+    // link 98 covered by the pod1 scan (link id match); link 99 kept.
+    expect(details).toContain("netkit_peer · ifindex 14 (other netns)");
+    expect(details).not.toContain("netkit_peer · ifindex 2 (other netns)");
+    // ...and the unscanned attachment gets its pseudo-interface.
+    expect(snap.networkInterfaces.some(i => i.name === "ifindex 14")).toBe(true);
+  });
+
+  it("dedupes duplicate netns labels from raw snapshot uploads", () => {
+    // capture-snapshot.sh emits labels with no uniqueness pass — two
+    // same-comm containers must not merge into one interface key.
+    const prog: RawBpfProg = { ...xdpProg, id: 10, type: "sched_cls", name: "x" };
+    const meta = { hostname: "h", kernelVersion: "6.18", bpftoolVersion: "7.8", demoMode: false };
+    const netns: RawNetnsSnapshot[] = [
+      { id: "4026533100", label: "nginx", net: [{ tc: [{ devname: "eth0", ifindex: 2, kind: "tcx/ingress", prog_id: 10 }] }] },
+      { id: "4026533200", label: "nginx", net: [{ tc: [{ devname: "eth0", ifindex: 2, kind: "tcx/ingress", prog_id: 10 }] }] },
+    ];
+    const snap = buildSnapshot([prog], [{}], [], meta, [], [], netns);
+    const netnsLabels = snap.networkInterfaces.map(i => i.netns).sort();
+    expect(netnsLabels).toEqual(["nginx#3100", "nginx#3200"]);
   });
 
   it("counts orphaned programs correctly", () => {
