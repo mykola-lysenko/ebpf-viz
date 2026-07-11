@@ -12,12 +12,9 @@ import {
   type NodeProps,
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
-import { Share2, Box, Server } from "lucide-react";
+import { Share2, Box } from "lucide-react";
 import { useEbpf } from "@/contexts/EbpfContext";
-import type {
-  NamespaceTopology,
-  NamespaceTopologyNode,
-} from "../../../shared/ebpf-types";
+import type { NamespaceTopology } from "../../../shared/ebpf-types";
 
 // ─── Namespace node ───────────────────────────────────────────────────────────
 
@@ -26,11 +23,10 @@ interface NsNodeData extends Record<string, unknown> {
   inferred: boolean;
   deviceCount: number;
   programCount: number;
-  isHost: boolean;
 }
 
 function NamespaceNode({ data }: NodeProps<Node<NsNodeData>>) {
-  const Icon = data.isHost ? Server : Box;
+  const Icon = Box;
   return (
     <div
       className="rounded-xl border px-4 py-3 shadow-lg min-w-[190px] w-max"
@@ -112,26 +108,17 @@ function layout(topo: NamespaceTopology): { nodes: Node<NsNodeData>[]; edges: Ed
     pos.set(id, { x: COL_W * 2, y: i * ROW_H });
   });
 
-  const isHost = (n: NamespaceTopologyNode) => n.id === "host";
-
-  // Inferred peers are positioned right next to their parent, so drop the
-  // redundant parent prefix from their label: "worker · peer nsid 1" → "peer nsid 1".
-  const displayLabel = (n: NamespaceTopologyNode): string => {
-    if (!n.inferred) return n.label;
-    const m = /· (peer nsid .+)$/.exec(n.label);
-    return m ? m[1] : n.label;
-  };
-
+  // Inferred peers are positioned right next to their parent, so the server
+  // provides a short displayLabel ("peer nsid 1") alongside the unique id.
   const nodes: Node<NsNodeData>[] = topo.nodes.map(n => ({
     id: n.id,
     type: "namespace",
     position: pos.get(n.id) ?? { x: 0, y: 0 },
     data: {
-      label: displayLabel(n),
+      label: n.displayLabel ?? n.label,
       inferred: n.inferred,
       deviceCount: n.deviceCount,
       programCount: n.programCount,
-      isHost: isHost(n),
     },
   }));
 

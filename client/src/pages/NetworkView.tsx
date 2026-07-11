@@ -11,6 +11,7 @@ import {
   AlertTriangle,
   Box,
 } from "lucide-react";
+import { UNRESOLVED_NETNS_LABEL } from "../../../shared/ebpf-constants";
 import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
 import { fmtBytes, fmtCps } from "@/components/Sparkline";
@@ -1252,7 +1253,7 @@ export default function NetworkView() {
 
       {/* ── Per-netns sections (containers, pods, named namespaces) ──────── */}
       {Array.from(netnsGroups.entries()).map(([netns, ifaces]) => {
-        const unresolved = netns === "other (unresolved)";
+        const unresolved = netns === UNRESOLVED_NETNS_LABEL;
         return (
           <InterfaceSection
             key={`netns-${netns}`}

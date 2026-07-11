@@ -285,7 +285,11 @@ function OsMapCanvas() {
       });
     })(snapshot.cgroupTree);
 
+    // Host interfaces only — the OS map renders only !netns interfaces, and
+    // a netns iface named eth0 would otherwise index its programs onto the
+    // HOST eth0 node (same `iface-${name}` id).
     snapshot.networkInterfaces.forEach(iface => {
+      if (iface.netns) return;
       iface.allPrograms.forEach(p => addEntry(p.id, `iface-${iface.name}`));
     });
 
