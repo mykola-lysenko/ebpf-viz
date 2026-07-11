@@ -378,6 +378,7 @@ function MapDetailPanel({
   map,
   programs,
   onClose,
+  onSelectProgram,
   onDumpEntries,
   isSnapshotMode,
   hasDumpData,
@@ -385,6 +386,7 @@ function MapDetailPanel({
   map: BpfMap;
   programs: MapProgramInfo[];
   onClose: () => void;
+  onSelectProgram: (id: number) => void;
   onDumpEntries: () => void;
   isSnapshotMode?: boolean;
   hasDumpData?: boolean;
@@ -609,9 +611,12 @@ function MapDetailPanel({
           ) : (
             <div className="space-y-1.5">
               {programs.map(p => (
-                <div
+                <button
                   key={p.id}
-                  className="flex items-center gap-2.5 rounded-lg p-2.5 border"
+                  type="button"
+                  onClick={() => onSelectProgram(p.id)}
+                  title="Open this program's details"
+                  className="flex w-full items-center gap-2.5 rounded-lg p-2.5 border text-left transition-colors hover:bg-white/5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-400/50"
                   style={{
                     backgroundColor: `${p.color}11`,
                     borderColor: `${p.color}33`,
@@ -632,7 +637,7 @@ function MapDetailPanel({
                   <div className="text-[10px] font-mono text-white/30">
                     #{p.id}
                   </div>
-                </div>
+                </button>
               ))}
             </div>
           )}
@@ -645,7 +650,7 @@ function MapDetailPanel({
 // ─── Main page ─────────────────────────────────────────────────────────────
 
 export default function MapsView() {
-  const { snapshot, maps, appMode, snapshotMapDumps } = useEbpf();
+  const { snapshot, maps, appMode, snapshotMapDumps, selectedMapId, setSelectedMapId, focusProgram } = useEbpf();
   // Maps are delivered live via the SSE stream (EbpfContext.maps).
   // In snapshot mode, maps come from the loaded snapshot file.
 
@@ -653,21 +658,17 @@ export default function MapsView() {
   const [category, setCategory] = useState<string>("all");
   const [sharedOnly, setSharedOnly] = useState(false);
   const [sortMode, setSortMode] = useState<MapSortMode>("default");
-  // Pin selections by object but live-resolve from the current maps list so
-  // open panels track poll updates instead of freezing at click-time state
-  // (the pinned object is only the fallback for maps that disappear).
-  const [pinnedSelectedMap, setSelectedMap] = useState<BpfMap | null>(null);
+  // Map selection lives in context (so cross-nav / deep links can set it); the
+  // BpfMap is live-resolved from the current maps list below. Dump-entries
+  // modal stays local.
   const [pinnedDumpMap, setDumpMap] = useState<BpfMap | null>(null);
   const [entryCountCache, setEntryCountCache] = useState<
     Map<number, EntryCountCacheValue>
   >(() => new Map());
 
   const selectedMap = useMemo(
-    () =>
-      pinnedSelectedMap
-        ? (maps.find(m => m.id === pinnedSelectedMap.id) ?? pinnedSelectedMap)
-        : null,
-    [pinnedSelectedMap, maps]
+    () => (selectedMapId != null ? (maps.find(m => m.id === selectedMapId) ?? null) : null),
+    [selectedMapId, maps]
   );
   const dumpMap = useMemo(
     () =>
@@ -972,7 +973,7 @@ export default function MapsView() {
                     .filter((p): p is NonNullable<typeof p> => p !== undefined)}
                   selected={selectedMap?.id === map.id}
                   onClick={() =>
-                    setSelectedMap(prev => (prev?.id === map.id ? null : map))
+                    setSelectedMapId(selectedMapId === map.id ? null : map.id)
                   }
                   onDumpEntries={e => {
                     e.stopPropagation();
@@ -995,7 +996,8 @@ export default function MapsView() {
         <MapDetailPanel
           map={selectedMap}
           programs={selectedPrograms}
-          onClose={() => setSelectedMap(null)}
+          onClose={() => setSelectedMapId(null)}
+          onSelectProgram={focusProgram}
           onDumpEntries={() => setDumpMap(selectedMap)}
           isSnapshotMode={appMode === "snapshot"}
           hasDumpData={

@@ -6,6 +6,7 @@ import React, {
   useMemo,
   useRef,
 } from "react";
+import { useLocation } from "wouter";
 import { trpc } from "@/lib/trpc";
 import { useEbpfStream } from "@/hooks/useEbpfStream";
 import type {
@@ -35,6 +36,15 @@ interface EbpfContextValue {
   error: string | null;
   selectedProgram: BpfProgram | null;
   setSelectedProgram: (p: BpfProgram | null) => void;
+  /** Globally-selected map id (drives the Maps page detail panel; lifted to
+   *  context so cross-navigation and deep links can set it from anywhere). */
+  selectedMapId: number | null;
+  setSelectedMapId: (id: number | null) => void;
+  /** Cross-navigation: open a program's detail drawer by id (stays on the
+   *  current page — the drawer is global). */
+  focusProgram: (id: number) => void;
+  /** Cross-navigation: select a map by id and go to the Maps page. */
+  focusMap: (id: number) => void;
   searchQuery: string;
   setSearchQuery: (q: string) => void;
   typeFilter: string[];
@@ -80,6 +90,8 @@ export function EbpfProvider({ children }: { children: React.ReactNode }) {
   const setSelectedProgram = useCallback((p: BpfProgram | null) => {
     setPinnedProgram(p);
   }, []);
+  const [selectedMapId, setSelectedMapId] = useState<number | null>(null);
+  const [, navigate] = useLocation();
   const [searchQuery, setSearchQuery] = useState("");
   const [typeFilter, setTypeFilter] = useState<string[]>([]);
   // refreshInterval is kept for the Settings page UI but no longer drives polling
@@ -131,6 +143,24 @@ export function EbpfProvider({ children }: { children: React.ReactNode }) {
       snapshot?.programs.find(p => p.id === pinnedProgram.id) ?? pinnedProgram
     );
   }, [pinnedProgram, snapshot]);
+
+  // Cross-navigation. focusProgram resolves via a ref so the callback stays
+  // stable across polls; focusMap navigates to the Maps page (map detail
+  // lives only there) and closes the global program drawer.
+  const snapshotRef = useRef(snapshot);
+  snapshotRef.current = snapshot;
+  const focusProgram = useCallback((id: number) => {
+    const prog = snapshotRef.current?.programs.find(p => p.id === id) ?? null;
+    if (prog) setPinnedProgram(prog);
+  }, []);
+  const focusMap = useCallback(
+    (id: number) => {
+      setSelectedMapId(id);
+      setPinnedProgram(null);
+      navigate("/maps");
+    },
+    [navigate]
+  );
   const maps: BpfMap[] = loadedSnapshot ? snapshotMaps : liveMaps;
   const isLoading =
     loadedSnapshot === null &&
@@ -348,6 +378,10 @@ export function EbpfProvider({ children }: { children: React.ReactNode }) {
       error,
       selectedProgram,
       setSelectedProgram,
+      selectedMapId,
+      setSelectedMapId,
+      focusProgram,
+      focusMap,
       searchQuery,
       setSearchQuery,
       typeFilter,
@@ -376,6 +410,9 @@ export function EbpfProvider({ children }: { children: React.ReactNode }) {
       isLoading,
       error,
       selectedProgram,
+      selectedMapId,
+      focusProgram,
+      focusMap,
       searchQuery,
       typeFilter,
       filteredPrograms,

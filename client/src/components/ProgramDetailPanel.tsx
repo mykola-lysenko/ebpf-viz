@@ -156,10 +156,12 @@ function SharedMapBadge({
   map,
   users,
   currentProgramId,
+  onSelectProgram,
 }: {
   map: BpfMap;
   users: BpfProgram[];
   currentProgramId: number;
+  onSelectProgram: (id: number) => void;
 }) {
   const otherUsers = users.filter(user => user.id !== currentProgramId);
   const visibleUsers = otherUsers.slice(0, 8);
@@ -189,9 +191,15 @@ function SharedMapBadge({
           {visibleUsers.length > 0 ? (
             <div className="space-y-1">
               {visibleUsers.map(user => (
-                <div
+                <button
                   key={user.id}
-                  className="flex min-w-0 items-center gap-2 rounded bg-background/20 px-1.5 py-1"
+                  type="button"
+                  onClick={e => {
+                    e.stopPropagation();
+                    onSelectProgram(user.id);
+                  }}
+                  title="Open this program's details"
+                  className="flex w-full min-w-0 items-center gap-2 rounded bg-background/20 px-1.5 py-1 text-left transition-colors hover:bg-background/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-300/50"
                 >
                   <span
                     className="h-2 w-2 shrink-0 rounded-full"
@@ -203,7 +211,7 @@ function SharedMapBadge({
                   <span className="shrink-0 text-[10px] opacity-70">
                     {user.rawType} #{user.id}
                   </span>
-                </div>
+                </button>
               ))}
               {otherUsers.length > visibleUsers.length && (
                 <div className="text-[11px] opacity-70">
@@ -287,7 +295,7 @@ function ChartTooltip({
 }
 
 export function ProgramDetailPanel({ program, history, onClose }: Props) {
-  const { maps, snapshot } = useEbpf();
+  const { maps, snapshot, focusMap, focusProgram } = useEbpf();
   const [showCode, setShowCode] = useState(false);
   const hasHistory = (history?.samples?.length ?? 0) >= 2;
   const now = useNow(30_000); // refresh relative times every 30s
@@ -747,11 +755,21 @@ export function ProgramDetailPanel({ program, history, onClose }: Props) {
                     return (
                       <div
                         key={id}
+                        role="button"
+                        tabIndex={0}
+                        onClick={() => focusMap(map.id)}
+                        onKeyDown={e => {
+                          if (e.key === "Enter" || e.key === " ") {
+                            e.preventDefault();
+                            focusMap(map.id);
+                          }
+                        }}
+                        title="Open this map on the Maps page"
                         className={cn(
-                          "rounded-lg border px-2.5 py-2",
+                          "cursor-pointer rounded-lg border px-2.5 py-2 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-400/50",
                           isSharedMap(map)
-                            ? "border-amber-500/25 bg-amber-500/5"
-                            : "border-sky-400/20 bg-sky-400/5"
+                            ? "border-amber-500/25 bg-amber-500/5 hover:bg-amber-500/10"
+                            : "border-sky-400/20 bg-sky-400/5 hover:bg-sky-400/10"
                         )}
                       >
                         <div className="flex flex-wrap items-center gap-2">
@@ -778,6 +796,7 @@ export function ProgramDetailPanel({ program, history, onClose }: Props) {
                               map={map}
                               users={users}
                               currentProgramId={program.id}
+                              onSelectProgram={focusProgram}
                             />
                           )}
                         </div>
