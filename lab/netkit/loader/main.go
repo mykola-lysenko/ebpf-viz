@@ -26,6 +26,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strings"
 
 	"github.com/cilium/ebpf"
@@ -91,7 +92,7 @@ func run(objPath, pinDir, nodePath string, pods podFlag) error {
 	for name := range pods {
 		names = append(names, name)
 	}
-	sortStrings(names)
+	sort.Strings(names)
 
 	nodeNs, err := netns.GetFromPath(nodePath)
 	if err != nil {
@@ -227,10 +228,3 @@ func inNetns(ns netns.NsHandle, fn func() error) error {
 	return fn()
 }
 
-func sortStrings(s []string) {
-	for i := 1; i < len(s); i++ {
-		for j := i; j > 0 && s[j-1] > s[j]; j-- {
-			s[j-1], s[j] = s[j], s[j-1]
-		}
-	}
-}

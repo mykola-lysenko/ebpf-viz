@@ -252,12 +252,21 @@ startPoller().catch(err => {
 // Restore kernel settings we changed (bpf_stats_enabled) before exiting.
 let shuttingDown = false;
 async function shutdown(signal: string): Promise<void> {
-  if (shuttingDown) return;
+  if (shuttingDown) {
+    // Second signal: the restore is stuck (e.g. sudo prompting after its
+    // cached credentials expired) — exit now rather than trapping the user.
+    console.error("[server] repeated signal — exiting without restore");
+    process.exit(1);
+  }
   shuttingDown = true;
   console.log(`[server] ${signal} received — shutting down`);
   stopPoller();
   try {
-    await restoreKernelSettings();
+    // Bounded: never let a blocking sudo hold the process open forever.
+    await Promise.race([
+      restoreKernelSettings(),
+      new Promise(resolve => setTimeout(resolve, 5_000)),
+    ]);
   } catch { /* best-effort */ }
   process.exit(0);
 }
