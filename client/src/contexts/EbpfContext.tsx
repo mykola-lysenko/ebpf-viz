@@ -87,18 +87,33 @@ interface EbpfContextValue {
 
 const EbpfContext = createContext<EbpfContextValue | null>(null);
 
+/** Read a numeric id from a URL query param at first render, else null. */
+function initIdFromUrl(key: string): number | null {
+  if (typeof window === "undefined") return null;
+  const raw = new URLSearchParams(window.location.search).get(key);
+  const n = raw != null && raw !== "" ? Number(raw) : NaN;
+  return Number.isFinite(n) ? n : null;
+}
+
 export function EbpfProvider({ children }: { children: React.ReactNode }) {
   // Pin the SELECTION by id (not the object): storing the full BpfProgram
   // froze the detail panel while the live view updated, and an id is what the
   // URL carries. lastKnownProgram is the fallback shown if the program unloads
   // while its panel is open.
-  const [selectedProgramId, setSelectedProgramId] = useState<number | null>(null);
+  //
+  // Initialize FROM the URL (not null): otherwise, on a mount with ?prog/?map
+  // already set, the state→URL write effect runs one commit before the
+  // URL→state read effects apply their queued updates, sees stale nulls, and
+  // wipes the params — the read effects then wipe the state to match, and the
+  // two fight forever ("Maximum update depth exceeded"). See the regression in
+  // client/src/contexts/url-sync-loop.test.tsx.
+  const [selectedProgramId, setSelectedProgramId] = useState<number | null>(() => initIdFromUrl("prog"));
   const lastKnownProgramRef = useRef<BpfProgram | null>(null);
   const setSelectedProgram = useCallback((p: BpfProgram | null) => {
     if (p) lastKnownProgramRef.current = p;
     setSelectedProgramId(p?.id ?? null);
   }, []);
-  const [selectedMapId, setSelectedMapId] = useState<number | null>(null);
+  const [selectedMapId, setSelectedMapId] = useState<number | null>(() => initIdFromUrl("map"));
   const [, navigate] = useLocation();
   const [searchQuery, setSearchQuery] = useState("");
   const [typeFilter, setTypeFilter] = useState<string[]>([]);
@@ -178,7 +193,9 @@ export function EbpfProvider({ children }: { children: React.ReactNode }) {
   const [searchParams, setSearchParams] = useSearchParams();
   const progParam = searchParams.get("prog");
   const mapParam = searchParams.get("map");
-  // URL → state (initial load and browser navigation).
+  // URL → state (browser back/forward; also reconciles deep-link params that
+  // arrive after mount). State is already URL-initialized above, so on mount
+  // these are no-ops and don't fight the write effect.
   useEffect(() => {
     const id = progParam != null && progParam !== "" ? Number(progParam) : null;
     if (id != null && Number.isNaN(id)) return;
