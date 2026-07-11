@@ -653,11 +653,29 @@ export default function MapsView() {
   const [category, setCategory] = useState<string>("all");
   const [sharedOnly, setSharedOnly] = useState(false);
   const [sortMode, setSortMode] = useState<MapSortMode>("default");
-  const [selectedMap, setSelectedMap] = useState<BpfMap | null>(null);
-  const [dumpMap, setDumpMap] = useState<BpfMap | null>(null);
+  // Pin selections by object but live-resolve from the current maps list so
+  // open panels track poll updates instead of freezing at click-time state
+  // (the pinned object is only the fallback for maps that disappear).
+  const [pinnedSelectedMap, setSelectedMap] = useState<BpfMap | null>(null);
+  const [pinnedDumpMap, setDumpMap] = useState<BpfMap | null>(null);
   const [entryCountCache, setEntryCountCache] = useState<
     Map<number, EntryCountCacheValue>
   >(() => new Map());
+
+  const selectedMap = useMemo(
+    () =>
+      pinnedSelectedMap
+        ? (maps.find(m => m.id === pinnedSelectedMap.id) ?? pinnedSelectedMap)
+        : null,
+    [pinnedSelectedMap, maps]
+  );
+  const dumpMap = useMemo(
+    () =>
+      pinnedDumpMap
+        ? (maps.find(m => m.id === pinnedDumpMap.id) ?? pinnedDumpMap)
+        : null,
+    [pinnedDumpMap, maps]
+  );
 
   // Build a quick lookup of program info by id
   const progById = useMemo(() => {

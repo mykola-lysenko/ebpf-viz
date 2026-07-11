@@ -72,20 +72,14 @@ interface EbpfContextValue {
 
 const EbpfContext = createContext<EbpfContextValue | null>(null);
 
-import { deepEqual } from "@/lib/utils";
-
-function useStableRef<T>(value: T, isEqual: (a: T, b: T) => boolean): T {
-  const ref = useRef<T>(value);
-  if (!isEqual(ref.current, value)) {
-    ref.current = value;
-  }
-  return ref.current;
-}
-
 export function EbpfProvider({ children }: { children: React.ReactNode }) {
-  const [selectedProgram, setSelectedProgram] = useState<BpfProgram | null>(
-    null
-  );
+  // Pin the SELECTION, not the object: storing the full BpfProgram froze the
+  // detail panel at click-time state while the live view kept updating. The
+  // pinned object is only the fallback for programs that unload mid-view.
+  const [pinnedProgram, setPinnedProgram] = useState<BpfProgram | null>(null);
+  const setSelectedProgram = useCallback((p: BpfProgram | null) => {
+    setPinnedProgram(p);
+  }, []);
   const [searchQuery, setSearchQuery] = useState("");
   const [typeFilter, setTypeFilter] = useState<string[]>([]);
   // refreshInterval is kept for the Settings page UI but no longer drives polling
@@ -110,12 +104,14 @@ export function EbpfProvider({ children }: { children: React.ReactNode }) {
     status: streamStatus,
   } = useEbpfStream();
 
-  // Stabilize the SSE state: only trigger downstream re-renders if the topology actually changes
-  // Ignore 'timestamp' and 'stats' on the snapshot since those change every 5 seconds without affecting layout
-  const liveSnapshot = useStableRef(rawLiveSnapshot, (a, b) =>
-    deepEqual(a, b, new Set(["timestamp", "stats"]))
-  );
-  const liveMaps = useStableRef(rawLiveMaps, deepEqual);
+  // No client-side deep-compare stabilization: the SSE layer already sends
+  // full snapshots only on topology-hash changes and preserves per-object
+  // identity on metrics updates, so a whole-snapshot deepEqual every poll
+  // was pure CPU that nearly always concluded "changed" anyway (per-program
+  // counters mutate each poll). Memoized rows rely on the per-object
+  // identities instead.
+  const liveSnapshot = rawLiveSnapshot;
+  const liveMaps = rawLiveMaps;
 
   // ── Poller status (for statsEnabled flag) — lightweight 30s poll ──────────
   const { data: pollerStatus, refetch } = trpc.ebpf.status.useQuery(undefined, {
@@ -125,6 +121,16 @@ export function EbpfProvider({ children }: { children: React.ReactNode }) {
 
   // ── Active snapshot: loaded snapshot takes priority over live stream ───────
   const snapshot = loadedSnapshot ?? liveSnapshot ?? null;
+
+  // Live-resolve the selected program from the current snapshot so the detail
+  // panel tracks poll updates; fall back to the pinned object when the
+  // program has unloaded (panel keeps showing its last-known state).
+  const selectedProgram = useMemo(() => {
+    if (!pinnedProgram) return null;
+    return (
+      snapshot?.programs.find(p => p.id === pinnedProgram.id) ?? pinnedProgram
+    );
+  }, [pinnedProgram, snapshot]);
   const maps: BpfMap[] = loadedSnapshot ? snapshotMaps : liveMaps;
   const isLoading =
     loadedSnapshot === null &&

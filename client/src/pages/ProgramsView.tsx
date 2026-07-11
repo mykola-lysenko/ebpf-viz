@@ -127,7 +127,11 @@ function TruncatedProgramName({ name }: { name: string }) {
   );
 }
 
-function ProgramRow({
+/** Memoized: with ~300 live programs, user interactions (search keystrokes,
+ *  sort clicks, opening a panel) must not re-render every row. Poll updates
+ *  still re-render rows whose prog/history object identity changed — the SSE
+ *  layer preserves identity for unchanged objects, so this composes. */
+const ProgramRow = React.memo(function ProgramRow({
   prog,
   history,
   maxCallsPerSec,
@@ -316,7 +320,7 @@ function ProgramRow({
       </td>
     </tr>
   );
-}
+});
 
 export default function ProgramsView() {
   const { snapshot, filteredPrograms, typeFilter, setTypeFilter, historyMap, statsEnabled } = useEbpf();
