@@ -1228,10 +1228,10 @@ export default function NetworkView() {
         </div>
       </div>
 
-      {/* ── NIC section ─────────────────────────────────────────────────── */}
+      {/* ── NIC section (host network namespace) ────────────────────────── */}
       <InterfaceSection
-        title="Network Interfaces"
-        description="Physical and virtual NICs — XDP, TC, netfilter, and netkit hooks"
+        title="Host Interfaces"
+        description="NICs in the host network namespace — XDP, TC, netfilter, and netkit hooks"
         icon={<Wifi size={15} style={{ color: "oklch(0.70 0.18 160)" }} />}
         interfaces={nicInterfaces}
         accentColor="#10b981"
@@ -1242,11 +1242,15 @@ export default function NetworkView() {
         emptyMessage={
           searchQuery
             ? "No NIC interfaces match the current filter."
-            : "No BPF programs attached to network interfaces."
+            : netnsGroups.size > 0
+              ? "No BPF programs on host-namespace interfaces."
+              : "No BPF programs attached to network interfaces."
         }
         emptyHint={
           !searchQuery
-            ? "XDP, TC, and netfilter programs will appear here when attached to interfaces."
+            ? netnsGroups.size > 0
+              ? "All netdev attachments on this system are inside other network namespaces — see the namespace sections below."
+              : "XDP, TC, and netfilter programs will appear here when attached to interfaces."
             : undefined
         }
       />
