@@ -61,6 +61,14 @@ function hashJson(value: unknown): string {
   return createHash("sha256").update(JSON.stringify(value)).digest("hex");
 }
 
+// The poller hands the SAME snapshot/maps object to every connected client per
+// tick, so the topology/maps hash depends only on that object — not on the
+// client. Memoize by object identity (WeakMap) so the sha256 runs once per tick
+// no matter how many clients are streaming, instead of once per client. Entries
+// are collected automatically when the poller replaces the object next tick.
+const snapshotHashCache = new WeakMap<EbpfSnapshot, string>();
+const mapsHashCache = new WeakMap<BpfMap[], string>();
+
 function stripSnapshotVolatileFields(value: unknown): unknown {
   if (Array.isArray(value)) {
     return value.map(stripSnapshotVolatileFields);
@@ -78,12 +86,20 @@ function stripSnapshotVolatileFields(value: unknown): unknown {
   return value;
 }
 
-function snapshotTopologyHash(snap: EbpfSnapshot): string {
-  return hashJson(stripSnapshotVolatileFields(snap));
+export function snapshotTopologyHash(snap: EbpfSnapshot): string {
+  const cached = snapshotHashCache.get(snap);
+  if (cached !== undefined) return cached;
+  const hash = hashJson(stripSnapshotVolatileFields(snap));
+  snapshotHashCache.set(snap, hash);
+  return hash;
 }
 
-function mapsHash(maps: BpfMap[]): string {
-  return hashJson(maps);
+export function mapsHash(maps: BpfMap[]): string {
+  const cached = mapsHashCache.get(maps);
+  if (cached !== undefined) return cached;
+  const hash = hashJson(maps);
+  mapsHashCache.set(maps, hash);
+  return hash;
 }
 
 function buildSnapshotMetricsUpdate(snap: EbpfSnapshot): SnapshotMetricsUpdate {

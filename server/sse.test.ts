@@ -30,9 +30,9 @@ vi.mock("./ebpf-poller", () => ({
   isStatsEnabled: mockIsStatsEnabled,
 }));
 
-import { sseHandler } from "./sse";
+import { sseHandler, snapshotTopologyHash, mapsHash } from "./sse";
 import type { Request, Response } from "express";
-import type { EbpfSnapshot, ProgHistory } from "../shared/ebpf-types";
+import type { BpfMap, EbpfSnapshot, ProgHistory } from "../shared/ebpf-types";
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -332,6 +332,28 @@ describe("sseHandler", () => {
       .filter(w => w.includes("event: ping"))
       .length;
     expect(pingCount).toBe(3);
+  });
+
+  it("memoizes the topology/maps hash by object identity (one sha256 per tick, not per client)", () => {
+    // Observational: once an object is hashed, a later call on the SAME object
+    // returns the cached digest without re-reading its (now-mutated) fields.
+    const snap = makeSnapshot([{ id: 1, runCnt: 10 }], 1_000);
+    const first = snapshotTopologyHash(snap);
+    // Mutate a topology-relevant field. A recompute would change the digest;
+    // a cache hit (keyed on identity) returns the original.
+    snap.programs[0].name = "mutated-would-change-the-hash";
+    expect(snapshotTopologyHash(snap)).toBe(first);
+
+    const maps: BpfMap[] = [];
+    const firstMaps = mapsHash(maps);
+    maps.push({ id: 99 } as unknown as BpfMap);
+    expect(mapsHash(maps)).toBe(firstMaps);
+
+    // A distinct object (next poller tick) is hashed fresh — and because the
+    // mutation above was ignored by the cache, the original topology's digest
+    // is reproducible from an equivalent fresh object.
+    const freshEquivalent = makeSnapshot([{ id: 1, runCnt: 999 }], 5_000);
+    expect(snapshotTopologyHash(freshEquivalent)).toBe(first); // runCnt/timestamp are volatile-stripped
   });
 
   it("does not push after disconnect even if poller fires", () => {

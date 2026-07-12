@@ -41,15 +41,22 @@ import { EbpfProvider, useEbpf } from "./EbpfContext";
 afterEach(cleanup);
 
 function Probe() {
-  const { selectedProgram, selectedMapId, setSelectedProgram, setSelectedMapId, focusProgram, focusMap } = useEbpf();
+  const {
+    selectedProgram, selectedMapId, setSelectedProgram, setSelectedMapId, focusProgram, focusMap,
+    searchQuery, setSearchQuery, typeFilter, setTypeFilter,
+  } = useEbpf();
   return (
     <div>
       <div data-testid="sel">{`${selectedProgram?.id ?? "none"}|${selectedMapId ?? "none"}`}</div>
+      <div data-testid="filters">{`${searchQuery || "-"}|${typeFilter.join(",") || "-"}`}</div>
       <button data-testid="sp" onClick={() => setSelectedProgram(prog(9))}>select prog</button>
       <button data-testid="sp-null" onClick={() => setSelectedProgram(null)}>clear prog</button>
       <button data-testid="sm" onClick={() => setSelectedMapId(42)}>select map</button>
       <button data-testid="fp" onClick={() => focusProgram(3)}>focus prog</button>
       <button data-testid="fm" onClick={() => focusMap(7)}>focus map</button>
+      <button data-testid="sq" onClick={() => setSearchQuery("xdp")}>search</button>
+      <button data-testid="tf" onClick={() => setTypeFilter(["kprobe", "xdp"])}>filter</button>
+      <button data-testid="tf-clear" onClick={() => setTypeFilter([])}>clear filter</button>
     </div>
   );
 }
@@ -108,6 +115,26 @@ describe("EbpfProvider selection ↔ URL", () => {
     expect(url().get("map")).toBe("7");
     expect(url().get("prog")).toBeNull();
     expect(r.getByTestId("sel").textContent).toBe("none|7");
+  });
+
+  it("derives search + type filters from the URL and writes them back", async () => {
+    const r = mountAt("/programs?q=drop&type=kprobe,xdp");
+    // Initial state comes straight from the query string.
+    expect(r.getByTestId("filters").textContent).toBe("drop|kprobe,xdp");
+
+    await act(async () => r.getByTestId("sq").click());
+    expect(url().get("q")).toBe("xdp");
+    await act(async () => r.getByTestId("tf").click());
+    expect(url().get("type")).toBe("kprobe,xdp");
+    expect(r.getByTestId("filters").textContent).toBe("xdp|kprobe,xdp");
+  });
+
+  it("removes the type param entirely when the filter is cleared", async () => {
+    const r = mountAt("/programs?type=kprobe");
+    expect(r.getByTestId("filters").textContent).toBe("-|kprobe");
+    await act(async () => r.getByTestId("tf-clear").click());
+    expect(url().get("type")).toBeNull(); // not left as an empty "type="
+    expect(r.getByTestId("filters").textContent).toBe("-|-");
   });
 
   it("does not loop across a sequence of selections and clears", async () => {

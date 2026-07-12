@@ -81,3 +81,35 @@ describe("ProgramsView time scrubber", () => {
     expect(r.container.textContent).toContain("5.0/s");
   });
 });
+
+describe("ProgramsView sort deep-link", () => {
+  function renderAt(search: string) {
+    window.history.replaceState(null, "", `/programs${search}`);
+    return render(
+      <Router>
+        <TooltipProvider>
+          <ProgramsView />
+        </TooltipProvider>
+      </Router>
+    );
+  }
+
+  it("clicking a sortable header writes ?sort/&dir and toggles direction", async () => {
+    const r = renderAt("");
+    // Sort by name ascending, then descending on a second click. Re-query the
+    // header each time — it re-renders, so a cached node would fire a stale handler.
+    await act(async () => r.getByText("Name").click());
+    expect(new URLSearchParams(window.location.search).get("sort")).toBe("name");
+    expect(new URLSearchParams(window.location.search).get("dir")).toBe("asc");
+    await act(async () => r.getByText("Name").click());
+    expect(new URLSearchParams(window.location.search).get("dir")).toBe("desc");
+  });
+
+  it("returning to the default (id/asc) clears the sort params", async () => {
+    const r = renderAt("?sort=name&dir=asc");
+    // id is the default column; clicking it once sorts id asc → params dropped.
+    await act(async () => r.getByText("ID").click());
+    expect(new URLSearchParams(window.location.search).get("sort")).toBeNull();
+    expect(new URLSearchParams(window.location.search).get("dir")).toBeNull();
+  });
+});

@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useSearchParams } from "wouter";
 import { useEbpf } from "@/contexts/EbpfContext";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -13,6 +14,7 @@ import { formatRelativeTime, formatFullTimestamp, useNow } from "@/lib/time";
 
 type SortKey = "id" | "name" | "type" | "loadedAt" | "runCnt" | "bytesXlated" | "callsPerSec" | "avgLatency" | "cpuFraction";
 type SortDir = "asc" | "desc";
+const SORT_KEYS: readonly SortKey[] = ["id", "name", "type", "loadedAt", "runCnt", "bytesXlated", "callsPerSec", "avgLatency", "cpuFraction"];
 const PROGRAM_COLUMN_STORAGE_KEY = "ebpf-viz:programs-table-column-widths";
 
 const PROGRAM_COLUMN_ORDER = [
@@ -329,8 +331,31 @@ const ProgramRow = React.memo(function ProgramRow({
 
 export default function ProgramsView() {
   const { snapshot, filteredPrograms, typeFilter, setTypeFilter, historyMap, statsEnabled } = useEbpf();
-  const [sortKey, setSortKey] = useState<SortKey>("id");
-  const [sortDir, setSortDir] = useState<SortDir>("asc");
+  // Sort lives in the URL (?sort=<key>&dir=<asc|desc>) so a sorted view is
+  // shareable; the default (id/asc) is kept out of the URL to avoid clutter.
+  const [searchParams, setSearchParams] = useSearchParams();
+  const sortParam = searchParams.get("sort") as SortKey | null;
+  const sortKey: SortKey = sortParam && SORT_KEYS.includes(sortParam) ? sortParam : "id";
+  const sortDir: SortDir = searchParams.get("dir") === "desc" ? "desc" : "asc";
+  const setSort = useCallback(
+    (key: SortKey, dir: SortDir) => {
+      setSearchParams(
+        prev => {
+          const next = new URLSearchParams(prev);
+          if (key === "id" && dir === "asc") {
+            next.delete("sort");
+            next.delete("dir");
+          } else {
+            next.set("sort", key);
+            next.set("dir", dir);
+          }
+          return next;
+        },
+        { replace: true }
+      );
+    },
+    [setSearchParams]
+  );
   const [tagFilter, setTagFilter] = useState<string | null>(null);
   const [orphanFilter, setOrphanFilter] = useState(false);
   const [columnWidths, setColumnWidths] = useState<ProgramColumnWidths>(readColumnWidths);
@@ -468,8 +493,8 @@ export default function ProgramsView() {
   const orphanedCount = snapshot.programs.filter(p => p.orphaned).length;
 
   const handleSort = (key: SortKey) => {
-    if (sortKey === key) setSortDir(d => d === "asc" ? "desc" : "asc");
-    else { setSortKey(key); setSortDir("asc"); }
+    if (sortKey === key) setSort(key, sortDir === "asc" ? "desc" : "asc");
+    else setSort(key, "asc");
   };
 
   const sorted = [...visiblePrograms].sort((a, b) => {

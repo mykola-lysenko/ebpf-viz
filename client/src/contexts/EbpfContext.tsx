@@ -122,6 +122,21 @@ export function EbpfProvider({ children }: { children: React.ReactNode }) {
     },
     [setSearchParams]
   );
+  // String variant, for the search box and type-filter chips.
+  const setStringParam = useCallback(
+    (key: string, value: string) => {
+      setSearchParams(
+        prev => {
+          const next = new URLSearchParams(prev);
+          if (value) next.set(key, value);
+          else next.delete(key);
+          return next;
+        },
+        { replace: true }
+      );
+    },
+    [setSearchParams]
+  );
 
   // Detail panel keeps showing a program's last-known state if it unloads.
   const lastKnownProgramRef = useRef<BpfProgram | null>(null);
@@ -137,8 +152,20 @@ export function EbpfProvider({ children }: { children: React.ReactNode }) {
     [setParam]
   );
 
-  const [searchQuery, setSearchQuery] = useState("");
-  const [typeFilter, setTypeFilter] = useState<string[]>([]);
+  // Search + type filters live in the URL as well, so a filtered program view
+  // is shareable and survives reload — same URL-as-source-of-truth pattern as
+  // the prog/map selection (?q=<text>&type=<t1,t2>).
+  const searchQuery = searchParams.get("q") ?? "";
+  const setSearchQuery = useCallback((q: string) => setStringParam("q", q), [setStringParam]);
+  const typeFilterRaw = searchParams.get("type") ?? "";
+  const typeFilter = useMemo(
+    () => (typeFilterRaw ? typeFilterRaw.split(",").filter(Boolean) : []),
+    [typeFilterRaw]
+  );
+  const setTypeFilter = useCallback(
+    (types: string[]) => setStringParam("type", types.join(",")),
+    [setStringParam]
+  );
   // refreshInterval is kept for the Settings page UI but no longer drives polling
   const [refreshInterval, setRefreshInterval] = useState(5000);
 
