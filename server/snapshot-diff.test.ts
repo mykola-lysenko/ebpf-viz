@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { diffSnapshots } from "../shared/snapshot-diff";
-import type { BpfProgram, BpfMap, EbpfSnapshot } from "../shared/ebpf-types";
+import { diffSnapshots, diffMapEntries } from "../shared/snapshot-diff";
+import type { BpfProgram, BpfMap, EbpfSnapshot, MapEntry } from "../shared/ebpf-types";
 
 function prog(over: Partial<BpfProgram> & { id: number }): BpfProgram {
   return {
@@ -121,5 +121,65 @@ describe("diffSnapshots", () => {
     const b = snap([prog({ id: 1, name: "p", tag: "t", pids: [] })]);
     const d = diffSnapshots(a, b);
     expect(d.programs.changed[0].changes.some(c => c.startsWith("owner "))).toBe(true);
+  });
+});
+
+function entry(over: Partial<MapEntry> & { keyHex: string }): MapEntry {
+  return {
+    index: 0,
+    keyDecimal: null,
+    keyBtf: null,
+    valueHex: "00",
+    valueDecimal: null,
+    valueBtf: null,
+    valueError: null,
+    ...over,
+  };
+}
+
+describe("diffMapEntries (map contents)", () => {
+  it("classifies entries as added / removed / changed by key", () => {
+    const a = [
+      entry({ keyHex: "01", valueHex: "aa" }),
+      entry({ keyHex: "02", valueHex: "bb" }), // will change
+      entry({ keyHex: "03", valueHex: "cc" }), // will be removed
+    ];
+    const b = [
+      entry({ keyHex: "01", valueHex: "aa" }), // unchanged
+      entry({ keyHex: "02", valueHex: "b9" }), // value changed
+      entry({ keyHex: "04", valueHex: "dd" }), // added
+    ];
+    const d = diffMapEntries(a, b);
+    expect(d.added.map(e => e.keyHex)).toEqual(["04"]);
+    expect(d.removed.map(e => e.keyHex)).toEqual(["03"]);
+    expect(d.changed).toHaveLength(1);
+    expect(d.changed[0].keyHex).toBe("02");
+    expect(d.changed[0].before.valueHex).toBe("bb");
+    expect(d.changed[0].after.valueHex).toBe("b9");
+    expect(d.identical).toBe(false);
+  });
+
+  it("is identical when the same keys map to the same values", () => {
+    const a = [entry({ keyHex: "01", valueHex: "aa" }), entry({ keyHex: "02", valueHex: "bb" })];
+    const b = [entry({ keyHex: "02", valueHex: "bb" }), entry({ keyHex: "01", valueHex: "aa" })];
+    const d = diffMapEntries(a, b);
+    expect(d.identical).toBe(true);
+    expect(d.added).toHaveLength(0);
+    expect(d.removed).toHaveLength(0);
+    expect(d.changed).toHaveLength(0);
+  });
+
+  it("detects a per-cpu value change even when the flat hex matches", () => {
+    const a = [entry({ keyHex: "01", valueHex: "00", perCpuValues: [{ cpu: 0, hex: "aa", decimal: null }] })];
+    const b = [entry({ keyHex: "01", valueHex: "00", perCpuValues: [{ cpu: 0, hex: "ab", decimal: null }] })];
+    const d = diffMapEntries(a, b);
+    expect(d.changed).toHaveLength(1);
+  });
+
+  it("prefers BTF › decimal › hex for the key label", () => {
+    const d1 = diffMapEntries([], [entry({ keyHex: "01", keyBtf: "{ip: 1.2.3.4}" })]);
+    expect(d1.added[0]).toBeDefined();
+    const d2 = diffMapEntries([entry({ keyHex: "07", valueHex: "aa" })], [entry({ keyHex: "07", valueHex: "bb", keyDecimal: "7" })]);
+    expect(d2.changed[0].keyLabel).toBe("7"); // decimal used when no BTF
   });
 });

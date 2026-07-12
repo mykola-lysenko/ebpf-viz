@@ -72,6 +72,12 @@ interface EbpfContextValue {
   ) => Promise<{ snapshot: EbpfSnapshot; maps: BpfMap[]; meta: SnapshotMeta }>;
   /** Load a map dump file (from capture-snapshot.sh --dump-maps) into snapshot mode */
   loadMapDumps: (file: File) => Promise<{ loaded: number }> | never;
+  /** Parse a map dump file against a given map set WITHOUT touching global state
+   *  (for the diff view, which parses one dump per side). */
+  parseMapDumpsFile: (
+    file: File,
+    maps: BpfMap[]
+  ) => Promise<Record<number, MapDumpResult>>;
   /** Clear the loaded snapshot and return to live/demo mode */
   clearSnapshot: () => void;
   /** Snapshot map dumps: Record<mapId, MapDumpResult> — populated after loadMapDumps() */
@@ -342,14 +348,14 @@ export function EbpfProvider({ children }: { children: React.ReactNode }) {
   const loadedSnapshotRef = useRef(loadedSnapshot);
   loadedSnapshotRef.current = loadedSnapshot;
 
-  const loadMapDumps = useCallback(
-    async (file: File): Promise<{ loaded: number }> => {
+  // Parse a map-dump file against a given set of maps WITHOUT touching global
+  // state — shared by loadMapDumps (live snapshot mode) and the diff view, which
+  // parses a dump for each side independently.
+  const parseMapDumpsFile = useCallback(
+    async (file: File, maps: BpfMap[]): Promise<Record<number, MapDumpResult>> => {
       const { formatValidationError, mapDumpsUploadSchema } = await import(
         "../../../shared/snapshot-validation"
       );
-      if (!loadedSnapshotRef.current) {
-        throw new Error("Load a snapshot first before loading map dumps.");
-      }
       const text = await file.text();
       let parsed: unknown;
       try {
@@ -360,26 +366,29 @@ export function EbpfProvider({ children }: { children: React.ReactNode }) {
       const validation = mapDumpsUploadSchema.safeParse(parsed);
       if (!validation.success) {
         throw new Error(
-          formatValidationError(
-            "Invalid eBPF Viz map dump file.",
-            validation.error
-          )
+          formatValidationError("Invalid eBPF Viz map dump file.", validation.error)
         );
       }
       // Send to server for parsing (normalizes RawMapEntry → MapEntry)
-      const currentMaps = snapshotMapsRef.current;
       const result = await parseMapDumpsRef.current({
         mapDumps: validation.data.mapDumps,
-        maps: currentMaps.map(m => ({
-          id: m.id,
-          rawType: m.rawType,
-          name: m.name,
-        })),
+        maps: maps.map(m => ({ id: m.id, rawType: m.rawType, name: m.name })),
       });
-      setSnapshotMapDumps(result as Record<number, MapDumpResult>);
-      return { loaded: Object.keys(result).length };
+      return result as Record<number, MapDumpResult>;
     },
     []
+  );
+
+  const loadMapDumps = useCallback(
+    async (file: File): Promise<{ loaded: number }> => {
+      if (!loadedSnapshotRef.current) {
+        throw new Error("Load a snapshot first before loading map dumps.");
+      }
+      const result = await parseMapDumpsFile(file, snapshotMapsRef.current);
+      setSnapshotMapDumps(result);
+      return { loaded: Object.keys(result).length };
+    },
+    [parseMapDumpsFile]
   );
 
   const clearSnapshot = useCallback(() => {
@@ -475,6 +484,7 @@ export function EbpfProvider({ children }: { children: React.ReactNode }) {
       loadSnapshot,
       parseSnapshotFile,
       loadMapDumps,
+      parseMapDumpsFile,
       clearSnapshot,
       snapshotMapDumps,
       historyMap,
@@ -503,6 +513,7 @@ export function EbpfProvider({ children }: { children: React.ReactNode }) {
       snapshotMeta,
       loadSnapshot,
       loadMapDumps,
+      parseMapDumpsFile,
       parseSnapshotFile,
       clearSnapshot,
       snapshotMapDumps,
