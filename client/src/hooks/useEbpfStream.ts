@@ -73,7 +73,7 @@ function mergeProgramMetrics(program: BpfProgram, metricsById: Map<number, Progr
   return next;
 }
 
-function mergeProgramListMetrics(programs: BpfProgram[], metricsById: Map<number, ProgramMetrics>): BpfProgram[] {
+export function mergeProgramListMetrics(programs: BpfProgram[], metricsById: Map<number, ProgramMetrics>): BpfProgram[] {
   let changed = false;
   const next = programs.map((program) => {
     const merged = mergeProgramMetrics(program, metricsById);
@@ -123,7 +123,7 @@ function mergeKernelZoneMetrics(zone: KernelAttachmentZone, metricsById: Map<num
   return programs === zone.programs ? zone : { ...zone, programs };
 }
 
-function applySnapshotMetrics(snapshot: EbpfSnapshot | null, update: SnapshotMetricsUpdate): EbpfSnapshot | null {
+export function applySnapshotMetrics(snapshot: EbpfSnapshot | null, update: SnapshotMetricsUpdate): EbpfSnapshot | null {
   if (!snapshot) return snapshot;
   const metricsById = new Map(update.programs.map((program) => [program.id, program]));
 
@@ -138,7 +138,7 @@ function applySnapshotMetrics(snapshot: EbpfSnapshot | null, update: SnapshotMet
   };
 }
 
-function applyHistoryDeltas(histories: ProgHistory[], deltas: ProgHistoryDelta[]): ProgHistory[] {
+export function applyHistoryDeltas(histories: ProgHistory[], deltas: ProgHistoryDelta[]): ProgHistory[] {
   if (deltas.length === 0) return histories;
 
   const byId = new Map(histories.map((history) => [history.id, history]));
