@@ -130,13 +130,14 @@ cat > "$OUT_DIR/.env.example" << 'ENVEXAMPLE'
 PORT=3000
 
 # Network interface / address to bind on.
-#   Unset (default) → 0.0.0.0  (all IPv4 interfaces)
+#   Unset (default) → 127.0.0.1 (loopback only — remote machines cannot connect)
+#   HOST=0.0.0.0     → all IPv4 interfaces
 #   HOST=::          → all IPv6 interfaces; on dual-stack kernels this also
 #                      accepts IPv4 connections via IPv4-mapped addresses
-#   HOST=0.0.0.0     → all IPv4 interfaces (explicit)
-#   HOST=::1         → loopback IPv6 only
 #   HOST=192.168.1.5 → specific IPv4 address
-# HOST=::
+# When binding beyond loopback, also set EBPF_VIZ_ALLOWED_HOSTS below or the
+# Host-header guard will reject remote browsers with 403.
+# HOST=0.0.0.0
 
 # Set to "production" (default when running via start.sh)
 NODE_ENV=production
@@ -153,6 +154,15 @@ NODE_ENV=production
 # Set to "true" to start in demo mode (synthetic data, no bpftool required).
 # Useful for testing the UI without a Linux kernel with BPF support.
 # DEMO_MODE=false
+
+# Set to 0 to skip enabling kernel.bpf_stats_enabled at startup (runtime
+# stats add a small per-invocation overhead to every BPF program).
+# BPF_STATS_ENABLED=0
+
+# Extra hostnames trusted by the Host-header guard (comma-separated).
+# Required when the dashboard is reached via a non-localhost hostname or
+# reverse proxy, e.g. EBPF_VIZ_ALLOWED_HOSTS=mydevserver.example.com
+# EBPF_VIZ_ALLOWED_HOSTS=
 
 # Operator access token.
 # Config changes and bpftool-heavy endpoints are restricted to loopback clients
@@ -222,10 +232,9 @@ fi
 export NODE_ENV="${NODE_ENV:-production}"
 export PORT="${PORT:-3000}"
 # HOST controls the network interface to bind on.
-#   Unset (default) → 0.0.0.0  (all IPv4 interfaces)
+#   Unset (default) → 127.0.0.1 (loopback only)
+#   HOST=0.0.0.0     → all IPv4 interfaces
 #   HOST=::          → all IPv6 interfaces (dual-stack: also accepts IPv4)
-#   HOST=0.0.0.0     → all IPv4 interfaces (explicit)
-#   HOST=::1         → loopback IPv6 only
 export HOST="${HOST:-}"
 
 if [ "$DEMO_FLAG" -eq 1 ]; then

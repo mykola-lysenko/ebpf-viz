@@ -1,6 +1,6 @@
 # eBPF Viz
 
-A real-time web dashboard for visualizing eBPF programs running on a Linux kernel. The visualizer polls `bpftool` every 5 seconds and renders kernel attachment zones, network interfaces with OSI layers, cgroup hierarchies, an interactive OS Map canvas, and a Code Inspector with BPF bytecode and control-flow graphs.
+A real-time web dashboard for visualizing eBPF programs running on a Linux kernel. The visualizer polls `bpftool` every 5 seconds and renders kernel attachment zones, network interfaces with OSI layers, cgroup hierarchies, a network-namespace topology graph, an interactive OS Map canvas, snapshot diffing, and a Code Inspector with BPF bytecode and control-flow graphs.
 
 **No database. No authentication. No external services required.**
 
@@ -10,16 +10,18 @@ A real-time web dashboard for visualizing eBPF programs running on a Linux kerne
 
 ## Features
 
-The visualizer provides seven distinct views, each designed to answer a different question about the BPF programs running on a system.
+The visualizer provides nine distinct views, each designed to answer a different question about the BPF programs running on a system.
 
 | View | Description |
 |------|-------------|
 | **Dashboard** | Summary statistics, program type breakdown, orphaned program alerts, recently loaded programs, and runtime activity charts |
 | **Kernel** | Attachment points organized by hook type — XDP, TC, Netfilter, Socket Filter, kprobe/fentry, Tracepoint, Perf Event, Cgroup Hooks, and more |
 | **Network** | Physical and virtual NICs with BPF programs grouped by OSI layer (L2–L7), including TC chain order and sockmap interfaces |
+| **Topology** | Network-namespace connectivity graph — host, container, and pod namespaces wired by veth/netkit pairs, with BPF programs attributed per interface |
 | **Cgroups** | Full cgroup hierarchy tree showing which BPF programs are attached at each node, with shared-bytecode color coding |
-| **Programs** | Sortable, filterable table of all loaded programs with live calls/sec sparklines, avg latency, CPU%, flags (JIT/GPL/BTF), and relative load time |
+| **Programs** | Sortable, filterable table of all loaded programs with live calls/sec sparklines, avg latency, CPU%, flags (JIT/GPL/BTF), relative load time, and a time scrubber to rewind stats across the recent history ring |
 | **Maps** | BPF map inventory with key/value sizes, live entry counts, locked memory, and an interactive entry dump viewer with JSON/CSV export |
+| **Diff** | Side-by-side comparison of two captured snapshots — programs, maps, and map entries added, removed, or changed between them |
 | **OS Map** | Interactive ReactFlow canvas showing the entire kernel topology — kernel zones, cgroup tree, network interfaces, and BPF maps — in a single scrollable diagram |
 
 ### Three Data Modes
@@ -27,7 +29,7 @@ The visualizer provides seven distinct views, each designed to answer a differen
 | Mode | How it works | When to use |
 |------|-------------|-------------|
 | **Live** | Polls `bpftool` every 5 s via Server-Sent Events | Running directly on the target Linux host |
-| **Demo** | Synthetic mock data with 26 realistic programs | Exploring the UI without a Linux host |
+| **Demo** | Synthetic mock data with 28 realistic programs | Exploring the UI without a Linux host |
 | **Snapshot** | Uploaded JSON file captured by `scripts/capture-snapshot.sh` | Inspecting production data on a local machine |
 
 ---
@@ -52,6 +54,12 @@ The Network view groups programs by interface and OSI layer. TC classifiers are 
 
 ![Network Interfaces](docs/screenshots/03-network.png)
 
+### Namespace Topology
+
+The Topology view shows how network namespaces are wired together by veth/netkit device pairs — host, containers, and pods. Solid boxes were scanned directly; dashed boxes are peers inferred from a device pair. BPF programs are attributed to the interface they are attached to, and ambiguous attributions are marked with `(?)`.
+
+![Namespace Topology](docs/screenshots/08-topology.png)
+
 ### Cgroup Hierarchy
 
 The Cgroups view renders the full `/sys/fs/cgroup` tree. Programs with identical compiled bytecode (same BPF tag) share a color dot — hovering reveals the tag hash and the list of cgroups that share it. Attach types are shown as labeled chips, and each cgroup node can be expanded or collapsed.
@@ -69,6 +77,12 @@ The Programs table lists every loaded BPF program with live runtime statistics. 
 The Maps view shows every BPF map with its type, key/value sizes, live entry count, and locked memory. Maps are categorized as Data, Event, or Socket. **Dump Entries** opens a modal with the full map contents, interpreted key/value pairs, and JSON/CSV export. Maps that cannot be iterated (`ringbuf`, `perf_event_array`) show a "Not dumpable" indicator.
 
 ![BPF Maps](docs/screenshots/06-maps.png)
+
+### Snapshot Diff
+
+The Diff view compares two captured snapshot files side by side. Programs are matched by name + bytecode and maps by name + type; added, removed, and changed entries are color-coded. Attaching a map-dump file to each side also diffs map *contents* key-by-key.
+
+![Snapshot Diff](docs/screenshots/10-diff.png)
 
 ### OS Map
 
@@ -117,26 +131,7 @@ See [DEPLOY.md](DEPLOY.md) for systemd service configuration, nginx reverse prox
 
 ---
 
-### Option B — Docker
-
-```bash
-docker build -t ebpf-viz .
-
-docker run --rm \
-  --privileged \
-  --pid=host \
-  --network=host \
-  -v /sys/fs/cgroup:/sys/fs/cgroup:ro \
-  -v /sys/kernel/debug:/sys/kernel/debug:ro \
-  -p 3000:3000 \
-  ebpf-viz
-```
-
-> **Minimal-privilege alternative:** replace `--privileged` with `--cap-add=SYS_ADMIN --cap-add=SYS_PTRACE`. Some kernels also require `--cap-add=BPF` (Linux ≥ 5.8).
-
----
-
-### Option C — Development Mode
+### Option B — Development Mode
 
 ```bash
 git clone https://github.com/mykola-lysenko/ebpf-viz.git
@@ -157,7 +152,7 @@ DEMO_MODE=true pnpm dev
 | Dependency | Version | Notes |
 |---|---|---|
 | Linux kernel | ≥ 5.1 | For `run_time_ns`/`run_cnt` stats; ≥ 4.15 for basic operation |
-| Node.js | ≥ 16 standalone runtime; ≥ 22 development/build | Corp devservers can run the standalone bundle on Node 16 |
+| Node.js | ≥ 16.5 standalone runtime; ≥ 22 development/build | Corp devservers can run the standalone bundle on Node 16 |
 | pnpm | ≥ 10 | `npm install -g pnpm` |
 | bpftool | ≥ 7.x | See [INSTALL.md](INSTALL.md) for build instructions |
 | sudo | any | The server calls `sudo bpftool`; configure sudoers accordingly |
@@ -241,7 +236,7 @@ ls captures/*snapshot*.json
 }
 ```
 
-Snapshots exported via the **Download Topology JSON** button in the OS Map toolbar use the same format and can be re-uploaded directly.
+Snapshots exported via the **Download Topology JSON** button in the OS Map toolbar carry the same `_ebpfVizSnapshot: true` marker and can be re-uploaded directly, but store the pre-parsed snapshot model rather than raw `bpftool` output.
 
 ---
 
@@ -252,11 +247,15 @@ All settings are provided as environment variables (or in a `.env` file). No dat
 | Variable | Default | Description |
 |---|---|---|
 | `PORT` | `3000` | HTTP listen port |
+| `HOST` | `127.0.0.1` | Interface to bind on. Loopback-only by default; set `0.0.0.0` or `::` to allow remote access |
 | `BPFTOOL_PATH` | auto-detected | Absolute path to the `bpftool` binary |
 | `DEMO_MODE` | `false` | Use synthetic mock data instead of live `bpftool` |
 | `POLL_INTERVAL_MS` | `5000` | Polling interval in milliseconds (1000–60000) |
 | `BPF_STATS_ENABLED` | auto | Set to `0` to skip enabling BPF runtime stats at startup |
 | `ADMIN_TOKEN` | unset | Optional token for remote access to config changes and bpftool-heavy endpoints; loopback requests are always allowed |
+| `EBPF_VIZ_ALLOWED_HOSTS` | unset | Extra hostnames accepted by the Host-header guard (comma-separated) — required when serving behind a reverse proxy or a non-localhost hostname |
+
+> **Remote access:** the server binds to loopback by default so an accidental run never exposes kernel BPF state to the network. To reach the dashboard from another machine, set `HOST=0.0.0.0` (or `::`) and add the hostname you browse to via `EBPF_VIZ_ALLOWED_HOSTS`.
 
 ---
 
@@ -326,7 +325,7 @@ GitHub Actions runs `ci.yml` on pull requests and pushes to `main`. It validates
 
 **Demo mode shows instead of live data**
 
-The poller fell back to mock data. Check the server log for the reason. Common causes: `bpftool` not found at `BPFTOOL_PATH`, sudo permission denied, or kernel too old (< 4.15).
+`bpftool` was not accessible when the server started, so it fell back to demo mode. Check the server log for the reason. Common causes: `bpftool` not found at `BPFTOOL_PATH`, sudo permission denied, or kernel too old (< 4.15). Poll errors *after* startup do not switch to demo mode — the server keeps serving the last good snapshot and reports the error in the poller status.
 
 **`bpftool: command not found`**
 

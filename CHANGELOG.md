@@ -2,6 +2,33 @@
 
 All notable user-facing changes are documented here.
 
+## [1.2.0] - 2026-07-17
+
+### Added
+
+- Topology view: a network-namespace connectivity graph showing host, container, and pod namespaces wired by veth/netkit pairs, with BPF programs attributed per interface.
+- Namespace-aware polling: the server scans container/pod network namespaces (including Docker-bridge discovery) so programs attached inside them are visible, with pseudo-interfaces for unreachable foreign netdev links.
+- Snapshot Diff view: load two snapshot files side by side and see programs, maps, and map entry contents added, removed, or changed between them.
+- Time scrubbing in the Programs view: rewind live runtime stats across the recent history ring.
+- URL deep links for the selected program/map and for table filters and sort order — shareable, reload-safe view state.
+- Map ↔ program cross-navigation between the Maps and Programs views.
+- Ownership attribution improvements: programs are enriched from `bpftool link list`, bpffs pin paths are surfaced as an ownership breadcrumb, and owners are inferred from attachment evidence when no PID is visible.
+- `BPF_STATS_ENABLED=0` environment variable to opt out of enabling kernel BPF runtime stats at startup.
+- Local BPF lab (`lab/`): veth/netkit playgrounds and demo loaders for exercising the dashboard against real programs.
+
+### Changed
+
+- The server now binds to loopback (`127.0.0.1`) by default; set `HOST` to expose it and `EBPF_VIZ_ALLOWED_HOSTS` to satisfy the new Host-header guard.
+- Poll errors no longer swap in mock data; the server keeps serving the last good snapshot and reports the error via the poller status. Demo mode is only entered explicitly or when bpftool is unavailable at startup.
+- SSE stream hashes are memoized, reducing per-poll serialization cost.
+
+### Fixed
+
+- Kernel sysctls changed for map dumps and runtime stats are restored on shutdown, including races between concurrent dumps and shutdown.
+- bpftool integration fixes: pinned paths reported via `-f`, real `perf_event` link type matched, tracing/ext program types classified correctly, and a startup warning when bpftool lacks skeleton (`pids`) support.
+- bpftool's own skeleton/libbpf internal maps are filtered out of the Maps view.
+- Client selection/URL-sync update loops eliminated; topology layout no longer overlaps peer nodes.
+
 ## [1.1.0] - 2026-06-30
 
 ### Added

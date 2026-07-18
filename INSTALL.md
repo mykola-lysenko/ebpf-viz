@@ -2,21 +2,22 @@
 
 A real-time dashboard for visualizing BPF programs running on a Linux system.
 Polls `bpftool` every 5 seconds and renders kernel attachment zones, network
-interfaces with OSI layers, cgroup hierarchies, an OS Map canvas, and a Code
-Inspector with BPF bytecode and control-flow graphs.
+interfaces with OSI layers, cgroup hierarchies, a network-namespace topology
+graph, an OS Map canvas, snapshot diffing, and a Code Inspector with BPF
+bytecode and control-flow graphs.
 
 **No database. No authentication. No external services required.**
 
 ---
 
-## Option C — Standalone Package (no npm on target)
+## Option A — Standalone Package (no npm on target)
 
 If your devserver has **only Node.js** (no npm, no Docker, no internet access), use the standalone build script to produce a self-contained tarball on your Mac and copy it over.
 
-### Build on your Mac
+### Build on your workstation
 
 ```bash
-# From the project root (requires Node.js ≥ 18 + pnpm or npm)
+# From the project root (requires Node.js ≥ 22 + pnpm or npm)
 ./build-standalone.sh
 ```
 
@@ -43,11 +44,16 @@ cd standalone
 cp .env.example .env
 vi .env
 
-# Start (requires Node.js ≥ 16 only)
+# Start (requires Node.js ≥ 16.5 only)
 sudo ./start.sh          # sudo needed for bpftool access
 ```
 
-Open `http://devserver:3000` in your browser.
+Open `http://localhost:3000` in your browser (e.g. through an SSH tunnel:
+`ssh -L 3000:localhost:3000 user@devserver`).
+
+> **Remote access:** the server binds to loopback only by default. To browse
+> directly from another machine, set `HOST=0.0.0.0` and add the hostname you
+> use in the browser to `EBPF_VIZ_ALLOWED_HOSTS` (comma-separated) in `.env`.
 
 **To run in the background:**
 ```bash
@@ -78,35 +84,6 @@ No database, no OAuth, no API keys required.
 | pnpm | ≥ 10 | `npm install -g pnpm` |
 | bpftool | ≥ 7.x | See build instructions below |
 | sudo | any | The server calls `sudo bpftool`; configure sudoers accordingly |
-
----
-
-## Option A — Docker (recommended)
-
-The included `Dockerfile` builds bpftool from source and bundles everything
-into a single image. The container must run with elevated privileges so
-bpftool can access the BPF subsystem of the **host** kernel.
-
-```bash
-# Build
-docker build -t ebpf-viz .
-
-# Run (privileged, host network so kernel/cgroup data is the host's)
-docker run --rm \
-  --privileged \
-  --pid=host \
-  --network=host \
-  -v /sys/fs/cgroup:/sys/fs/cgroup:ro \
-  -v /sys/kernel/debug:/sys/kernel/debug:ro \
-  -p 3000:3000 \
-  ebpf-viz
-```
-
-Open `http://localhost:3000` in your browser.
-
-> **Minimal-privilege alternative:** replace `--privileged` with
-> `--cap-add=SYS_ADMIN --cap-add=SYS_PTRACE`. Some kernels also require
-> `--cap-add=BPF` (Linux ≥ 5.8).
 
 ---
 
@@ -196,7 +173,7 @@ sudo bpftool prog list
 ```
 
 You should see a list of running BPF programs (or an empty list — that is
-normal; the visualizer will show demo data in that case).
+normal; the visualizer will simply show zero programs until some are loaded).
 
 ---
 
@@ -278,7 +255,7 @@ sudo -u youruser sudo /usr/local/sbin/bpftool prog list
 Copy the sample config:
 
 ```bash
-cp config.sample .env
+cp .env.example .env
 ```
 
 Edit `.env` — only these four variables are needed, all have sensible defaults:
@@ -361,6 +338,10 @@ server {
 
 Add TLS: `sudo certbot --nginx -d ebpf.yourdomain.com`
 
+> The proxy forwards `Host: ebpf.yourdomain.com`, which the server's
+> Host-header guard rejects by default. Add it to the allowlist in `.env`:
+> `EBPF_VIZ_ALLOWED_HOSTS=ebpf.yourdomain.com`
+
 ---
 
 ## Configuration reference
@@ -371,9 +352,13 @@ process). No database or auth configuration is required.
 | Variable | Default | Description |
 |---|---|---|
 | `PORT` | `3000` | HTTP listen port |
-| `BPFTOOL_PATH` | `/usr/local/sbin/bpftool` | Absolute path to bpftool binary |
+| `HOST` | `127.0.0.1` | Interface to bind on; loopback-only by default, set `0.0.0.0` or `::` for remote access |
+| `BPFTOOL_PATH` | auto-detected | Absolute path to bpftool binary |
 | `DEMO_MODE` | `false` | Use rich mock data instead of live bpftool |
 | `POLL_INTERVAL_MS` | `5000` | Polling interval in milliseconds (1000–60000) |
+| `BPF_STATS_ENABLED` | auto | Set to `0` to skip enabling BPF runtime stats at startup |
+| `ADMIN_TOKEN` | unset | Optional token for remote access to config changes and bpftool-heavy endpoints |
+| `EBPF_VIZ_ALLOWED_HOSTS` | unset | Extra hostnames accepted by the Host-header guard (comma-separated) |
 
 ---
 
@@ -435,7 +420,7 @@ Your system may have no BPF programs loaded. Verify directly:
 sudo bpftool prog list
 ```
 
-If the list is empty, the visualizer will automatically show demo data.
+If the list is empty, the visualizer will show an empty (but live) dashboard.
 Trigger some cgroup programs by restarting a systemd service:
 
 ```bash

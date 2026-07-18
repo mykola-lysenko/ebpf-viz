@@ -1,6 +1,6 @@
 # Standalone Deployment Guide
 
-This guide explains how to build a self-contained deployment package for the eBPF Visualizer and run it on a devserver that has only **Node.js ≥ 16** installed — no `npm`, `pnpm`, or Docker required.
+This guide explains how to build a self-contained deployment package for the eBPF Visualizer and run it on a devserver that has only **Node.js ≥ 16.5** installed — no `npm`, `pnpm`, or Docker required.
 
 ---
 
@@ -9,7 +9,7 @@ This guide explains how to build a self-contained deployment package for the eBP
 | Machine | Requirements |
 |---------|-------------|
 | **Build machine** (your laptop) | Node.js ≥ 22, pnpm/corepack, internet access |
-| **Target devserver** | Node.js ≥ 16, `bpftool` (for live mode), root/sudo access |
+| **Target devserver** | Node.js ≥ 16.5, `bpftool` (for live mode), root/sudo access |
 
 ---
 
@@ -59,11 +59,13 @@ The `.env` file supports the following variables:
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `PORT` | `3000` | TCP port the HTTP server listens on |
+| `HOST` | `127.0.0.1` | Interface to bind on; loopback-only by default, set `0.0.0.0` or `::` for remote access |
 | `NODE_ENV` | `production` | Must be `production` for standalone mode |
 | `DEMO_MODE` | _(unset)_ | Set to `1` to use mock data instead of calling `bpftool` |
 | `POLL_INTERVAL_MS` | `5000` | How often (ms) to poll `bpftool` for updates |
 | `BPF_STATS_ENABLED` | _(auto)_ | Set to `0` to skip enabling BPF runtime stats |
 | `ADMIN_TOKEN` | _(unset)_ | Optional token for remote access to config changes and bpftool-heavy endpoints; enter it in Settings → Admin Access |
+| `EBPF_VIZ_ALLOWED_HOSTS` | _(unset)_ | Extra hostnames accepted by the Host-header guard (comma-separated) — needed when browsing via a non-localhost hostname or reverse proxy |
 
 ---
 
@@ -81,7 +83,13 @@ Open http://localhost:3000 in your browser.
 Press Ctrl+C to stop.
 ```
 
-Open `http://<devserver-ip>:3000` in your browser.
+Open `http://localhost:3000` in your browser — by default the server binds to
+loopback only, so from your laptop use an SSH tunnel
+(`ssh -L 3000:localhost:3000 user@devserver`).
+
+To browse `http://<devserver-ip>:3000` directly instead, set `HOST=0.0.0.0`
+(or `::`) and add the name/IP you type in the browser to
+`EBPF_VIZ_ALLOWED_HOSTS` in `.env`.
 
 ### Running Without Root (Demo Mode)
 
@@ -110,6 +118,9 @@ Restart=on-failure
 RestartSec=5
 Environment=NODE_ENV=production
 Environment=PORT=3000
+# Uncomment to allow access from other machines (see EBPF_VIZ_ALLOWED_HOSTS above):
+# Environment=HOST=0.0.0.0
+# Environment=EBPF_VIZ_ALLOWED_HOSTS=mydevserver.example.com
 # Uncomment to enable demo mode:
 # Environment=DEMO_MODE=1
 
@@ -167,7 +178,7 @@ Change the port: `PORT=8080 sudo ./start.sh`
 
 **Server exits immediately with a module error**
 
-Ensure Node.js ≥ 16 is installed: `node --version`. The standalone package includes the Node 16 Web API polyfill dependencies needed by the tRPC server.
+Ensure Node.js ≥ 16.5 is installed: `node --version`. The standalone package includes the Node 16 Web API polyfill dependencies needed by the tRPC server.
 
 ---
 
@@ -233,7 +244,7 @@ scp user@myserver:/path/to/ebpf-snapshot-myserver-20260312-151100.json ~/Downloa
 3. Select the `.json` file you downloaded.
 4. The UI switches to **Snapshot mode** — a `SNAPSHOT` badge appears in the toolbar with the capture timestamp and hostname.
 
-All views (Dashboard, Programs, Maps, OS Map, Cgroups) render the snapshot data identically to live mode. The snapshot is held in memory and is lost on page reload.
+All views (Dashboard, Kernel, Network, Topology, Cgroups, Programs, Maps, OS Map) render the snapshot data identically to live mode, and the Diff view can compare two snapshot files side by side. The snapshot is held in memory and is lost on page reload.
 
 ### Step 4 — Clear the Snapshot
 
