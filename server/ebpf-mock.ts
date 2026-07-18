@@ -2,6 +2,14 @@ import type { RawBpfLink, RawBpfProg, RawCgroupEntry, RawNetSnapshot, RawNetnsSn
 
 const NOW = Math.floor(Date.now() / 1000);
 
+/** Synthetic host identity for demo mode — keeps the real machine's
+ *  hostname/kernel out of demo headers, screenshots, and exported snapshots. */
+export const MOCK_SYSTEM = {
+  hostname: "demo-host",
+  kernelVersion: "6.12.8-generic",
+  bpftoolVersion: "7.4.0",
+} as const;
+
 export const MOCK_PROGS: RawBpfProg[] = [
   // XDP programs
   { id: 1, type: "xdp", name: "xdp_drop_icmp", tag: "a1b2c3d4e5f60001", gpl_compatible: true, loaded_at: NOW - 3600, uid: 0, orphaned: false, bytes_xlated: 256, jited: true, bytes_memlock: 4096, map_ids: [10, 11] },

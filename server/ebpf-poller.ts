@@ -18,7 +18,7 @@ import type {
 import { buildSnapshot, netnsLinkKind, PAIRED_LINK_KINDS } from "./ebpf-parser";
 import { buildMockMaps, parseMaps } from "./ebpf-map-parser";
 import { discoverNetNamespaces, type NetnsReach } from "./ebpf-netns";
-import { MOCK_CGROUPS, MOCK_LINKS, MOCK_NET, MOCK_NETNS, MOCK_PROGS } from "./ebpf-mock";
+import { MOCK_CGROUPS, MOCK_LINKS, MOCK_NET, MOCK_NETNS, MOCK_PROGS, MOCK_SYSTEM } from "./ebpf-mock";
 import {
   ingestSnapshot,
   pruneStale,
@@ -103,6 +103,14 @@ async function ensureBpfStatsEnabled(): Promise<void> {
     if (current === 1) {
       statsEnabled = true;
       console.log("[ebpf-poller] bpf_stats_enabled is already 1 — run_time_ns will be collected");
+      return;
+    }
+    // BPF_STATS_ENABLED=0 opts out of flipping the sysctl (stats add
+    // per-invocation overhead to every BPF program on the system).
+    const optOut = process.env.BPF_STATS_ENABLED;
+    if (optOut === "0" || optOut?.toLowerCase() === "false") {
+      statsEnabled = false;
+      console.log("[ebpf-poller] BPF_STATS_ENABLED=0 — leaving kernel.bpf_stats_enabled off; run_time_ns will be 0");
       return;
     }
     // Try to enable it
@@ -473,7 +481,7 @@ async function poll(): Promise<void> {
       net,
       cgroups,
       {
-        hostname: hostname(),
+        hostname: config.demoMode ? MOCK_SYSTEM.hostname : hostname(),
         kernelVersion,
         bpftoolVersion,
         demoMode: config.demoMode,
@@ -534,6 +542,8 @@ export async function startPoller(): Promise<void> {
   if (config.demoMode) {
     console.log("[ebpf-poller] Demo mode enabled via DEMO_MODE env var — using synthetic data");
     statsEnabled = true;
+    kernelVersion = MOCK_SYSTEM.kernelVersion;
+    bpftoolVersion = MOCK_SYSTEM.bpftoolVersion;
   } else {
     // Check if bpftool is actually available (runs in background)
     try {
@@ -545,6 +555,8 @@ export async function startPoller(): Promise<void> {
       console.warn("[ebpf-poller] bpftool not accessible, enabling demo mode");
       config.demoMode = true;
       statsEnabled = true; // demo mode always has stats
+      kernelVersion = MOCK_SYSTEM.kernelVersion;
+      bpftoolVersion = MOCK_SYSTEM.bpftoolVersion;
     }
   }
 
