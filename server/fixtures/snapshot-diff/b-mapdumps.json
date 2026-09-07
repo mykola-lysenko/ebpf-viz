@@ -1,0 +1,74 @@
+{
+  "_ebpfVizMapDumps": true,
+  "_version": 2,
+  "hostname": "fixture-b",
+  "mapDumps": {
+    "20": {
+      "complete": false,
+      "entries": [
+        {
+          "key": [
+            "0x02"
+          ],
+          "value": [
+            "0xb9"
+          ]
+        }
+      ],
+      "error": "fixture capture timeout",
+      "truncated": true,
+      "totalEntries": 30
+    },
+    "21": {
+      "complete": true,
+      "entries": []
+    },
+    "60": {
+      "complete": true,
+      "entries": [
+        {
+          "key": {
+            "id": 1
+          },
+          "value": {
+            "count": 1
+          }
+        },
+        {
+          "key": {
+            "id": 2
+          },
+          "value": {
+            "count": 3
+          }
+        }
+      ]
+    },
+    "40": {
+      "complete": true,
+      "entries": [
+        {
+          "key": [
+            "0x01"
+          ],
+          "value": [
+            "0x28"
+          ]
+        }
+      ]
+    },
+    "41": {
+      "complete": true,
+      "entries": [
+        {
+          "key": [
+            "0x01"
+          ],
+          "value": [
+            "0x29"
+          ]
+        }
+      ]
+    }
+  }
+}

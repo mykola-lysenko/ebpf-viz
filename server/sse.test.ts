@@ -241,6 +241,25 @@ describe("sseHandler", () => {
     expect(events).not.toContain("maps");
   });
 
+  it("delivers collection failures and freshness via metrics without resending unchanged topology", () => {
+    let callback: (snap: EbpfSnapshot) => void = () => {};
+    mockSubscribeFn.mockImplementation((cb: typeof callback) => { callback = cb; return () => {}; });
+    const base = makeSnapshot([{ id: 1, runCnt: 10, runTimeNs: 1000 }], 1000);
+    mockGetLatestSnapshot.mockReturnValue(base);
+    const req = makeMockReq();
+    const res = makeMockRes();
+    sseHandler(req, res);
+    const before = res.written.length;
+    const collection = { sources: { progs: { label: "Programs", state: "error" as const,
+      attemptedAt: 2000, lastSuccessAt: 1000, error: "permission denied" } } };
+    callback({ ...base, timestamp: 2000, collection });
+    const frames = res.written.slice(before);
+    expect(eventNames(frames)).toContain("snapshot-metrics");
+    expect(eventNames(frames)).not.toContain("snapshot");
+    expect(frames.join("")).toContain("permission denied");
+    expect(frames.join("")).toContain('"lastSuccessAt":1000');
+  });
+
   it("sends a full snapshot again when topology changes", () => {
     let capturedCb: ((snap: EbpfSnapshot) => void) | null = null;
     mockSubscribeFn.mockImplementation((cb: (snap: EbpfSnapshot) => void) => {

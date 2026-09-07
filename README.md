@@ -54,6 +54,10 @@ The Network view groups programs by interface and OSI layer. TC classifiers are 
 
 ![Network Interfaces](docs/screenshots/03-network.png)
 
+TCX chains distinguish kernel query order from unknown order and show legacy TC
+as a conditional following stage. See the [TCX audit](docs/tcx-audit.md) for
+measured ingress/egress behavior, revision limitations, and reproducible captures.
+
 ### Namespace Topology
 
 The Topology view shows how network namespaces are wired together by veth/netkit device pairs — host, containers, and pods. Solid boxes were scanned directly; dashed boxes are peers inferred from a device pair. BPF programs are attributed to the interface they are attached to, and ambiguous attributions are marked with `(?)`.
@@ -80,7 +84,7 @@ The Maps view shows every BPF map with its type, key/value sizes, live entry cou
 
 ### Snapshot Diff
 
-The Diff view compares two captured snapshot files side by side. Programs are matched by name + bytecode and maps by name + type; added, removed, and changed entries are color-coded. Attaching a map-dump file to each side also diffs map *contents* key-by-key.
+The Diff view compares two captured snapshot files side by side. Programs are matched by name, type, and bytecode tag; maps by name and type. Duplicate identities require unique pin-path evidence, and unresolved clones are shown as ambiguous. Relationship and pin-path changes are detected even when counts stay equal. Companion map dumps use those same matches; incomplete dumps show unverified absence instead of confirmed deletions. See [snapshot comparison semantics](docs/snapshot-diff.md).
 
 ![Snapshot Diff](docs/screenshots/10-diff.png)
 
@@ -180,6 +184,13 @@ The visualizer attempts to enable this sysctl automatically at startup when it h
 
 ## Snapshot Workflow
 
+Snapshots carry collection status and last-success times for each source. The
+collection panel distinguishes successful empty results from stale, failed,
+unsupported, or deferred collections and shows namespace scan limits. Older
+files remain supported with unknown coverage. Diff views warn when collection
+gaps could explain apparent changes. See [collection status](docs/collection-status.md)
+for the freshness and capture semantics.
+
 The snapshot workflow lets you capture a point-in-time view of BPF programs from a production server and visualize it on your local machine — without installing the full eBPF Viz on the production host.
 
 ### Step 1 — Capture
@@ -199,9 +210,10 @@ The relay writes files under `captures/` by default:
 - `<target>-snapshot-<YYYYMMDD-HHMMSS>.json` — topology snapshot (~0.3 MB typical)
 - `<target>-snapshot-<YYYYMMDD-HHMMSS>-mapdumps.json` — map entry contents (size varies; only with `--dump-maps`)
 
-Map dump files preserve raw map entries when feasible; unsupported map types are
-skipped, and the UI displays up to 1000 entries per map while preserving total
-entry counts.
+Map dump files preserve raw entries, acquisition errors, and skip reasons. The
+UI displays up to 1000 entries per map while preserving total counts and
+truncation evidence. Legacy array-only dumps remain importable with unknown
+acquisition completeness.
 
 ### Step 2 — Locate Files
 

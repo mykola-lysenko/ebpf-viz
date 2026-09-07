@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { diffSnapshots, diffMapEntries } from "../shared/snapshot-diff";
-import type { BpfProgram, BpfMap, EbpfSnapshot, MapEntry } from "../shared/ebpf-types";
+import { diffSnapshots, diffMapEntries, diffSnapshotMapEntries } from "../shared/snapshot-diff";
+import type { BpfProgram, BpfMap, EbpfSnapshot, MapEntry, MapDumpResult } from "../shared/ebpf-types";
 
 function prog(over: Partial<BpfProgram> & { id: number }): BpfProgram {
   return {
@@ -96,12 +96,13 @@ describe("diffSnapshots", () => {
     expect(d.programs.changed[0].changes).toContain("became orphaned");
   });
 
-  it("pairs clones by id and reports the extra as added", () => {
-    // Two clones in A (same key), three in B → one added, none removed.
+  it("leaves clones ambiguous even when kernel IDs overlap", () => {
     const clones = (ids: number[]) => ids.map(id => prog({ id, name: "clone", tag: "c" }));
     const d = diffSnapshots(snap(clones([1, 2])), snap(clones([1, 2, 3])));
-    expect(d.programs.added).toHaveLength(1);
+    expect(d.programs.added).toHaveLength(0);
     expect(d.programs.removed).toHaveLength(0);
+    expect(d.programs.ambiguous[0]).toMatchObject({ beforeIds: [1, 2], afterIds: [1, 2, 3] });
+    expect(d.summary.identical).toBe(false);
   });
 
   it("diffs maps by name#type with field changes", () => {
@@ -182,4 +183,140 @@ describe("diffMapEntries (map contents)", () => {
     const d2 = diffMapEntries([entry({ keyHex: "07", valueHex: "aa" })], [entry({ keyHex: "07", valueHex: "bb", keyDecimal: "7" })]);
     expect(d2.changed[0].keyLabel).toBe("7"); // decimal used when no BTF
   });
+});
+
+function dump(entries: MapEntry[], over: Partial<MapDumpResult> = {}): MapDumpResult {
+  return { mapId: 1, mapType: "hash", mapName: "cfg", entries, totalEntries: entries.length,
+    maxReturned: 1000, truncated: false, error: null, unsupported: false, btfDecoded: false, complete: true, ...over };
+}
+
+describe("snapshot identity and relationship evidence", () => {
+  it("compares relationships through matched identities across hosts and reloads", () => {
+    const a = snap([prog({ id: 1, name: "p", mapIds: [10, 11] })]);
+    const b = { ...snap([prog({ id: 9, name: "p", mapIds: [21, 20] })]), hostname: "other-host" };
+    const d = diffSnapshots(a, b,
+      [map({ id: 10, name: "x", usedByProgIds: [1] }), map({ id: 11, name: "y", usedByProgIds: [1] })],
+      [map({ id: 20, name: "x", usedByProgIds: [9] }), map({ id: 21, name: "y", usedByProgIds: [9] })]);
+    expect(d.summary.identical).toBe(true);
+  });
+  it("detects same-count replacements of program maps and map users", () => {
+    const a = snap([prog({ id: 1, name: "p", mapIds: [10] }), prog({ id: 2, name: "q", mapIds: [11] })]);
+    const b = snap([prog({ id: 9, name: "p", mapIds: [21] }), prog({ id: 8, name: "q", mapIds: [20] })]);
+    const d = diffSnapshots(a, b,
+      [map({ id: 10, name: "x", usedByProgIds: [1] }), map({ id: 11, name: "y", usedByProgIds: [2] })],
+      [map({ id: 20, name: "x", usedByProgIds: [8] }), map({ id: 21, name: "y", usedByProgIds: [9] })]);
+    expect(d.programs.changed).toHaveLength(2);
+    expect(d.programs.changed[0].changes).toContain("maps added: B #21");
+    expect(d.maps.changed).toHaveLength(2);
+  });
+  it("detects replaced pin paths and ignores ordering and duplicate paths", () => {
+    const d = diffSnapshots(snap([prog({ id: 1, name: "p", pinnedPaths: ["/old"] })]),
+      snap([prog({ id: 2, name: "p", pinnedPaths: ["/new"] })]),
+      [map({ id: 1, name: "m", pinnedPaths: ["/a", "/b", "/a"] })],
+      [map({ id: 2, name: "m", pinnedPaths: ["/b", "/a"] })]);
+    expect(d.programs.changed[0].changes).toEqual(["pins added: /new", "pins removed: /old"]);
+    expect(d.maps.changed).toEqual([]);
+    const maps = diffSnapshots(snap([]), snap([]), [map({ id: 1, name: "m", pinnedPaths: ["/old"] })], [map({ id: 2, name: "m", pinnedPaths: ["/new"] })]);
+    expect(maps.maps.changed[0].changes).toContain("pins removed: /old");
+  });
+  it("uses the same pin-disambiguated clone pairs for inventory and contents", () => {
+    const a = [map({ id: 1, name: "clone", pinnedPaths: ["/x"] }), map({ id: 2, name: "clone", pinnedPaths: ["/y"] })];
+    const b = [map({ id: 1, name: "clone", pinnedPaths: ["/y"] }), map({ id: 2, name: "clone", pinnedPaths: ["/x"] })];
+    const d = diffSnapshots(snap([]), snap([]), a, b);
+    expect(d.maps.matched).toEqual([{ beforeId: 1, afterId: 2 }, { beforeId: 2, afterId: 1 }]);
+    const x = dump([entry({ keyHex: "01", valueHex: "aa" })]), y = dump([entry({ keyHex: "01", valueHex: "bb" })]);
+    const contents = diffSnapshotMapEntries(d.maps, b, { 1: x, 2: y }, { 1: y, 2: x });
+    expect(contents).toHaveLength(2);
+    expect(contents.every(c => c.diff.identical)).toBe(true);
+  });
+  it("does not choose a first clone or infer relationships through ambiguous targets", () => {
+    const maps = [map({ id: 1, name: "clone" }), map({ id: 2, name: "clone" })];
+    const d = diffSnapshots(snap([prog({ id: 1, name: "p", mapIds: [1] })]), snap([prog({ id: 1, name: "p", mapIds: [2] })]), maps, maps);
+    expect(d.maps.matched).toEqual([]);
+    expect(d.programs.uncertain[0]).toContain("map relationships unverified");
+    expect(d.summary.identical).toBe(false);
+    expect(diffSnapshotMapEntries(d.maps, maps, { 1: dump([]) }, { 1: dump([]) })).toEqual([]);
+  });
+  it("does not use a dangling ID as proof of relationship equality", () => {
+    const s = snap([prog({ id: 1, name: "p", mapIds: [99] })]);
+    const d = diffSnapshots(s, s);
+    expect(d.programs.uncertain).toHaveLength(1);
+    expect(d.summary.identical).toBe(false);
+  });
+  it("includes program type in identity and does not treat ID reuse as continuity", () => {
+    const d = diffSnapshots(snap([prog({ id: 1, name: "p", rawType: "kprobe" })]), snap([prog({ id: 1, name: "p", rawType: "xdp" })]));
+    expect(d.programs.matched).toEqual([]);
+    expect(d.programs.added).toHaveLength(1);
+    expect(d.programs.removed).toHaveLength(1);
+  });
+  it("normalizes owner process names as sets", () => {
+    const a = snap([prog({ id: 1, name: "p", pids: [{ pid: 1, comm: "x" }, { pid: 2, comm: "y" }] })]);
+    const b = snap([prog({ id: 2, name: "p", pids: [{ pid: 3, comm: "y" }, { pid: 4, comm: "x" }, { pid: 5, comm: "x" }] })]);
+    expect(diffSnapshots(a, b).summary.identical).toBe(true);
+  });
+});
+
+describe("incomplete map contents and decoded data", () => {
+  const x = entry({ keyHex: "01", valueHex: "aa" });
+  const y = entry({ keyHex: "02", valueHex: "bb" });
+  it.each([{ truncated: true, totalEntries: 10 }, { error: "permission denied" }, { unsupported: true }, { complete: false }])(
+    "does not confirm deletion or equality from an incomplete B dump: %j", partial => {
+      const d = diffMapEntries(dump([x, y]), dump([x], partial));
+      expect(d.removed).toEqual([]);
+      expect(d.onlyBefore).toEqual([y]);
+      expect(d.identical).toBe(false);
+      expect(diffMapEntries(dump([x], partial), dump([x], partial)).identical).toBe(false);
+    });
+  it("does not confirm additions against an incomplete baseline, but compares shared readable values", () => {
+    const d = diffMapEntries(dump([x], { truncated: true, totalEntries: 5 }), dump([{ ...x, valueHex: "cc" }, y]));
+    expect(d.added).toEqual([]);
+    expect(d.onlyAfter).toEqual([y]);
+    expect(d.changed).toHaveLength(1);
+  });
+  it("shows missing dumps and distinguishes a successful empty dump", () => {
+    expect(diffMapEntries(null, dump([])).identical).toBe(false);
+    expect(diffMapEntries(dump([]), dump([])).identical).toBe(true);
+    expect(diffMapEntries(dump([x]), dump([])).removed).toEqual([x]);
+  });
+  it("does not collapse distinct BTF keys and compares decoded values canonically", () => {
+    const one = entry({ keyHex: "", keyBtf: '{"id":1,"zone":2}', valueHex: "", valueBtf: '{"a":1,"b":2}' });
+    const two = entry({ keyHex: "", keyBtf: '{"id":2}', valueHex: "", valueBtf: '3' });
+    const d = diffMapEntries([one, two], [{ ...one, keyBtf: '{"zone":2,"id":1}', valueBtf: '{"b":2,"a":1}' }, { ...two, valueBtf: '4' }]);
+    expect(d.changed).toHaveLength(1);
+    expect(d.changed[0].keyLabel).toBe('{"id":2}');
+    expect(d.added).toEqual([]);
+    expect(d.removed).toEqual([]);
+  });
+  it("leaves read errors unresolved instead of presenting them as values", () => {
+    const d = diffMapEntries(dump([x]), dump([{ ...x, valueHex: "", valueError: "ENOENT" }]));
+    expect(d.changed).toEqual([]);
+    expect(d.identical).toBe(false);
+    expect(d.warnings.join(" ")).toContain("ENOENT");
+  });
+  it("flags duplicate keys instead of silently selecting a value", () => {
+    const d = diffMapEntries([x, { ...x, valueHex: "ff" }], [x]);
+    expect(d.identical).toBe(false);
+    expect(d.changed).toEqual([]);
+    expect(d.warnings.join(" ")).toContain("duplicate");
+  });
+  it("does not infer additions and removals between incomparable key encodings", () => {
+    const d = diffMapEntries([x], [{ ...x, keyHex: "", keyBtf: "1" }]);
+    expect(d.added).toEqual([]);
+    expect(d.removed).toEqual([]);
+    expect(d.onlyBefore).toHaveLength(1);
+    expect(d.onlyAfter).toHaveLength(1);
+  });
+  it("ignores per-CPU order and its redundant display value", () => {
+    const a = entry({ keyHex: "01", valueHex: "aa", perCpuValues: [{ cpu: 0, hex: "aa", decimal: null }, { cpu: 1, hex: "bb", decimal: null }] });
+    expect(diffMapEntries([a], [{ ...a, valueHex: "bb", perCpuValues: [...a.perCpuValues!].reverse() }]).identical).toBe(true);
+  });
+});
+
+
+it("reports missing bytecode identity instead of inventing a reload or equality", () => {
+  const d = diffSnapshots(snap([prog({ id: 1, name: "p", tag: "0000000000000000" })]), snap([prog({ id: 2, name: "p", tag: "real" })]));
+  expect(d.programs.matched).toEqual([]);
+  expect(d.programs.added).toEqual([]);
+  expect(d.programs.removed).toEqual([]);
+  expect(d.programs.ambiguous[0].reason).toContain("Bytecode identity is unavailable");
 });

@@ -1,3 +1,5 @@
+import type { CollectionStatus } from "./collection-status";
+
 // ─── Raw bpftool JSON shapes ───────────────────────────────────────────────
 
 export interface RawBpfProg {
@@ -413,7 +415,16 @@ export interface ProgramChain {
   attachPoint: string;
   /** Specific attach type, e.g. "cgroup_inet4_connect", "clsact/ingress" */
   attachType: string;
-  /** Programs in execution order (position is 1-based) */
+  /** Namespace label, absent for the host namespace. */
+  netns?: string;
+  mechanism?: "tcx" | "legacy-tc";
+  /** Positions are display order only when ordering is unknown. */
+  ordering?: "kernel-query" | "tc-priority" | "unknown";
+  /** Query revision, only when explicitly collected. bpftool net omits it. */
+  revision?: number;
+  /** Legacy TC is reachable only if all preceding TCX programs return NEXT. */
+  afterTcx?: boolean;
+  /** Programs in execution order when known (position is 1-based). */
   programs: Array<{
     id: number;
     position: number;
@@ -546,6 +557,7 @@ export interface PacketChainPrediction {
 // ─── Top-level snapshot ────────────────────────────────────────────────────
 
 export interface EbpfSnapshot {
+  collection?: CollectionStatus;
   timestamp: number;
   hostname: string;
   kernelVersion: string;
@@ -635,6 +647,7 @@ export interface ActivitySummary {
 
 /** Lightweight per-poll metric update sent over SSE when topology is unchanged. */
 export interface SnapshotMetricsUpdate {
+  collection?: CollectionStatus;
   timestamp: number;
   stats: EbpfSnapshot["stats"];
   programs: Array<{
@@ -1170,6 +1183,9 @@ export interface ProgArrayTarget {
 
 /** Result of a map dump operation */
 export interface MapDumpResult {
+  /** False when acquisition completeness is unknown or explicitly partial.
+   * Older normalized results use error/truncated/unsupported fields instead. */
+  complete?: boolean;
   mapId: number;
   mapType: string;
   mapName: string;

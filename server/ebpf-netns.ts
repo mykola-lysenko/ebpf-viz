@@ -1,3 +1,4 @@
+import { describeCollectionError } from "./collection";
 import { exec, execFile } from "child_process";
 import { readdir, readlink, readFile, stat } from "fs/promises";
 import { promisify } from "util";
@@ -63,13 +64,15 @@ export function dedupeNetnsLabels<T extends { id: string; label: string }>(
  *  netns inode are skipped — the nsenter path covers them; the docker-exec
  *  path is for containers in a separate VM (WSL + Docker Desktop). */
 export async function discoverDockerNamespaces(
-  seenInodes: Set<string>
+  seenInodes: Set<string>,
+  issues: DiscoveryIssue[] = []
 ): Promise<NetnsRef[]> {
   let idsOut: string;
   try {
     idsOut = (await execAsync("docker ps -q", { timeout: 5000 })).stdout;
-  } catch {
-    return []; // no docker, or daemon down
+  } catch (error) {
+    issues.push({ label: "Docker namespace discovery", ...describeCollectionError(error) });
+    return [];
   }
   const ids = idsOut
     .trim()
@@ -87,7 +90,8 @@ export async function discoverDockerNamespaces(
         { timeout: 5000, maxBuffer: 4 * 1024 * 1024 }
       )
     ).stdout;
-  } catch {
+  } catch (error) {
+    issues.push({ label: "Docker container inspection", ...describeCollectionError(error) });
     return [];
   }
 
@@ -149,10 +153,18 @@ async function readContainerHostname(pid: number): Promise<string | null> {
  * not every poll, and the full scan costs a /proc sweep + docker round-trip.
  */
 const DISCOVERY_TTL_MS = 30_000;
-let cachedRefs: NetnsRef[] | null = null;
+export interface DiscoveryIssue { label: string; state: "error" | "unsupported"; error: string }
+export interface NetnsDiscovery {
+  refs: NetnsRef[];
+  at: number;
+  discovered: number;
+  omitted: number;
+  issues: DiscoveryIssue[];
+}
+let cachedRefs: NetnsDiscovery | null = null;
 let cachedAt = 0;
 
-export async function discoverNetNamespaces(): Promise<NetnsRef[]> {
+export async function discoverNetNamespaces(): Promise<NetnsDiscovery> {
   const now = Date.now();
   if (cachedRefs && now - cachedAt < DISCOVERY_TTL_MS) return cachedRefs;
   const refs = await discoverNetNamespacesUncached();
@@ -167,16 +179,18 @@ export function clearNetnsDiscoveryCache(): void {
   cachedAt = 0;
 }
 
-async function discoverNetNamespacesUncached(): Promise<NetnsRef[]> {
+async function discoverNetNamespacesUncached(): Promise<NetnsDiscovery> {
   const refs: NetnsRef[] = [];
+  const issues: DiscoveryIssue[] = [];
   const seen = new Set<string>();
 
   let hostInode: string | null = null;
   try {
     hostInode = parseNsInode(await readlink("/proc/self/ns/net"));
-  } catch {
-    return []; // no /proc — nothing to discover
+  } catch (error) {
+    throw new Error(`Cannot discover network namespaces: ${describeCollectionError(error).error}`);
   }
+  if (!hostInode) throw new Error("Malformed host network namespace inode");
   if (hostInode) seen.add(hostInode);
 
   // Named namespaces: /var/run/netns/<name> are nsfs bind mounts whose stat
@@ -190,15 +204,24 @@ async function discoverNetNamespacesUncached(): Promise<NetnsRef[]> {
         if (seen.has(id)) continue;
         seen.add(id);
         refs.push({ id, label: name, reach: { via: "nsenter", nsPath } });
-      } catch { /* vanished mid-scan */ }
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+          if (!issues.some(i => i.label === "Named namespace discovery")) issues.push({ label: "Named namespace discovery", ...describeCollectionError(error) });
+        }
+      }
     }
-  } catch { /* no named namespaces */ }
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+      if (!issues.some(i => i.label === "Named namespace discovery")) issues.push({ label: "Named namespace discovery", ...describeCollectionError(error) });
+    }
+  }
 
   // Process scan: group pids by netns inode, batching the readlinks (a busy
   // host has thousands of pids; one awaited readlink each would serialize
   // into hundreds of ms). On WSL/shared-pid setups this finds every
   // container and pod namespace.
   const byInode = new Map<string, number[]>();
+  let inaccessibleProcesses = 0;
   try {
     const entries = await readdir("/proc");
     const pids = entries
@@ -211,7 +234,8 @@ async function discoverNetNamespacesUncached(): Promise<NetnsRef[]> {
         pids.slice(i, i + CHUNK).map(async pid => {
           try {
             return { pid, inode: parseNsInode(await readlink(`/proc/${pid}/ns/net`)) };
-          } catch {
+          } catch (error) {
+            if ((error as NodeJS.ErrnoException).code !== "ENOENT") inaccessibleProcesses++;
             return null; // process exited or not ours
           }
         })
@@ -223,7 +247,11 @@ async function discoverNetNamespacesUncached(): Promise<NetnsRef[]> {
         else byInode.set(entry.inode, [entry.pid]);
       }
     }
-  } catch { /* /proc unreadable */ }
+  } catch (error) {
+    issues.push({ label: "Process namespace discovery", ...describeCollectionError(error) });
+  }
+  if (inaccessibleProcesses) issues.push({ label: "Process namespace discovery", state: "error",
+    error: `${inaccessibleProcesses} process namespace paths could not be read` });
 
   // Apply the cap BEFORE labeling — no point reading comm/hostname for
   // namespaces that get dropped anyway.
@@ -256,8 +284,12 @@ async function discoverNetNamespacesUncached(): Promise<NetnsRef[]> {
   // Docker bridge: containers running in a separate VM (WSL + Docker
   // Desktop) are invisible to our /proc; reach them via docker exec.
   // Containers whose netns we already found are skipped inside.
-  for (const ref of await discoverDockerNamespaces(seen)) refs.push(ref);
+  // Include every process namespace in deduplication, including capped ones.
+  for (const [inode] of inodeEntries) seen.add(inode);
+  for (const ref of await discoverDockerNamespaces(seen, issues)) refs.push(ref);
 
   const deduped = dedupeNetnsLabels(refs);
-  return deduped.length > MAX_NETNS ? deduped.slice(0, MAX_NETNS) : deduped;
+  const discovered = deduped.length + Math.max(0, inodeEntries.length - budget);
+  return { refs: deduped.slice(0, MAX_NETNS), at: Date.now(), discovered,
+    omitted: Math.max(0, discovered - MAX_NETNS), issues };
 }

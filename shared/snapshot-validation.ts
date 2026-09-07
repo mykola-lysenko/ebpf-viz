@@ -27,12 +27,35 @@ const jsonValueSchema: z.ZodType<unknown> = z.lazy(() =>
 
 const btfValueSchema = z.union([hexBytesSchema, jsonValueSchema]);
 
+const collectionTimeSchema = z.number().int().min(0).nullable();
+export const collectionStatusSchema = z.object({
+  sources: z.record(z.string().max(512), z.object({
+    label: z.string().max(512),
+    state: z.enum(["ok", "partial", "error", "unsupported", "skipped", "unknown"]),
+    attemptedAt: collectionTimeSchema,
+    lastSuccessAt: collectionTimeSchema,
+    error: optionalTextSchema,
+    detail: optionalTextSchema,
+    count: idSchema.optional(),
+  })).refine(sources => Object.keys(sources).length <= 10_000, "too many collection sources"),
+  namespaces: z.object({
+    limit: idSchema, discovered: idSchema, scanned: idSchema,
+    skipped: idSchema, omitted: idSchema, discoveryAt: idSchema,
+  }).optional(),
+});
+
 export const rawBpfProgSchema = z.object({
+  name: z.string().optional(), tag: z.string().optional(),
+  map_ids: z.array(idSchema).optional(),
+  pinned: z.array(z.string()).optional(),
+  pids: z.array(z.object({ pid: idSchema, comm: z.string() }).catchall(z.unknown())).optional(),
+  run_cnt: finiteNumberSchema.optional(), run_time_ns: finiteNumberSchema.optional(),
   id: idSchema,
   type: z.string().min(1),
 }).catchall(z.unknown());
 
 export const rawBpfMapSchema = z.object({
+  name: z.string().optional(), pinned: z.array(z.string()).optional(),
   id: idSchema,
   type: z.string().min(1),
 }).catchall(z.unknown());
@@ -150,6 +173,11 @@ const programChainSchema = z.object({
   chainSource: z
     .enum(["kernel-effective", "inferred", "tc-filter", "bpftool-net"])
     .optional(),
+  netns: z.string().optional(),
+  mechanism: z.enum(["tcx", "legacy-tc"]).optional(),
+  ordering: z.enum(["kernel-query", "tc-priority", "unknown"]).optional(),
+  revision: z.number().int().nonnegative().optional(),
+  afterTcx: z.boolean().optional(),
   canShortCircuit: z.boolean(),
   packetContext: z.object({
     family: z.enum(["xdp", "tc", "cgroup_skb", "cgroup_sock_addr", "cgroup_sock", "netfilter", "unknown"]),
@@ -169,6 +197,7 @@ const programChainSchema = z.object({
 }).catchall(z.unknown());
 
 export const ebpfSnapshotSchema = z.object({
+  collection: collectionStatusSchema.optional(),
   timestamp: z.number().int().min(0).refine(Number.isFinite, "must be finite"),
   hostname: z.string(),
   kernelVersion: z.string(),
@@ -229,8 +258,23 @@ export const rawMapEntrySchema = z.object({
 
 const numericIdKeySchema = z.string().regex(/^(0|[1-9]\d*)$/, "map dump keys must be numeric map IDs");
 
+// Version 2 preserves acquisition evidence. Legacy arrays still import, with
+// unknown acquisition completeness recorded by the parser.
+export const rawMapDumpSchema = z.object({
+  entries: z.array(rawMapEntrySchema),
+  complete: z.boolean(),
+  totalEntries: z.number().int().min(0).optional(),
+  truncated: z.boolean().optional(),
+  error: z.string().max(8192).nullable().optional(),
+  unsupported: z.boolean().optional(),
+}).superRefine((dump, ctx) => {
+  if (dump.totalEntries !== undefined && dump.totalEntries < dump.entries.length) {
+    ctx.addIssue({ code: "custom", path: ["totalEntries"], message: "cannot be less than the supplied entry count" });
+  }
+});
+
 const mapDumpRecordSchema = z
-  .record(numericIdKeySchema, z.array(rawMapEntrySchema))
+  .record(numericIdKeySchema, z.union([z.array(rawMapEntrySchema), rawMapDumpSchema]))
   .superRefine((record, ctx) => {
     if (Object.keys(record).length > MAX_MAP_DUMP_MAPS) {
       ctx.addIssue({
@@ -241,6 +285,7 @@ const mapDumpRecordSchema = z
   });
 
 export const rawSnapshotInputSchema = z.object({
+  collection: collectionStatusSchema.optional(),
   raw: rawSnapshotPayloadSchema,
   hostname: optionalTextSchema,
   kernelVersion: optionalTextSchema,
@@ -250,6 +295,7 @@ export const rawSnapshotInputSchema = z.object({
 });
 
 export const snapshotUploadSchema = z.object({
+  collection: collectionStatusSchema.optional(),
   _ebpfVizSnapshot: z.literal(true),
   _version: z.number().int().min(1).optional(),
   capturedAt: optionalTextSchema,

@@ -1,3 +1,4 @@
+import { hasKnownChainOrder, isTcxChain } from "./chain-order";
 import type {
   BpfMap,
   PacketTailCallTarget,
@@ -813,7 +814,7 @@ export function predictPacketChain(
   context: PredictionContext = {}
 ): PacketChainPrediction | null {
   const semantics = chain.packetContext?.semantics;
-  if (!semantics) return null;
+  if (!semantics || !hasKnownChainOrder(chain) || isTcxChain(chain)) return null;
   const family = chain.packetContext?.family ?? "unknown";
   const hasModeledSemantics = hasModeledActionSemantics(semantics);
 

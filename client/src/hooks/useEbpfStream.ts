@@ -130,6 +130,7 @@ export function applySnapshotMetrics(snapshot: EbpfSnapshot | null, update: Snap
   return {
     ...snapshot,
     timestamp: update.timestamp,
+    collection: update.collection ?? snapshot.collection,
     stats: update.stats,
     programs: mergeProgramListMetrics(snapshot.programs, metricsById),
     networkInterfaces: snapshot.networkInterfaces.map((iface) => mergeNetworkInterfaceMetrics(iface, metricsById)),

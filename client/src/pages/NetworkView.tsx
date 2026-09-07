@@ -1,3 +1,5 @@
+import { ChainOrderEvidence } from "@/components/ChainOrderEvidence";
+import { hasKnownChainOrder } from "../../../shared/chain-order";
 import React, { useState, useMemo } from "react";
 import { useEbpf } from "@/contexts/EbpfContext";
 import { PacketChainDetailsSheet } from "@/components/PacketChainDetailsSheet";
@@ -267,7 +269,7 @@ function OsiLayerRow({
   returnAnalysisLoading: boolean;
   progArrayTargets: ProgArrayTarget[];
 }) {
-  const { historyMap, maps, snapshot } = useEbpf();
+  const { historyMap, maps, snapshot, appMode, statsEnabled } = useEbpf();
   const hasProgs = programs.length > 0;
   const [selectedChainDetails, setSelectedChainDetails] = useState<{
     chain: ProgramChain;
@@ -365,6 +367,7 @@ function OsiLayerRow({
                         </span>
                       )}
                     </div>
+                    <ChainOrderEvidence chain={chain} />
                     {chain.packetContext && (
                       <div
                         className="mb-1 ml-1 flex flex-wrap items-center gap-1.5 text-[9px] font-mono text-muted-foreground/70"
@@ -441,7 +444,7 @@ function OsiLayerRow({
                           </button>
                         ) : (
                           <div className="rounded border border-border/60 px-2 py-1 text-[10px] text-muted-foreground/60">
-                            Predicting packet path…
+                            {hasKnownChainOrder(chain) ? "Predicting packet path…" : "Packet path prediction unavailable: execution order is unknown."}
                           </div>
                         )}
                       </div>
@@ -455,7 +458,7 @@ function OsiLayerRow({
                         const currRate = historyMap.get(p.id)?.latest
                           ?.callsPerSec;
                         const prevRate =
-                          chain.canShortCircuit && pIdx > 0
+                          appMode !== "snapshot" && statsEnabled && chain.canShortCircuit && hasKnownChainOrder(chain) && pIdx > 0
                             ? historyMap.get(rows[pIdx - 1].program.id)?.latest
                                 ?.callsPerSec
                             : undefined;
@@ -481,7 +484,7 @@ function OsiLayerRow({
                                     color: p.color,
                                   }}
                                 >
-                                  {pos}
+                                  {hasKnownChainOrder(chain) ? pos : "?"}
                                 </span>
                               )}
                               <ProgBadge program={p} />
@@ -884,8 +887,8 @@ function InterfaceCard({
 
   // Filter TC chains relevant to this interface
   const ifaceChains = useMemo(
-    () => tcChains.filter(c => c.attachPoint === iface.name),
-    [tcChains, iface.name]
+    () => tcChains.filter(c => c.attachPoint === iface.name && c.netns === iface.netns),
+    [tcChains, iface.name, iface.netns]
   );
 
   const iconBg = isSockmap

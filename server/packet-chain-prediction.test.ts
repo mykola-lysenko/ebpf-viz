@@ -59,6 +59,7 @@ function tcChain(): ProgramChain {
     hookId: "tc:eth0:clsact/egress",
     hookLabel: "eth0 egress",
     hookType: "tc",
+    ordering: "tc-priority",
     attachPoint: "eth0",
     attachType: "clsact/egress",
     canShortCircuit: true,
@@ -730,4 +731,13 @@ describe("predictPacketChain", () => {
         "updates maps: map_update_elem at insn 4; emits events: ringbuf_output at insn 8",
     });
   });
+});
+
+it("does not infer a packet path from unknown or legacy unverified TC order", () => {
+  expect(predictPacketChain({ ...tcChain(), ordering: "unknown" }, () => null)).toBeNull();
+  expect(predictPacketChain({ ...tcChain(), ordering: undefined }, () => null)).toBeNull();
+});
+it("does not apply legacy TC continuation semantics to TCX captures", () => {
+  expect(predictPacketChain({ ...tcChain(), mechanism: "tcx", ordering: "kernel-query" }, () => null)).toBeNull();
+  expect(predictPacketChain({ ...tcChain(), attachType: "tcx/ingress" }, () => null)).toBeNull();
 });

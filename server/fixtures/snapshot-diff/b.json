@@ -1,0 +1,129 @@
+{
+  "_ebpfVizSnapshot": true,
+  "hostname": "fixture-b",
+  "timestamp": 2000,
+  "collection": {
+    "sources": {
+      "progs": {
+        "label": "progs",
+        "state": "ok",
+        "attemptedAt": 1000,
+        "lastSuccessAt": 1000
+      },
+      "maps": {
+        "label": "maps",
+        "state": "ok",
+        "attemptedAt": 1000,
+        "lastSuccessAt": 1000
+      },
+      "net": {
+        "label": "net",
+        "state": "ok",
+        "attemptedAt": 1000,
+        "lastSuccessAt": 1000
+      },
+      "cgroups": {
+        "label": "cgroups",
+        "state": "ok",
+        "attemptedAt": 1000,
+        "lastSuccessAt": 1000
+      },
+      "cgroupsEffective": {
+        "label": "cgroupsEffective",
+        "state": "ok",
+        "attemptedAt": 1000,
+        "lastSuccessAt": 1000
+      },
+      "links": {
+        "label": "links",
+        "state": "ok",
+        "attemptedAt": 1000,
+        "lastSuccessAt": 1000
+      },
+      "namespaceDiscovery": {
+        "label": "namespaceDiscovery",
+        "state": "ok",
+        "attemptedAt": 1000,
+        "lastSuccessAt": 1000
+      }
+    }
+  },
+  "raw": {
+    "progs": [
+      {
+        "id": 101,
+        "type": "xdp",
+        "name": "ingress",
+        "tag": "aaaaaaaaaaaaaaaa",
+        "map_ids": [
+          21
+        ],
+        "pinned": [
+          "/sys/fs/bpf/new"
+        ]
+      },
+      {
+        "id": 102,
+        "type": "xdp",
+        "name": "egress",
+        "tag": "bbbbbbbbbbbbbbbb",
+        "map_ids": [
+          20
+        ],
+        "pinned": [
+          "/sys/fs/bpf/new"
+        ]
+      }
+    ],
+    "maps": [
+      {
+        "id": 20,
+        "type": "hash",
+        "name": "config",
+        "key": 4,
+        "value": 4,
+        "max_entries": 16,
+        "pinned": []
+      },
+      {
+        "id": 21,
+        "type": "hash",
+        "name": "routes",
+        "key": 4,
+        "value": 4,
+        "max_entries": 16,
+        "pinned": []
+      },
+      {
+        "id": 40,
+        "type": "hash",
+        "name": "clone",
+        "key": 4,
+        "value": 4,
+        "max_entries": 16,
+        "pinned": []
+      },
+      {
+        "id": 41,
+        "type": "hash",
+        "name": "clone",
+        "key": 4,
+        "value": 4,
+        "max_entries": 16,
+        "pinned": []
+      },
+      {
+        "id": 60,
+        "type": "hash",
+        "name": "decoded",
+        "key": 4,
+        "value": 4,
+        "max_entries": 16,
+        "pinned": []
+      }
+    ],
+    "net": [],
+    "cgroups": [],
+    "links": []
+  }
+}

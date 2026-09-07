@@ -1,0 +1,289 @@
+{
+  "_ebpfVizSnapshot": true,
+  "capturedAt": "2026-09-07T17:37:54Z",
+  "hostname": "tcx-audit-uml",
+  "raw": {
+    "cgroups": [],
+    "links": [
+      {
+        "id": 7,
+        "type": "tcx",
+        "prog_id": 33,
+        "devname": "a3-recv",
+        "ifindex": 10,
+        "attach_type": "tcx_ingress",
+        "pids": [
+          {
+            "pid": 47,
+            "comm": "audit"
+          }
+        ]
+      },
+      {
+        "id": 8,
+        "type": "tcx",
+        "prog_id": 35,
+        "devname": "a3-recv",
+        "ifindex": 10,
+        "attach_type": "tcx_ingress",
+        "pids": [
+          {
+            "pid": 47,
+            "comm": "audit"
+          }
+        ]
+      },
+      {
+        "id": 9,
+        "type": "tcx",
+        "prog_id": 34,
+        "devname": "a3-recv",
+        "ifindex": 10,
+        "attach_type": "tcx_ingress",
+        "pids": [
+          {
+            "pid": 47,
+            "comm": "audit"
+          }
+        ]
+      }
+    ],
+    "maps": [
+      {
+        "id": 16,
+        "type": "array",
+        "name": "a3_sequence",
+        "flags": 0,
+        "bytes_key": 4,
+        "bytes_value": 8,
+        "max_entries": 1,
+        "bytes_memlock": 304,
+        "frozen": 0,
+        "pids": [
+          {
+            "pid": 47,
+            "comm": "audit"
+          }
+        ]
+      },
+      {
+        "id": 22,
+        "type": "array",
+        "name": "libbpf_global",
+        "flags": 0,
+        "bytes_key": 4,
+        "bytes_value": 32,
+        "max_entries": 1,
+        "bytes_memlock": 328,
+        "frozen": 0
+      },
+      {
+        "id": 23,
+        "type": "array",
+        "name": "pid_iter.rodata",
+        "flags": 1152,
+        "bytes_key": 4,
+        "bytes_value": 4,
+        "max_entries": 1,
+        "bytes_memlock": 8192,
+        "frozen": 1,
+        "btf_id": 61,
+        "pids": [
+          {
+            "pid": 62,
+            "comm": "bpftool"
+          }
+        ]
+      },
+      {
+        "id": 24,
+        "type": "array",
+        "name": "libbpf_det_bind",
+        "flags": 0,
+        "bytes_key": 4,
+        "bytes_value": 32,
+        "max_entries": 1,
+        "bytes_memlock": 328,
+        "frozen": 0,
+        "btf_id": 61
+      }
+    ],
+    "net": [
+      {
+        "xdp": [],
+        "tc": [
+          {
+            "devname": "a3-recv",
+            "ifindex": 10,
+            "kind": "tcx/ingress",
+            "name": "a3_first",
+            "prog_id": 35,
+            "prog_flags": [],
+            "link_id": 8,
+            "link_flags": []
+          },
+          {
+            "devname": "a3-recv",
+            "ifindex": 10,
+            "kind": "tcx/ingress",
+            "name": "a3_second",
+            "prog_id": 34,
+            "prog_flags": [],
+            "link_id": 9,
+            "link_flags": []
+          },
+          {
+            "devname": "a3-recv",
+            "ifindex": 10,
+            "kind": "tcx/ingress",
+            "name": "a3_third",
+            "prog_id": 33,
+            "prog_flags": [],
+            "link_id": 7,
+            "link_flags": []
+          },
+          {
+            "devname": "a3-recv",
+            "ifindex": 10,
+            "kind": "clsact/ingress",
+            "name": "a3_legacy",
+            "id": 36
+          }
+        ],
+        "flow_dissector": [],
+        "netfilter": []
+      }
+    ],
+    "progs": [
+      {
+        "id": 33,
+        "type": "sched_cls",
+        "name": "a3_third",
+        "tag": "d6a02e586583d2c5",
+        "gpl_compatible": true,
+        "loaded_at": 1788802674,
+        "uid": 0,
+        "orphaned": false,
+        "bytes_xlated": 152,
+        "jited": true,
+        "bytes_jited": 95,
+        "bytes_memlock": 4096,
+        "map_ids": [
+          16
+        ],
+        "pids": [
+          {
+            "pid": 47,
+            "comm": "audit"
+          }
+        ]
+      },
+      {
+        "id": 34,
+        "type": "sched_cls",
+        "name": "a3_second",
+        "tag": "151e6182ad92db46",
+        "gpl_compatible": true,
+        "loaded_at": 1788802674,
+        "uid": 0,
+        "orphaned": false,
+        "bytes_xlated": 152,
+        "jited": true,
+        "bytes_jited": 90,
+        "bytes_memlock": 4096,
+        "map_ids": [
+          16
+        ],
+        "pids": [
+          {
+            "pid": 47,
+            "comm": "audit"
+          }
+        ]
+      },
+      {
+        "id": 35,
+        "type": "sched_cls",
+        "name": "a3_first",
+        "tag": "f3ced6e01048cc65",
+        "gpl_compatible": true,
+        "loaded_at": 1788802674,
+        "uid": 0,
+        "orphaned": false,
+        "bytes_xlated": 152,
+        "jited": true,
+        "bytes_jited": 95,
+        "bytes_memlock": 4096,
+        "map_ids": [
+          16
+        ],
+        "pids": [
+          {
+            "pid": 47,
+            "comm": "audit"
+          }
+        ]
+      },
+      {
+        "id": 36,
+        "type": "sched_cls",
+        "name": "a3_legacy",
+        "tag": "4a7cd9f2dd7446f2",
+        "gpl_compatible": true,
+        "loaded_at": 1788802674,
+        "uid": 0,
+        "orphaned": false,
+        "bytes_xlated": 152,
+        "jited": true,
+        "bytes_jited": 90,
+        "bytes_memlock": 4096,
+        "map_ids": [
+          16
+        ],
+        "pids": [
+          {
+            "pid": 47,
+            "comm": "audit"
+          }
+        ]
+      }
+    ],
+    "tcFilters": [
+      {
+        "devname": "a3-recv",
+        "direction": "ingress",
+        "filters": [
+          {
+            "protocol": "all",
+            "pref": 10,
+            "kind": "bpf",
+            "chain": 0
+          },
+          {
+            "protocol": "all",
+            "pref": 10,
+            "kind": "bpf",
+            "chain": 0,
+            "options": {
+              "handle": "0x1",
+              "bpf_name": "a3_legacy",
+              "direct-action": true,
+              "not_in_hw": true,
+              "prog": {
+                "id": 36,
+                "name": "a3_legacy",
+                "tag": "4a7cd9f2dd7446f2",
+                "jited": 1,
+                "load_time": 6135575936,
+                "created_by_uid": 0
+              }
+            }
+          }
+        ],
+        "ifindex": 10
+      }
+    ]
+  },
+  "kernelVersion": "7.3.0-rc2-gcd5a451dabb4",
+  "bpftoolVersion": "bpftool v7.8.0"
+}

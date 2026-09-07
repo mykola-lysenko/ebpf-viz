@@ -17,6 +17,7 @@ function tcIngressChain(): ProgramChain {
     hookId: "tc:eth0:clsact/ingress",
     hookLabel: "eth0 ingress",
     hookType: "tc",
+    ordering: "tc-priority",
     attachPoint: "eth0",
     attachType: "clsact/ingress",
     canShortCircuit: true,

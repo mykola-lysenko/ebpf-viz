@@ -12,6 +12,7 @@
 
 import { execFile } from "child_process";
 import { promisify } from "util";
+import { rawMapEntrySchema } from "../shared/snapshot-validation";
 import type {
   JsonValue,
   MapDumpResult,
@@ -151,6 +152,10 @@ export function parseProgArrayTargets(
   return targets;
 }
 
+function isHexByteArray(value: unknown): value is string[] {
+  return Array.isArray(value) && value.every(byte => typeof byte === "string" && /^(?:0x)?[0-9a-f]{1,2}$/i.test(byte));
+}
+
 /** Parse a single raw entry into a normalized MapEntry */
 export function parseEntry(raw: RawMapEntry, index: number): MapEntry {
   // ── Key ──────────────────────────────────────────────────────────────────
@@ -158,7 +163,7 @@ export function parseEntry(raw: RawMapEntry, index: number): MapEntry {
   let keyDecimal: string | null = null;
   let keyBtf: string | null = null;
 
-  if (Array.isArray(raw.key)) {
+  if (isHexByteArray(raw.key)) {
     keyHex = hexBytesToString(raw.key as string[]);
     keyDecimal = hexBytesToDecimal(raw.key as string[]);
   } else if (raw.key && typeof raw.key === "object") {
@@ -178,11 +183,13 @@ export function parseEntry(raw: RawMapEntry, index: number): MapEntry {
 
   // Per-CPU map: has "values" array
   if (raw.values && Array.isArray(raw.values)) {
+    const errors = raw.values.filter(cv => cv.value && typeof cv.value === "object" && "error" in cv.value);
+    if (errors.length) valueError = errors.map(cv => `CPU ${cv.cpu}: ${(cv.value as { error: string }).error}`).join("; ");
     perCpuValues = raw.values.map(cv => {
-      const hex = Array.isArray(cv.value)
+      const hex = isHexByteArray(cv.value)
         ? hexBytesToString(cv.value as string[])
         : btfToString(cv.value);
-      const decimal = Array.isArray(cv.value)
+      const decimal = isHexByteArray(cv.value)
         ? hexBytesToDecimal(cv.value as string[])
         : null;
       return { cpu: cv.cpu, hex, decimal };
@@ -194,7 +201,7 @@ export function parseEntry(raw: RawMapEntry, index: number): MapEntry {
     }
   } else if (raw.value && typeof raw.value === "object" && "error" in raw.value) {
     valueError = (raw.value as { error: string }).error;
-  } else if (Array.isArray(raw.value)) {
+  } else if (isHexByteArray(raw.value)) {
     valueHex = hexBytesToString(raw.value as string[]);
     valueDecimal = hexBytesToDecimal(raw.value as string[]);
   } else if (raw.value && typeof raw.value === "object") {
@@ -240,7 +247,7 @@ export function parseMapDumpOutput(
 
   const raw = stdout.trim();
   if (!raw || raw === "null") {
-    return { ...base, entries: [] };
+    return { ...base, entries: [], error: `Expected a JSON entry array from bpftool${stderr ? `: ${stderr}` : ""}` };
   }
 
   let parsed: RawMapEntry[];
@@ -254,8 +261,8 @@ export function parseMapDumpOutput(
     };
   }
 
-  if (!Array.isArray(parsed)) {
-    return { ...base, entries: [] };
+  if (!Array.isArray(parsed) || parsed.some(entry => !rawMapEntrySchema.safeParse(entry).success)) {
+    return { ...base, entries: [], error: `Expected a valid JSON entry array from bpftool: ${stderr || raw.slice(0, 2048)}` };
   }
 
   // Detect BTF decoding: if the first entry's key is an object (not array), BTF was used
@@ -335,11 +342,12 @@ export async function dumpMapEntries(
       };
     }
 
-    // bpftool exits with non-zero for empty hash maps on some kernel versions.
-    // When it does, err.stdout may still contain valid JSON (e.g. "[]").
+    // A nonzero command can still return entries. Preserve those observations
+    // together with the failure; valid JSON does not prove a complete dump.
     const stdout = (err as any)?.stdout ?? "";
     if (stdout.trim()) {
-      return parseMapDumpOutput(stdout, (err as any)?.stderr ?? "", mapId, mapType, mapName);
+      const partial = parseMapDumpOutput(stdout, (err as any)?.stderr ?? "", mapId, mapType, mapName);
+      return { ...partial, complete: false, error: msg };
     }
 
     // All other errors — surface them to the user instead of silently swallowing
