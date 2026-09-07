@@ -1,6 +1,12 @@
 name: CI
 
 on:
+  workflow_call:
+    inputs:
+      upload-standalone:
+        description: Upload the smoke-tested tarball for release publishing
+        type: boolean
+        default: false
   pull_request:
   push:
     branches:
@@ -14,6 +20,33 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  dependency-audit:
+    name: Dependency audit
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          run_install: false
+
+      - name: Set up Node.js 22
+        uses: actions/setup-node@v5
+        with:
+          node-version: '22'
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # Audit the real source dependency graph, including build tools. The
+      # standalone bundle's minimal package.json cannot describe its contents.
+      - name: Audit dependencies
+        run: pnpm audit
+
   node22-checks:
     name: Node 22 checks
     runs-on: ubuntu-latest
@@ -77,17 +110,28 @@ jobs:
       - name: Build standalone package
         run: bash build-standalone.sh
 
+      - name: Extract packaged runtime for smoke test
+        run: |
+          mkdir -p "$RUNNER_TEMP/ebpf-viz-smoke"
+          tar -xzf ebpf-viz-standalone.tar.gz -C "$RUNNER_TEMP/ebpf-viz-smoke"
+
       - name: Set up Node.js 16 for runtime
         uses: actions/setup-node@v5
         with:
           node-version: 16.20.2
           package-manager-cache: false
 
-      - name: Audit standalone runtime dependencies
-        working-directory: standalone
-        run: npm audit --omit=dev
-
       - name: Smoke-test standalone runtime
         env:
           EXPECTED_NODE_MAJOR: '16'
+          STANDALONE_DIR: ${{ runner.temp }}/ebpf-viz-smoke/standalone
         run: bash scripts/standalone-smoke.sh
+
+      - name: Upload validated standalone tarball
+        if: inputs.upload-standalone
+        uses: actions/upload-artifact@v4
+        with:
+          name: standalone-${{ github.sha }}
+          path: ebpf-viz-standalone.tar.gz
+          if-no-files-found: error
+          retention-days: 7

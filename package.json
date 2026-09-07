@@ -8,7 +8,7 @@
     "build": "vite build && esbuild server/_core/index.ts --platform=node --packages=external --bundle --format=esm --outdir=dist",
     "start": "NODE_ENV=production node dist/index.js",
     "check": "tsc --noEmit",
-    "ci:node22": "pnpm audit && pnpm check && pnpm lint && pnpm test && pnpm build",
+    "ci:node22": "pnpm check && pnpm lint && pnpm test && pnpm build",
     "format": "prettier --write .",
     "lint": "eslint .",
     "smoke:standalone": "bash scripts/standalone-smoke.sh",
@@ -59,7 +59,7 @@
     "date-fns": "^4.1.0",
     "dotenv": "^17.2.2",
     "embla-carousel-react": "^8.6.0",
-    "express": "^4.21.2",
+    "express": "^4.22.2",
     "framer-motion": "^12.23.22",
     "lucide-react": "^0.453.0",
     "react": "^19.2.1",
@@ -92,7 +92,7 @@
     "eslint": "^10.5.0",
     "eslint-plugin-react-hooks": "^7.1.1",
     "happy-dom": "^20.10.6",
-    "postcss": "^8.5.15",
+    "postcss": "^8.5.23",
     "prettier": "^3.6.2",
     "tailwindcss": "^4.3.1",
     "tsx": "^4.19.1",
@@ -108,14 +108,17 @@
       "wouter@3.7.1": "patches/wouter@3.7.1.patch"
     },
     "overrides": {
-      "body-parser>qs": "6.15.2",
+      "body-parser>qs": "6.16.0",
+      "brace-expansion": "5.0.9",
+      "browserslist": "4.28.7",
       "esbuild": "0.28.1",
       "express>path-to-regexp": "0.1.13",
-      "express>qs": "6.15.2",
+      "express>qs": "6.16.0",
+      "nanoid@3": "3.3.18",
       "picomatch": "4.0.4",
+      "postcss": "$postcss",
       "recharts>lodash": "4.18.1",
-      "rollup": "4.62.0",
-      "tailwindcss>nanoid": "3.3.7"
+      "rollup": "4.62.0"
     }
   }
 }

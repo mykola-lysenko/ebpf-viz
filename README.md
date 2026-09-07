@@ -317,7 +317,7 @@ pnpm test --watch   # watch mode
 
 ## CI/CD
 
-GitHub Actions runs `ci.yml` on pull requests and pushes to `main`. It validates Node 22 audit/typecheck/lint/test/build and builds the standalone package, then smoke-tests it on Node 16. The `release.yml` workflow publishes a rolling `latest` standalone tarball from `main` only after the same standalone runtime audit and smoke test pass.
+GitHub Actions runs `ci.yml` on pull requests and pushes to `main`. Separate jobs audit the source dependencies, run Node 22 typecheck/lint/test/build, and build and smoke-test the standalone tarball on Node 16. The `release.yml` workflow reuses these checks for both `main` and version tags, and publishes the tested tarball only after every job passes. See [docs/release.md](docs/release.md) for the release gates and local validation commands.
 
 ---
 
