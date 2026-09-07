@@ -276,23 +276,8 @@ PKGJSON
 sed -i.bak "s/__PACKAGE_VERSION__/$PACKAGE_VERSION/g" "$OUT_DIR/package.json"
 rm -f "$OUT_DIR/package.json.bak"
 
-# Keep a lockfile in standalone/ so CI/release can audit the packaged runtime.
-cat > "$OUT_DIR/package-lock.json" << 'PKGLOCK'
-{
-  "name": "ebpf-viz-standalone",
-  "version": "__PACKAGE_VERSION__",
-  "lockfileVersion": 3,
-  "requires": true,
-  "packages": {
-    "": {
-      "name": "ebpf-viz-standalone",
-      "version": "__PACKAGE_VERSION__"
-    }
-  }
-}
-PKGLOCK
-sed -i.bak "s/__PACKAGE_VERSION__/$PACKAGE_VERSION/g" "$OUT_DIR/package-lock.json"
-rm -f "$OUT_DIR/package-lock.json.bak"
+# Dependencies are inlined into server.js. Audit the source pnpm-lock.yaml
+# before publishing; an empty standalone lockfile would hide bundled packages.
 
 # ── 6. Create the tarball ──────────────────────────────────────────────────────
 echo "[6/6] Creating tarball: $TARBALL"

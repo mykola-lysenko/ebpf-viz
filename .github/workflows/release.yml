@@ -8,21 +8,24 @@ on:
       - 'v*'
 
 permissions:
-  contents: write   # needed to create/update releases and upload assets
+  contents: read
 
 jobs:
-  build-and-release:
-    name: Build standalone tarball and publish release
+  checks:
+    uses: ./.github/workflows/ci.yml
+    with:
+      upload-standalone: true
+
+  publish-release:
+    name: Publish validated standalone tarball
+    needs: checks
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v5
-
-      - name: Set up pnpm
-        uses: pnpm/action-setup@v4
-        with:
-          run_install: false
 
       - name: Set up Node.js
         uses: actions/setup-node@v5
@@ -30,42 +33,10 @@ jobs:
           node-version: '22'
           package-manager-cache: false
 
-      - name: Get pnpm store directory
-        id: pnpm-cache
-        shell: bash
-        run: echo "STORE_PATH=$(pnpm store path --silent)" >> $GITHUB_OUTPUT
-
-      - name: Cache pnpm store
-        uses: actions/cache@v4
+      - name: Download validated standalone tarball
+        uses: actions/download-artifact@v4
         with:
-          path: ${{ steps.pnpm-cache.outputs.STORE_PATH }}
-          key: ${{ runner.os }}-pnpm-store-${{ hashFiles('**/pnpm-lock.yaml') }}
-          restore-keys: |
-            ${{ runner.os }}-pnpm-store-
-
-      - name: Install dependencies
-        run: pnpm install --frozen-lockfile
-
-      - name: Run test suite
-        run: pnpm test
-
-      - name: Build standalone tarball
-        run: bash build-standalone.sh
-
-      - name: Set up Node.js 16 for runtime smoke
-        uses: actions/setup-node@v5
-        with:
-          node-version: 16.20.2
-          package-manager-cache: false
-
-      - name: Audit standalone runtime dependencies
-        working-directory: standalone
-        run: npm audit --omit=dev
-
-      - name: Smoke-test standalone runtime
-        env:
-          EXPECTED_NODE_MAJOR: '16'
-        run: bash scripts/standalone-smoke.sh
+          name: standalone-${{ github.sha }}
 
       - name: Compute short SHA and timestamp
         id: meta
