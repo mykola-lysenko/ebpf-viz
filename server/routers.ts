@@ -262,6 +262,7 @@ export const appRouter = router({
           (input.raw.links ?? []) as RawBpfLink[],
           (input.raw.netns ?? []) as RawNetnsSnapshot[]
         );
+        snap.collection = input.collection;
         // Preserve the original capture timestamp if provided
         if (input.timestamp !== undefined) snap.timestamp = input.timestamp;
         // Parse maps from raw data and cross-reference with programs
@@ -271,8 +272,8 @@ export const appRouter = router({
 
     /**
      * Parse a map dump file produced by `capture-snapshot.sh --dump-maps`.
-     * Accepts { _ebpfVizMapDumps: true, mapDumps: { [mapId]: RawMapEntry[] } }
-     * and returns a Record<number, MapDumpResult> keyed by map ID.
+     * Accepts raw entry arrays (legacy, unknown completeness) or v2 records
+     * with acquisition evidence; returns MapDumpResult records keyed by ID.
      * The client stores this in EbpfContext and uses it to serve mapDump queries
      * in snapshot mode without calling the live bpftool.
      */
@@ -282,7 +283,9 @@ export const appRouter = router({
         const result: Record<number, MapDumpResult> = {};
         const mapsById = new Map((input.maps ?? []).map(m => [m.id, m]));
 
-        for (const [idStr, rawEntries] of Object.entries(input.mapDumps)) {
+        for (const [idStr, rawDump] of Object.entries(input.mapDumps)) {
+          const metadata = Array.isArray(rawDump) ? undefined : rawDump;
+          const rawEntries = Array.isArray(rawDump) ? rawDump : rawDump.entries;
           const mapId = parseInt(idStr, 10);
           if (isNaN(mapId)) continue;
 
@@ -290,7 +293,7 @@ export const appRouter = router({
           const mapType = mapMeta?.rawType ?? "unknown";
           const mapName = mapMeta?.name ?? `map#${mapId}`;
 
-          const totalEntries = rawEntries.length;
+          const totalEntries = metadata?.totalEntries ?? rawEntries.length;
           const entries = (rawEntries as RawMapEntry[]).slice(0, MAX_DUMP_ENTRIES).map((r, i) => parseEntry(r, i));
           const btfDecoded = entries.length > 0 && (
             (rawEntries[0] as RawMapEntry).key !== undefined &&
@@ -303,11 +306,12 @@ export const appRouter = router({
             mapType,
             mapName,
             totalEntries,
-            truncated: totalEntries > MAX_DUMP_ENTRIES,
+            truncated: !!metadata?.truncated || totalEntries > Math.min(rawEntries.length, MAX_DUMP_ENTRIES),
+            complete: metadata?.complete ?? false,
             maxReturned: MAX_DUMP_ENTRIES,
             btfDecoded,
-            error: null,
-            unsupported: false,
+            error: metadata?.error ?? null,
+            unsupported: metadata?.unsupported ?? false,
             entries,
             ...(mapType.toLowerCase().replace(/-/g, "_") === "prog_array"
               ? {

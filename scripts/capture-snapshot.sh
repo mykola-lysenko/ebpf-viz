@@ -100,6 +100,40 @@ json_escape_string() {
 # Create a temp directory for intermediate files; clean up on exit
 TMPDIR_SNAP=$(mktemp -d "${TMPDIR:-/tmp}/ebpf-snap.XXXXXX")
 trap 'rm -rf "$TMPDIR_SNAP"' EXIT
+COLLECTION_FILE="$TMPDIR_SNAP/collection-sources.json"
+: > "$COLLECTION_FILE"
+
+# Append one status record. Kept separate from data, so failed commands can use
+# empty placeholders without claiming a successful empty inventory.
+record_source() { # key label state error [attempt time]
+  local key="$1" label="$2" state="$3" error="${4:-}" at="${5:-$(date +%s)000}" success=null
+  [[ "$state" == ok ]] && success="$at"
+  [[ "$state" != skipped ]] || at=null
+  [[ ! -s "$COLLECTION_FILE" ]] || printf ',\n' >> "$COLLECTION_FILE"
+  printf '"%s":{"label":"%s","state":"%s","attemptedAt":%s,"lastSuccessAt":%s,"error":"%s"}' \
+    "$(json_escape_string "$key")" "$(json_escape_string "$label")" "$state" "$at" "$success" \
+    "$(json_escape_string "$error")" >> "$COLLECTION_FILE"
+}
+
+capture_command() { # key label output command args...
+  local key="$1" label="$2" outfile="$3" at code=0 state=error message
+  shift 3
+  at=$(date +%s)000
+  "$@" > "$outfile.raw" 2> "$outfile.stderr" || code=$?
+  sed '/^libbpf:/d' "$outfile.raw" > "$outfile"
+  # Full JSON/schema validation happens at import without requiring a JSON
+  # runtime on the target. Reject obvious non-array/error responses here.
+  if [[ "$code" -eq 0 ]] && [[ "$(sed -n '/[^[:space:]]/{s/^[[:space:]]*//;p;q;}' "$outfile" | head -c 1)" == '[' ]]; then
+    record_source "$key" "$label" ok "" "$at"
+    return 0
+  fi
+  message=$(head -c 2048 "$outfile.stderr")
+  [[ -n "$message" ]] || message="Command failed (exit $code), returned empty output, or did not return a JSON array"
+  if [[ "$code" -eq 127 ]] || [[ "$message" =~ [Nn]ot\ supported|[Cc]ommand\ not\ found ]]; then state=unsupported; fi
+  record_source "$key" "$label" "$state" "$message" "$at"
+  printf '[]\n' > "$outfile"
+}
+
 
 # ── Locate bpftool ────────────────────────────────────────────────────────────
 find_bpftool() {
@@ -149,12 +183,11 @@ fi
 
 # ── Run a bpftool command, stream output to a file ────────────────────────────
 # Usage: run_bpftool_to_file <output_file> <bpftool_args> [timeout_secs]
-# Returns 0 on success, 1 on failure. On failure, writes the fallback to the file.
+# Records success/failure separately; on failure writes an empty placeholder.
 run_bpftool_to_file() {
   local outfile="$1"
   local args="$2"
   local tout="${3:-$CMD_TIMEOUT}"
-  local fallback="${4:-[]}"
 
   local cmd_parts=()
   if [[ -n "$TIMEOUT_CMD" ]]; then
@@ -168,15 +201,12 @@ run_bpftool_to_file() {
   read -ra arg_array <<< "$args"
   cmd_parts+=("${arg_array[@]}")
 
-  # Run at reduced priority to minimize production impact
-  if "${cmd_parts[@]}" 2>/dev/null | grep -v '^libbpf:' > "$outfile"; then
-    if [[ -s "$outfile" ]]; then
-      return 0
-    fi
-  fi
-  vlog "bpftool $args → empty or failed, using fallback"
-  echo "$fallback" > "$outfile"
-  return 0
+  local key label
+  key=$(basename "$outfile" .json)
+  [[ "$key" == cgroups-effective ]] && key=cgroupsEffective
+  label="bpftool $args"
+  capture_command "$key" "$label" "$outfile" "${cmd_parts[@]}"
+
 }
 
 # Capture detailed TC filter dumps as grouped records. The parser accepts this
@@ -186,6 +216,7 @@ collect_tc_filters_to_file() {
   printf '[' > "$outfile"
 
   if ! command -v tc &>/dev/null; then
+    record_source tcFilters "Detailed TC ordering" unsupported "tc command is unavailable"
     printf ']\n' >> "$outfile"
     return 0
   fi
@@ -214,12 +245,7 @@ collect_tc_filters_to_file() {
       fi
       cmd_parts+=(tc -s -d -j filter show dev "$dev" "$direction")
 
-      if ! "${cmd_parts[@]}" 2>/dev/null | grep -v '^libbpf:' > "$dump_tmp"; then
-        continue
-      fi
-      if [[ ! -s "$dump_tmp" ]]; then
-        continue
-      fi
+      capture_command "tc:$dev:$direction" "$dev: TC $direction ordering" "$dump_tmp" "${cmd_parts[@]}"
 
       if [[ $first -eq 0 ]]; then
         printf ',\n' >> "$outfile"
@@ -245,19 +271,33 @@ collect_netns_to_file() {
   printf '[' > "$outfile"
 
   if ! command -v nsenter &>/dev/null || [[ ! -r /proc/self/ns/net ]]; then
+    record_source namespaceDiscovery "Namespace discovery" unsupported "nsenter or /proc network namespaces are unavailable"
     printf ']\n' >> "$outfile"
     return 0
   fi
 
   local host_ino
   host_ino=$(readlink /proc/self/ns/net 2>/dev/null | grep -oE '[0-9]+' || true)
+  if [[ -z "$host_ino" ]]; then
+    record_source namespaceDiscovery "Namespace discovery" error "Cannot read host network namespace inode"
+    printf ']\n' >> "$outfile"
+    return 0
+  fi
 
-  local first=1
+  local first=1 discovered=0 scanned=0 omitted=0 inaccessible=0
+  local namespace_limit=64 discovery_at
+  discovery_at=$(date +%s)000
   declare -A seen_ino=()
   [[ -n "$host_ino" ]] && seen_ino["$host_ino"]=1
 
   emit_netns() { # <inode> <label> <nsPath>
     local ino="$1" label="$2" ns_path="$3"
+    discovered=$((discovered + 1))
+    if [[ "$scanned" -ge "$namespace_limit" ]]; then
+      omitted=$((omitted + 1))
+      return 0
+    fi
+    scanned=$((scanned + 1))
     local net_tmp="$TMPDIR_SNAP/netns_${ino}.json"
     local links_tmp="$TMPDIR_SNAP/netns_${ino}_links.json"
     local prefix_parts=()
@@ -267,19 +307,10 @@ collect_netns_to_file() {
     if [[ ${#SUDO_PREFIX[@]} -gt 0 ]]; then
       prefix_parts+=("${SUDO_PREFIX[@]}")
     fi
-    if ! "${prefix_parts[@]}" nsenter "--net=$ns_path" -- "$BPFTOOL" -j net show \
-        2>/dev/null | grep -v '^libbpf:' > "$net_tmp"; then
-      echo '[{}]' > "$net_tmp"
-    fi
-    [[ -s "$net_tmp" ]] || echo '[{}]' > "$net_tmp"
-    # Device topology for the namespace graph (netkit/veth peer wiring).
-    # The parser also uses this to keep namespaces that have paired devices
-    # but no programs, matching the live poller's behavior.
-    if ! "${prefix_parts[@]}" nsenter "--net=$ns_path" -- ip -d -j link show \
-        2>/dev/null > "$links_tmp"; then
-      echo '[]' > "$links_tmp"
-    fi
-    [[ -s "$links_tmp" ]] || echo '[]' > "$links_tmp"
+    capture_command "netns:$ino:net" "$label: BPF attachments" "$net_tmp" \
+      "${prefix_parts[@]}" nsenter "--net=$ns_path" -- "$BPFTOOL" -j net show
+    capture_command "netns:$ino:links" "$label: device topology" "$links_tmp" \
+      "${prefix_parts[@]}" nsenter "--net=$ns_path" -- ip -d -j link show
     # Drop namespaces with neither netdev attachments nor a device pair
     if ! grep -qE '"(prog_)?id"[[:space:]]*:[[:space:]]*[0-9]' "$net_tmp" \
        && ! grep -qE '"info_kind"[[:space:]]*:[[:space:]]*"(netkit|veth)"' "$links_tmp"; then
@@ -293,35 +324,14 @@ collect_netns_to_file() {
       "$(json_escape_string "$ino")" "$(json_escape_string "$label")" >> "$outfile"
     cat "$net_tmp" >> "$outfile"
     printf ',"links":' >> "$outfile"
-    # Trim to the fields RawNetnsLink uses when python3 is available (the ip
-    # output carries dozens of fields per device); otherwise pass through.
-    if command -v python3 &>/dev/null; then
-      python3 -c '
-import json, sys
-try:
-    links = json.load(open(sys.argv[1]))
-except Exception:
-    links = []
-out = []
-for l in links if isinstance(links, list) else []:
-    if not isinstance(l, dict) or "ifindex" not in l or "ifname" not in l:
-        continue
-    e = {"ifindex": l["ifindex"], "ifname": l["ifname"]}
-    if isinstance(l.get("link_index"), int): e["link_index"] = l["link_index"]
-    if isinstance(l.get("link_netnsid"), int): e["link_netnsid"] = l["link_netnsid"]
-    kind = (l.get("linkinfo") or {}).get("info_kind")
-    if kind: e["kind"] = kind
-    if l.get("operstate"): e["operstate"] = l["operstate"]
-    out.append(e)
-print(json.dumps(out))
-' "$links_tmp" >> "$outfile"
-    else
-      cat "$links_tmp" >> "$outfile"
-    fi
+    cat "$links_tmp" >> "$outfile"
     printf '}' >> "$outfile"
   }
 
   # Named namespaces (ip netns add)
+  if [[ -d /var/run/netns && ! -r /var/run/netns ]]; then
+    record_source namedNamespaceDiscovery "Named namespace discovery" error "Named namespace directory is unreadable"
+  fi
   if [[ -d /var/run/netns ]]; then
     local name ino
     for name in $(ls /var/run/netns 2>/dev/null); do
@@ -337,7 +347,11 @@ print(json.dumps(out))
   for pid_dir in /proc/[0-9]*; do
     pid="${pid_dir#/proc/}"
     ino=$(readlink "$pid_dir/ns/net" 2>/dev/null | grep -oE '[0-9]+' || true)
-    [[ -z "$ino" || -n "${seen_ino[$ino]:-}" ]] && continue
+    if [[ -z "$ino" ]]; then
+      [[ ! -d "$pid_dir" ]] || inaccessible=$((inaccessible + 1))
+      continue
+    fi
+    [[ -n "${seen_ino[$ino]:-}" ]] && continue
     seen_ino["$ino"]=1
     label=$(cat "$pid_dir/root/etc/hostname" 2>/dev/null | tr -d '[:space:]' || true)
     [[ -z "$label" ]] && label=$(cat "$pid_dir/comm" 2>/dev/null || echo "pid-$pid")
@@ -345,6 +359,15 @@ print(json.dumps(out))
   done
 
   printf '\n  ]\n' >> "$outfile"
+  local state=ok detail="Local named/process namespaces scanned"
+  if [[ "$omitted" -gt 0 || "$inaccessible" -gt 0 ]]; then
+    state=partial
+    detail="$omitted namespaces omitted by limit $namespace_limit; $inaccessible process namespace paths unreadable"
+  fi
+  record_source namespaceDiscovery "Namespace discovery" "$state" "$detail" "$discovery_at"
+  record_source dockerDiscovery "Docker namespace discovery" skipped "Capture scans local namespaces only; separate Docker VMs are not scanned" "$discovery_at"
+  printf '{"limit":%s,"discovered":%s,"scanned":%s,"skipped":0,"omitted":%s,"discoveryAt":%s}' \
+    "$namespace_limit" "$discovered" "$scanned" "$omitted" "$discovery_at" > "$TMPDIR_SNAP/namespace-coverage.json"
 }
 
 # ── Gather metadata ───────────────────────────────────────────────────────────
@@ -412,6 +435,14 @@ log "Writing snapshot to: $OUTPUT_FILE"
   printf '  "kernelVersion": "%s",\n' "$(json_escape_string "$KERNEL_VERSION")"
   printf '  "bpftoolVersion": "%s",\n' "$(json_escape_string "$BPFTOOL_VERSION_RAW")"
   printf '  "demoMode": false,\n'
+  printf '  "collection": {"sources": {'
+  cat "$COLLECTION_FILE"
+  printf '}'
+  if [[ -s "$TMPDIR_SNAP/namespace-coverage.json" ]]; then
+    printf ',"namespaces":'
+    cat "$TMPDIR_SNAP/namespace-coverage.json"
+  fi
+  printf '},\n'
   printf '  "raw": {\n'
   printf '    "progs": '
   cat "$TMPDIR_SNAP/progs.json"
@@ -458,94 +489,65 @@ if [[ $DUMP_MAPS -eq 1 ]]; then
   {
     printf '{\n'
     printf '  "_ebpfVizMapDumps": true,\n'
-    printf '  "_version": 1,\n'
+    printf '  "_version": 2,\n'
     printf '  "capturedAt": "%s",\n' "$CAPTURE_DATE"
     printf '  "hostname": "%s",\n' "$(json_escape_string "$HOSTNAME_VAL")"
     printf '  "snapshotFile": "%s",\n' "$(json_escape_string "$OUTPUT_FILE")"
     printf '  "mapDumps": {'
   } > "$DUMP_OUTPUT_FILE"
 
+  ATTEMPT_COUNT=0
   while IFS=: read -r MAP_ID MAP_TYPE; do
     [[ -z "$MAP_ID" || -z "$MAP_TYPE" ]] && continue
-
-    # Respect --max-maps limit
-    if [[ $DUMP_COUNT -ge $MAX_MAPS ]]; then
-      log "Reached --max-maps limit ($MAX_MAPS), stopping map dumps"
-      break
-    fi
-
-    # Skip unsupported types
-    if echo "$MAP_TYPE" | grep -qE "^($UNSUPPORTED_TYPES)$"; then
-      SKIP_COUNT=$((SKIP_COUNT + 1))
-      vlog "Skipping map $MAP_ID ($MAP_TYPE) — unsupported type"
-      continue
-    fi
-
-    vlog "Dumping map $MAP_ID ($MAP_TYPE)..."
-
-    # Dump map entries to a temp file with timeout
     DUMP_TMPFILE="$TMPDIR_SNAP/mapdump_${MAP_ID}.json"
-    DUMP_OK=0
+    DUMP_ERROR=""
+    DUMP_COMPLETE=false
+    DUMP_UNSUPPORTED=false
+    printf '[]' > "$DUMP_TMPFILE"
 
-    dump_cmd_parts=()
-    if [[ -n "$TIMEOUT_CMD" ]]; then
-      dump_cmd_parts+=("$TIMEOUT_CMD" "$MAP_DUMP_TIMEOUT")
-    fi
-    if [[ ${#SUDO_PREFIX[@]} -gt 0 ]]; then
-      dump_cmd_parts+=("${SUDO_PREFIX[@]}")
-    fi
-    dump_cmd_parts+=("$BPFTOOL" -j map dump id "$MAP_ID")
-
-    if "${dump_cmd_parts[@]}" 2>/dev/null | grep -v '^libbpf:' > "$DUMP_TMPFILE" 2>/dev/null; then
-      if [[ -s "$DUMP_TMPFILE" ]]; then
-        DUMP_OK=1
+    if echo "$MAP_TYPE" | grep -qE "^($UNSUPPORTED_TYPES)$"; then
+      DUMP_UNSUPPORTED=true
+      DUMP_ERROR="Map type $MAP_TYPE is not collected by this capture script"
+    elif [[ $ATTEMPT_COUNT -ge $MAX_MAPS ]]; then
+      DUMP_ERROR="Not collected: --max-maps limit ($MAX_MAPS) reached"
+    else
+      ATTEMPT_COUNT=$((ATTEMPT_COUNT + 1))
+      vlog "Dumping map $MAP_ID ($MAP_TYPE)..."
+      dump_cmd_parts=()
+      if [[ -n "$TIMEOUT_CMD" ]]; then dump_cmd_parts+=("$TIMEOUT_CMD" "$MAP_DUMP_TIMEOUT"); fi
+      if [[ ${#SUDO_PREFIX[@]} -gt 0 ]]; then dump_cmd_parts+=("${SUDO_PREFIX[@]}"); fi
+      dump_cmd_parts+=("$BPFTOOL" -j map dump id "$MAP_ID")
+      DUMP_EXIT=0
+      "${dump_cmd_parts[@]}" > "$DUMP_TMPFILE.raw" 2> "$DUMP_TMPFILE.stderr" || DUMP_EXIT=$?
+      grep -v '^libbpf:' "$DUMP_TMPFILE.raw" > "$DUMP_TMPFILE" || true
+      FIRST_CHAR=$(tr -d '[:space:]' < "$DUMP_TMPFILE" | head -c 1 || true)
+      DUMP_BYTES=$(wc -c < "$DUMP_TMPFILE")
+      if [[ $DUMP_BYTES -gt 10485760 ]]; then
+        DUMP_ERROR="Dump exceeded 10 MB capture limit"
+        printf '[]' > "$DUMP_TMPFILE"
+      elif [[ "$FIRST_CHAR" != "[" ]]; then
+        DUMP_ERROR="Expected a JSON entry array: $(head -c 2048 "$DUMP_TMPFILE.stderr")"
+        printf '[]' > "$DUMP_TMPFILE"
+      elif [[ $DUMP_EXIT -ne 0 ]]; then
+        # Preserve returned observations along with the command failure.
+        DUMP_ERROR="Dump command failed (exit $DUMP_EXIT): $(head -c 2048 "$DUMP_TMPFILE.stderr")"
+      else
+        DUMP_COMPLETE=true
       fi
+      sleep "$MAP_DUMP_DELAY" 2>/dev/null || true
     fi
 
-    # Skip if empty or error
-    if [[ $DUMP_OK -eq 0 ]]; then
-      SKIP_COUNT=$((SKIP_COUNT + 1))
-      rm -f "$DUMP_TMPFILE"
-      continue
-    fi
-
-    # Check for null/empty content
-    FIRST_CHAR=$(head -c 1 "$DUMP_TMPFILE")
-    if [[ "$FIRST_CHAR" != "[" ]]; then
-      SKIP_COUNT=$((SKIP_COUNT + 1))
-      rm -f "$DUMP_TMPFILE"
-      continue
-    fi
-
-    # Skip dumps larger than 10 MB (protects against huge maps filling disk)
-    DUMP_BYTES=$(wc -c < "$DUMP_TMPFILE" 2>/dev/null || echo 0)
-    if [[ "$DUMP_BYTES" -gt 10485760 ]]; then
-      vlog "Skipping map $MAP_ID — dump too large (${DUMP_BYTES} bytes)"
-      SKIP_COUNT=$((SKIP_COUNT + 1))
-      rm -f "$DUMP_TMPFILE"
-      continue
-    fi
-
-    # Append raw dump to the output file.
-    # Server-side parseMapDumps displays up to MAP_DUMP_DISPLAY_LIMIT entries,
-    # so we pass the full dump through. This avoids fragile shell-side JSON
-    # truncation while preserving total entry counts.
+    # Store failure/skip evidence too; an omitted or failed dump is never [].
     {
-      if [[ $FIRST_ENTRY -eq 0 ]]; then
-        printf ','
-      fi
-      printf '"%s": ' "$MAP_ID"
+      if [[ $FIRST_ENTRY -eq 0 ]]; then printf ','; fi
+      printf '\n    "%s": {"complete": %s, "unsupported": %s, "error": ' "$MAP_ID" "$DUMP_COMPLETE" "$DUMP_UNSUPPORTED"
+      if [[ -n "$DUMP_ERROR" ]]; then printf '"%s"' "$(json_escape_string "$DUMP_ERROR")"; else printf 'null'; fi
+      printf ', "entries": '
       cat "$DUMP_TMPFILE"
+      printf '}'
     } >> "$DUMP_OUTPUT_FILE"
-
     FIRST_ENTRY=0
-    DUMP_COUNT=$((DUMP_COUNT + 1))
-
-    # Clean up temp file for this map
-    rm -f "$DUMP_TMPFILE"
-
-    # Brief pause between dumps to reduce kernel lock contention
-    sleep "$MAP_DUMP_DELAY" 2>/dev/null || true
+    if [[ "$DUMP_COMPLETE" == true ]]; then DUMP_COUNT=$((DUMP_COUNT + 1)); else SKIP_COUNT=$((SKIP_COUNT + 1)); fi
   done <<< "$MAP_ID_TYPES"
 
   # Close the JSON

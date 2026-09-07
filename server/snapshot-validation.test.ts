@@ -205,3 +205,53 @@ describe("map dump upload validation", () => {
     expect(result[10].truncated).toBe(true);
   });
 });
+
+describe("collection metadata round trips", () => {
+  const collection = { sources: {
+    progs: { label: "Programs", state: "error" as const, attemptedAt: 2000, lastSuccessAt: 1000, error: "permission denied" },
+  }, namespaces: { limit: 64, discovered: 70, scanned: 64, skipped: 0, omitted: 6, discoveryAt: 1000 } };
+
+  it("preserves capture evidence through raw import and parsed snapshot export/reimport", async () => {
+    const captured = snapshotUploadSchema.parse({ _ebpfVizSnapshot: true, collection, raw: { progs: [] }, timestamp: 2000 });
+    const parsed = await makeCaller().ebpf.parseSnapshot({ raw: captured.raw!, collection: captured.collection, timestamp: captured.timestamp });
+    expect(parsed.snapshot.collection).toEqual(collection);
+    const exported = JSON.parse(JSON.stringify({ _ebpfVizSnapshot: true, snapshot: parsed.snapshot, maps: parsed.maps }));
+    expect(snapshotUploadSchema.parse(exported).snapshot?.collection).toEqual(collection);
+  });
+
+  it("leaves coverage unknown for older snapshots and rejects malformed status", async () => {
+    const old = await makeCaller().ebpf.parseSnapshot({ raw: { progs: [] } });
+    expect(old.snapshot.collection).toBeUndefined();
+    expect(snapshotUploadSchema.safeParse({ _ebpfVizSnapshot: true, raw: { progs: [] }, collection: { sources: { progs: { ...collection.sources.progs, state: "healthy" } } } }).success).toBe(false);
+  });
+});
+
+describe("map dump acquisition evidence", () => {
+  it("preserves errors, truncation, counts and unsupported records through upload parsing", async () => {
+    const uploaded = mapDumpsUploadSchema.parse({
+      _ebpfVizMapDumps: true, _version: 2,
+      mapDumps: {
+        "1": { entries: [{ key: ["0x01"], value: ["0x02"] }], complete: false, totalEntries: 20, truncated: true, error: "timeout" },
+        "2": { entries: [], complete: false, unsupported: true, error: "not enumerable" },
+        "3": { entries: [], complete: true },
+      },
+    });
+    const result = await makeCaller().ebpf.parseMapDumps({ mapDumps: uploaded.mapDumps });
+    expect(result[1]).toMatchObject({ complete: false, totalEntries: 20, truncated: true, error: "timeout" });
+    expect(result[1].entries).toHaveLength(1);
+    expect(result[2]).toMatchObject({ complete: false, unsupported: true, error: "not enumerable" });
+    expect(result[3]).toMatchObject({ complete: true, truncated: false, error: null, entries: [] });
+    expect(JSON.parse(JSON.stringify(result))).toEqual(result);
+  });
+  it("imports legacy arrays with unknown acquisition completeness", async () => {
+    const result = await makeCaller().ebpf.parseMapDumps({ mapDumps: { "1": [] } });
+    expect(result[1]).toMatchObject({ entries: [], complete: false, error: null });
+  });
+  it("rejects contradictory counts and malformed dump metadata", () => {
+    for (const dump of [
+      { entries: [], complete: "yes" },
+      { entries: [], complete: true, truncated: "no" },
+      { entries: [{ key: ["0x00"], value: ["0x00"] }], complete: true, totalEntries: 0 },
+    ]) expect(mapDumpsUploadSchema.safeParse({ _ebpfVizMapDumps: true, mapDumps: { "1": dump } }).success).toBe(false);
+  });
+});

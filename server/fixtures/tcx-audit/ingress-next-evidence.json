@@ -1,0 +1,28 @@
+{
+  "bpftool": "bpftool v7.8.0\nusing libbpf v1.8\nfeatures: llvm, crypto, skeletons\n",
+  "direction": "ingress",
+  "expectedExecution": 1234,
+  "expectedProgramIds": [
+    4,
+    3,
+    2
+  ],
+  "kernel": "7.3.0-rc2-gcd5a451dabb4\n",
+  "observedExecution": 1234,
+  "query": {
+    "Programs": [
+      {
+        "ID": 4
+      },
+      {
+        "ID": 3
+      },
+      {
+        "ID": 2
+      }
+    ],
+    "Revision": 4
+  },
+  "revisionBefore": 1,
+  "terminalTCX": false
+}

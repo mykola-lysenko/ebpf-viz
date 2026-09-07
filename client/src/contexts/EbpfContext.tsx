@@ -303,6 +303,7 @@ export function EbpfProvider({ children }: { children: React.ReactNode }) {
       } else if (obj.raw) {
         const result = await parseSnapshotRef.current({
           raw: obj.raw,
+          collection: obj.collection,
           hostname: obj.hostname,
           kernelVersion: obj.kernelVersion,
           bpftoolVersion: obj.bpftoolVersion,

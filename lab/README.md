@@ -175,6 +175,13 @@ them via `nsenter` with the host's own bpftool — so the **Topology** view show
 `nk_from_pod` on the sides, **fully attributed** (no docker bridge, no ifindex
 ambiguity, no `(?)`). This is the cleanest way to see the netkit topology.
 
+## 7. TCX ordering audit (`tcx-audit/`)
+
+The [TCX audit runner](tcx-audit/README.md) uses a disposable UML guest to verify
+explicit ingress/egress order, query revisions, and mixed TCX/legacy TC packet
+execution. It requires no host sudo or host networking changes. See the
+[recorded verdict](../docs/tcx-audit.md) and importable captures.
+
 ## Known stock-WSL2-kernel limits
 
 - **netkit** needs kernel ≥ 6.7 (+ Cilium ≥ 1.16 netkit mode or iproute2 ≥ 6.7) — requires a custom WSL2 kernel; see the phased plan.

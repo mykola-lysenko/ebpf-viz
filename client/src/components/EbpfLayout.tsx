@@ -1,3 +1,4 @@
+import { CollectionStatus } from "./CollectionStatus";
 import { lazy, Suspense, useState, useRef, useCallback } from "react";
 import { Link, useLocation } from "wouter";
 import {
@@ -438,7 +439,7 @@ function TopBar() {
 
 function LayoutInner({ children }: { children: React.ReactNode }) {
   const [collapsed, setCollapsed] = useState(false);
-  const { selectedProgram, setSelectedProgram, historyMap } = useEbpf();
+  const { selectedProgram, setSelectedProgram, historyMap, snapshot } = useEbpf();
 
   return (
     <div className="flex h-screen overflow-hidden bg-background">
@@ -446,6 +447,7 @@ function LayoutInner({ children }: { children: React.ReactNode }) {
       <div className="flex flex-col flex-1 min-w-0">
         <TopBar />
         <main className="flex-1 overflow-auto">
+          {snapshot && <div className="px-6 pt-3"><CollectionStatus collection={snapshot.collection} demo={snapshot.demoMode} /></div>}
           {children}
         </main>
       </div>

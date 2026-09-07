@@ -119,7 +119,10 @@ export const MOCK_NETNS: RawNetnsSnapshot[] = [
       {
         xdp: [],
         tc: [
+          // Explicit query order, intentionally different from program-ID order.
+          { devname: "eth0", ifindex: 2, kind: "tcx/ingress", name: "cil_to_netdev", prog_id: 28 },
           { devname: "eth0", ifindex: 2, kind: "tcx/ingress", name: "cil_from_container", prog_id: 27 },
+          { devname: "eth0", ifindex: 2, kind: "clsact/ingress", name: "cls_bpf_ingress", id: 3 },
           { devname: "eth0", ifindex: 2, kind: "tcx/egress", name: "cil_to_netdev", prog_id: 28 },
           { devname: "lxc_demo_pod", ifindex: 9, kind: "netkit/peer", name: "cil_from_container", prog_id: 27 },
         ],

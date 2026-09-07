@@ -1,3 +1,7 @@
+import { z } from "zod";
+import { SourceCollector } from "./collection";
+import { collectionError, type CollectionStatus } from "../shared/collection-status";
+import { rawBpfProgSchema, rawBpfMapSchema, rawBpfLinkSchema, rawCgroupEntrySchema, rawNetnsLinkSchema } from "../shared/snapshot-validation";
 import { exec, execFile, execSync } from "child_process";
 import { existsSync } from "fs";
 import { promisify } from "util";
@@ -17,7 +21,7 @@ import type {
 } from "../shared/ebpf-types";
 import { buildSnapshot, netnsLinkKind, PAIRED_LINK_KINDS } from "./ebpf-parser";
 import { buildMockMaps, parseMaps } from "./ebpf-map-parser";
-import { discoverNetNamespaces, type NetnsReach } from "./ebpf-netns";
+import { discoverNetNamespaces, clearNetnsDiscoveryCache, MAX_NETNS, type NetnsReach } from "./ebpf-netns";
 import { MOCK_CGROUPS, MOCK_LINKS, MOCK_NET, MOCK_NETNS, MOCK_PROGS, MOCK_SYSTEM } from "./ebpf-mock";
 import {
   ingestSnapshot,
@@ -25,6 +29,7 @@ import {
   buildActivitySummary,
   getAllHistories,
   getHistory,
+  clearAll,
 } from "./ebpf-stats-ring";
 
 const execAsync = promisify(exec);
@@ -80,12 +85,16 @@ const DEFAULT_CONFIG: PollingConfig = resolveDefaultConfig();
 let config: PollingConfig = { ...DEFAULT_CONFIG };
 let latestSnapshot: EbpfSnapshot | null = null;
 let latestMaps: BpfMap[] = [];
+const collector = new SourceCollector();
+let collection: CollectionStatus | undefined;
 let pollingTimer: ReturnType<typeof setInterval> | null = null;
 let lastError: string | null = null;
 let bpftoolVersion = "unknown";
 let bpftoolHasSkeletons: boolean | null = null;
+let bpftoolCheckedAt: number | null = null;
 let kernelVersion = "unknown";
 let isPolling = false;
+let pendingConfig: Partial<PollingConfig> | null = null;
 let statsEnabled = false;
 /** True when *we* flipped kernel.bpf_stats_enabled from 0 to 1, so we can
  *  restore it on shutdown instead of leaving per-invocation overhead on
@@ -152,6 +161,7 @@ async function getSystemInfo(): Promise<void> {
 
   try {
     const { stdout } = await execFileAsync(config.bpftoolPath, ["version"], { timeout: 5000 });
+    bpftoolCheckedAt = Date.now();
     const parsed = parseBpftoolVersion(stdout);
     bpftoolVersion = parsed.version;
     bpftoolHasSkeletons = parsed.hasSkeletons;
@@ -221,13 +231,7 @@ async function runIpLinkInNetns(reach: NetnsReach): Promise<string> {
 
 /** Normalize `ip -d -j link show` JSON into RawNetnsLink[]. */
 function parseIpLinks(stdout: string): RawNetnsLink[] {
-  let raw: unknown;
-  try {
-    raw = JSON.parse(stripNonJson(stdout));
-  } catch {
-    return [];
-  }
-  if (!Array.isArray(raw)) return [];
+  const raw = parseArray<Record<string, unknown>>(stdout, rawNetnsLinkSchema);
   return raw
     .filter((l): l is Record<string, unknown> => !!l && typeof l === "object")
     .map(l => ({
@@ -273,40 +277,53 @@ const uninterestingNetns = new Map<string, number>();
  *  gracefully — a namespace with only ip-link topology and no bpftool net
  *  still contributes to the graph. */
 async function fetchNetnsData(): Promise<RawNetnsSnapshot[]> {
+  const discovery = await collector.read("namespaceDiscovery", "Namespace discovery",
+    discoverNetNamespaces, { refs: [], at: 0, discovered: 0, omitted: 0, issues: [] }, result => result.at);
+  const discoveryStatus = collector.sources.namespaceDiscovery;
+  if (discoveryStatus.state === "ok") {
+    discoveryStatus.lastSuccessAt = discovery.at;
+    if (discovery.omitted) {
+      discoveryStatus.state = "partial";
+      discoveryStatus.detail = `${discovery.omitted} namespaces omitted by the ${MAX_NETNS} namespace limit`;
+    }
+  }
+  for (const [index, issue] of Array.from(discovery.issues.entries())) {
+    collector.sources[`namespaceDiscovery:${index}`] = {
+      ...issue, attemptedAt: discovery.at, lastSuccessAt: null,
+    };
+  }
   const now = Date.now();
-  const refs = (await discoverNetNamespaces()).filter(ref => {
+  let skipped = 0;
+  const snapshots = await Promise.all(discovery.refs.map(async ref => {
+    const netKey = `netns:${ref.id}:net`;
+    const linksKey = `netns:${ref.id}:links`;
+    const netLabel = `${ref.label}: BPF attachments`;
+    const linksLabel = `${ref.label}: device topology`;
     const boringSince = uninterestingNetns.get(ref.id);
-    return !(boringSince && now - boringSince < UNINTERESTING_NETNS_TTL_MS);
-  });
-  const scans = await Promise.allSettled(
-    refs.map(async (ref): Promise<RawNetnsSnapshot> => {
-      const [netRes, linkRes] = await Promise.allSettled([
-        runBpftoolNetInNetns(ref.reach),
-        runIpLinkInNetns(ref.reach),
-      ]);
-      const net =
-        netRes.status === "fulfilled"
-          ? parseJsonOr<RawNetSnapshot[]>(netRes.value, [])
-          : [];
-      const links =
-        linkRes.status === "fulfilled" ? parseIpLinks(linkRes.value) : [];
-      return { id: ref.id, label: ref.label, net, links };
-    })
-  );
-  const snapshots = scans
-    .filter(
-      (s): s is PromiseFulfilledResult<RawNetnsSnapshot> =>
-        s.status === "fulfilled"
-    )
-    .map(s => s.value);
-  for (const ns of snapshots) {
-    if (isInterestingNetns(ns)) uninterestingNetns.delete(ns.id);
-    else uninterestingNetns.set(ns.id, now);
+    if (boringSince !== undefined && now - boringSince < UNINTERESTING_NETNS_TTL_MS) {
+      skipped++;
+      const detail = "Previously empty namespace; rescan deferred for up to 60 seconds";
+      return { id: ref.id, label: ref.label,
+        net: collector.skip<RawNetSnapshot[]>(netKey, netLabel, detail, []),
+        links: collector.skip<RawNetnsLink[]>(linksKey, linksLabel, detail, []) };
+    }
+    const [net, links] = await Promise.all([
+      collector.read(netKey, netLabel, async () => parseNet(await runBpftoolNetInNetns(ref.reach)), []),
+      collector.read(linksKey, linksLabel, async () => parseIpLinks(await runIpLinkInNetns(ref.reach)), []),
+    ]);
+    const ns = { id: ref.id, label: ref.label, net, links };
+    // Failed scans are retried next poll, never cached as empty namespaces.
+    if (collector.sources[netKey].state === "ok" && collector.sources[linksKey].state === "ok" && !isInterestingNetns(ns)) {
+      uninterestingNetns.set(ref.id, now);
+    } else uninterestingNetns.delete(ref.id);
+    return ns;
+  }));
+  for (const [id, at] of Array.from(uninterestingNetns)) {
+    if (now - at > UNINTERESTING_NETNS_TTL_MS * 5) uninterestingNetns.delete(id);
   }
-  // Drop stale suppressions so the map doesn't grow with pod churn.
-  for (const [id, t] of Array.from(uninterestingNetns.entries())) {
-    if (now - t > UNINTERESTING_NETNS_TTL_MS * 5) uninterestingNetns.delete(id);
-  }
+  collection!.namespaces = { limit: MAX_NETNS, discovered: discovery.discovered,
+    scanned: discovery.refs.length - skipped, skipped, omitted: discovery.omitted,
+    discoveryAt: discovery.at };
   return snapshots.filter(isInterestingNetns);
 }
 
@@ -330,8 +347,7 @@ async function runTcFilterShow(
     timeout: 5000,
     maxBuffer: 16 * 1024 * 1024,
   });
-  const parsed = JSON.parse(stripNonJson(stdout));
-  if (!Array.isArray(parsed)) return [];
+  const parsed = parseArray<Record<string, unknown>>(stdout, z.record(z.string(), z.unknown()));
 
   return parsed
     .filter(item => item && typeof item === "object")
@@ -343,15 +359,20 @@ async function runTcFilterShow(
     })) as RawTcFilterEntry[];
 }
 
-/** Parse bpftool/tc JSON output, tolerating warning noise and non-JSON
- *  stdout — callers get the fallback instead of a throw. */
-function parseJsonOr<T>(raw: string, fallback: T): T {
-  try {
-    return JSON.parse(stripNonJson(raw)) as T;
-  } catch {
-    return fallback;
-  }
+/** Validate before caching: malformed JSON or an error object is not an empty inventory. */
+function parseArray<T>(raw: string, item: z.ZodType): T[] {
+  return z.array(item).parse(JSON.parse(stripNonJson(raw))) as T[];
 }
+
+const netEntrySchema = z.object({
+  devname: z.string().optional(), ifindex: z.number().optional(),
+  id: z.number().optional(), prog_id: z.number().optional(),
+}).catchall(z.unknown());
+const netSchema = z.object(Object.fromEntries(
+  ["xdp", "tc", "tcx", "netkit", "flow_dissector", "netfilter", "sockmap"]
+    .map(key => [key, z.array(netEntrySchema).optional()])
+)).catchall(z.unknown());
+function parseNet(raw: string): RawNetSnapshot[] { return parseArray(raw, netSchema); }
 
 // Strip libbpf warning lines that pollute JSON output
 function stripNonJson(raw: string): string {
@@ -362,75 +383,37 @@ function stripNonJson(raw: string): string {
     .trim();
 }
 
-async function fetchLiveData(): Promise<{
-  progs: RawBpfProg[];
-  net: RawNetSnapshot[];
-  cgroups: RawCgroupEntry[];
-  cgroupsEffective: RawCgroupEntry[];
-  rawMaps: RawBpfMap[];
-  links: RawBpfLink[];
-  netns: RawNetnsSnapshot[];
-}> {
-  const [
-    progOut,
-    netOut,
-    cgroupOut,
-    cgroupEffectiveOut,
-    mapOut,
-    linkOut,
-    netnsOut,
-  ] = await Promise.allSettled([
-    runBpftool("prog list"),
-    runBpftool("net"),
-    runBpftool("cgroup tree"),
-    runBpftool("cgroup tree /sys/fs/cgroup effective"),
-    runBpftool("map list"),
-    runBpftool("link list"),
+async function fetchLiveData() {
+  collector.begin();
+  collection = { sources: collector.sources };
+  const [progs, net, cgroups, cgroupsEffective, rawMaps, links, netns] = await Promise.all([
+    collector.read("progs", "Programs", async () => parseArray<RawBpfProg>(await runBpftool("prog list"), rawBpfProgSchema), []),
+    collector.read("net", "Host network attachments", async () => parseNet(await runBpftool("net")), []),
+    collector.read("cgroups", "Cgroup attachments", async () => parseArray<RawCgroupEntry>(await runBpftool("cgroup tree"), rawCgroupEntrySchema), []),
+    collector.read("cgroupsEffective", "Effective cgroup attachments", async () => parseArray<RawCgroupEntry>(await runBpftool("cgroup tree /sys/fs/cgroup effective"), rawCgroupEntrySchema), []),
+    collector.read("maps", "Maps", async () => parseArray<RawBpfMap>(await runBpftool("map list"), rawBpfMapSchema), []),
+    collector.read("links", "BPF links", async () => parseArray<RawBpfLink>(await runBpftool("link list"), rawBpfLinkSchema), []),
     fetchNetnsData(),
   ]);
-
-  let progs: RawBpfProg[] = [];
-  let net: RawNetSnapshot[] = [];
-  let cgroups: RawCgroupEntry[] = [];
-  let cgroupsEffective: RawCgroupEntry[] = [];
-  let rawMaps: RawBpfMap[] = [];
-  let links: RawBpfLink[] = [];
-  const netns: RawNetnsSnapshot[] =
-    netnsOut.status === "fulfilled" ? netnsOut.value : [];
-
-  if (progOut.status === "fulfilled") progs = parseJsonOr(progOut.value, []);
-  if (netOut.status === "fulfilled") net = parseJsonOr(netOut.value, []);
-  if (cgroupOut.status === "fulfilled") cgroups = parseJsonOr(cgroupOut.value, []);
-  if (cgroupEffectiveOut.status === "fulfilled") {
-    cgroupsEffective = parseJsonOr(cgroupEffectiveOut.value, []);
-  }
-  if (mapOut.status === "fulfilled") rawMaps = parseJsonOr(mapOut.value, []);
-  if (linkOut.status === "fulfilled") links = parseJsonOr(linkOut.value, []);
-
-  const netSnapshot = net[0];
+  collector.sources.processOwnership = {
+    label: "Process ownership", state: bpftoolHasSkeletons === true ? "ok" : bpftoolHasSkeletons === false ? "unsupported" : "unknown",
+    attemptedAt: bpftoolCheckedAt, lastSuccessAt: bpftoolHasSkeletons === true ? bpftoolCheckedAt : null,
+    detail: bpftoolHasSkeletons === true ? "bpftool reports skeleton support" : "bpftool process-ownership support is unavailable or unverified",
+  };
   const tcDevices = new Map<string, number>();
-  for (const entry of netSnapshot?.tc ?? []) {
-    tcDevices.set(entry.devname, entry.ifindex);
-  }
-  if (netSnapshot && tcDevices.size > 0) {
-    const filterResults = await Promise.allSettled(
-      Array.from(tcDevices.keys()).flatMap(devname =>
-        (["ingress", "egress"] as const).map(direction =>
-          runTcFilterShow(devname, direction)
-        )
-      )
-    );
-    const tcFilters = filterResults.flatMap(result =>
-      result.status === "fulfilled" ? result.value : []
-    );
-    if (tcFilters.length > 0) {
-      for (const filter of tcFilters) {
-        filter.ifindex = tcDevices.get(filter.devname);
-      }
-      net = [{ ...netSnapshot, tcFilters }, ...net.slice(1)];
-    }
-  }
-
+  for (const entry of net[0]?.tc ?? []) tcDevices.set(entry.devname, entry.ifindex);
+  const tcFilters = (await Promise.all(Array.from(tcDevices.entries()).flatMap(([devname, ifindex]) =>
+    (["ingress", "egress"] as const).map(async direction => {
+      const key = `tc:${devname}:${direction}`;
+      const label = `${devname}: TC ${direction} ordering`;
+      const filters = collector.sources.net.state === "ok"
+        ? await collector.read(key, label, () => runTcFilterShow(devname, direction), [])
+        : collector.skip<RawTcFilterEntry[]>(key, label, "Host network inventory is stale or unavailable", []);
+      return filters.map(filter => ({ ...filter, ifindex }));
+    })
+  ))).flat();
+  if (net[0]) net[0] = { ...net[0], tcFilters };
+  collector.prune();
   return { progs, net, cgroups, cgroupsEffective, rawMaps, links, netns };
 }
 
@@ -452,6 +435,7 @@ async function poll(): Promise<void> {
     let netns: RawNetnsSnapshot[] = [];
 
     if (config.demoMode) {
+      collection = undefined;
       // Simulate incrementing stats in demo mode so sparklines are always active
       const now = Date.now();
       progs = MOCK_PROGS.map(p => ({
@@ -494,6 +478,8 @@ async function poll(): Promise<void> {
       netns
     );
 
+    snap.collection = collection;
+
     // ── Parse maps ─────────────────────────────────────────────────────────
     if (config.demoMode) {
       latestMaps = buildMockMaps(snap.programs);
@@ -502,11 +488,13 @@ async function poll(): Promise<void> {
     }
 
     // ── Feed the stats ring buffer ──────────────────────────────────────────
-    ingestSnapshot(snap.programs, snap.timestamp);
-    pruneStale(new Set(snap.programs.map(p => p.id)));
+    if (!collection || collection.sources.progs?.state === "ok") {
+      ingestSnapshot(snap.programs, collection?.sources.progs.lastSuccessAt ?? snap.timestamp);
+      pruneStale(new Set(snap.programs.map(p => p.id)));
+    }
 
     latestSnapshot = snap;
-    lastError = null;
+    lastError = collection ? collectionError(collection) : null;
 
     const elapsed = Date.now() - pollStart;
     if (elapsed > 2000 || !latestSnapshot) {
@@ -519,6 +507,21 @@ async function poll(): Promise<void> {
   } catch (err) {
     lastError = err instanceof Error ? err.message : String(err);
     console.error("[ebpf-poller] poll error:", lastError);
+    if (collection) {
+      collection.sources.snapshot = { label: "Snapshot assembly", state: "error", attemptedAt: Date.now(),
+        lastSuccessAt: latestSnapshot?.timestamp ?? null, error: lastError.slice(0, 2048) };
+      if (latestSnapshot && !latestSnapshot.demoMode) {
+        // The published model is still the previous one; do not claim freshly
+        // collected sections were incorporated into it.
+        const sources = Object.fromEntries(Object.entries(collection.sources).map(([key, status]) => [key, {
+          ...status, state: status.state === "ok" ? "skipped" as const : status.state,
+          lastSuccessAt: latestSnapshot?.collection?.sources[key]?.lastSuccessAt ?? null,
+          detail: "Previous snapshot retained after assembly failure",
+        }]));
+        latestSnapshot = { ...latestSnapshot, collection: { ...collection, sources } };
+        for (const cb of Array.from(listeners)) { try { cb(latestSnapshot); } catch { /* isolate listeners */ } }
+      }
+    }
     // Keep serving the last good snapshot and surface the error via poller
     // status. Swapping in mock data here (as this used to do) presented
     // synthetic programs as live while config.demoMode stayed false, routed
@@ -527,6 +530,11 @@ async function poll(): Promise<void> {
     // DEMO_MODE or the startup bpftool availability check.
   } finally {
     isPolling = false;
+    if (pendingConfig) {
+      const updates = pendingConfig;
+      pendingConfig = null;
+      updateConfig(updates);
+    }
   }
 }
 
@@ -613,6 +621,7 @@ export function getPollerStatus(): {
   /** false = bpftool build cannot report pids (all programs look orphaned);
    *  null = unknown (demo mode, or bpftool too old to list features). */
   bpftoolHasSkeletons: boolean | null;
+  collection?: CollectionStatus;
 } {
   return {
     running: pollingTimer !== null,
@@ -621,10 +630,28 @@ export function getPollerStatus(): {
     lastPollTime: latestSnapshot?.timestamp ?? null,
     statsEnabled,
     bpftoolHasSkeletons,
+    collection: latestSnapshot?.collection ?? collection,
   };
 }
 
 export function updateConfig(updates: Partial<PollingConfig>): void {
+  if (isPolling) {
+    pendingConfig = { ...pendingConfig, ...updates };
+    return;
+  }
+  if ((updates.demoMode !== undefined && updates.demoMode !== config.demoMode) ||
+      (updates.bpftoolPath !== undefined && updates.bpftoolPath !== config.bpftoolPath) ||
+      (updates.sudo !== undefined && updates.sudo !== config.sudo)) {
+    collector.clear();
+    clearNetnsDiscoveryCache();
+    uninterestingNetns.clear();
+    clearAll();
+    collection = undefined;
+    latestSnapshot = null;
+    latestMaps = [];
+    bpftoolHasSkeletons = null;
+    bpftoolCheckedAt = null;
+  }
   config = { ...config, ...updates };
 
   // Restart interval if changed

@@ -1,13 +1,15 @@
+import { CollectionStatus } from "@/components/CollectionStatus";
+import { hasCollectionGaps } from "../../../shared/collection-status";
 import { useCallback, useMemo, useRef, useState } from "react";
 import { GitCompare, Upload, X, ArrowRight, Plus, Minus, Pencil, Database } from "lucide-react";
 import { useEbpf } from "@/contexts/EbpfContext";
 import type { EbpfSnapshot, BpfMap, MapDumpResult } from "../../../shared/ebpf-types";
 import {
   diffSnapshots,
-  diffMapEntries,
+  diffSnapshotMapEntries,
   type DiffEntry,
   type SnapshotDiffSection,
-  type MapEntryDiff,
+  type SnapshotMapEntryDiff,
 } from "../../../shared/snapshot-diff";
 import { cn } from "@/lib/utils";
 
@@ -74,6 +76,7 @@ function DropSlot({
       </div>
       {side ? (
         <div className="text-sm">
+          <CollectionStatus collection={side.snapshot.collection} demo={side.snapshot.demoMode} />
           <div className="font-mono text-foreground truncate">{side.filename}</div>
           <div className="text-xs text-muted-foreground mt-1">
             {side.hostname} · {side.snapshot.stats.total} programs · {side.maps.length} maps
@@ -85,7 +88,7 @@ function DropSlot({
             className="mt-2 inline-flex items-center gap-1.5 rounded border border-border/60 px-2 py-1 text-[11px] text-muted-foreground hover:text-foreground hover:border-border"
           >
             <Database size={11} />
-            {dumpCount > 0 ? `Map contents: ${dumpCount} dumped` : "Add map contents (optional)"}
+            {dumpCount > 0 ? `Map contents: ${dumpCount} records` : "Add map contents (optional)"}
           </button>
           <input
             ref={dumpInputRef}
@@ -159,18 +162,26 @@ function DiffRow({ entry, kind }: { entry: DiffEntry; kind: "added" | "removed" 
 }
 
 function DiffSectionBlock({ title, section }: { title: string; section: SnapshotDiffSection }) {
-  const total = section.added.length + section.removed.length + section.changed.length;
+  const total = section.added.length + section.removed.length + section.changed.length + section.ambiguous.length + section.uncertain.length;
   if (total === 0) {
     return (
       <div className="glass rounded-xl p-4">
         <h3 className="text-sm font-semibold text-foreground mb-1">{title}</h3>
-        <p className="text-xs text-muted-foreground">No differences.</p>
+        <p className="text-xs text-muted-foreground">No observed differences in compared fields.</p>
       </div>
     );
   }
   return (
     <div className="glass rounded-xl p-4 space-y-3">
       <h3 className="text-sm font-semibold text-foreground">{title}</h3>
+      {section.ambiguous.map(group => (
+        <div key={group.key} role="status" className="rounded border border-amber-500/30 bg-amber-500/5 p-2 text-xs text-amber-200">
+          Ambiguous match: <span className="font-mono">{group.name} ({group.type})</span>.
+          A IDs: {group.beforeIds.join(", ")}; B IDs: {group.afterIds.join(", ")}.
+          Instance count {group.beforeIds.length} → {group.afterIds.length}; individual changes and contents are unverified. {group.reason}
+        </div>
+      ))}
+      {section.uncertain.map(message => <p key={message} role="status" className="text-xs text-amber-200">{message}</p>)}
       {section.added.length > 0 && (
         <div className="space-y-1.5">
           {section.added.map(e => (
@@ -196,31 +207,6 @@ function DiffSectionBlock({ title, section }: { title: string; section: Snapshot
   );
 }
 
-/** Per-map entry-level diffs for maps present on BOTH sides that have a loaded
- *  dump on both. Maps are matched by name+type (kernel ids differ across hosts);
- *  the first instance of each key wins when clones share a name. */
-function mapEntryDiffs(a: LoadedSide, b: LoadedSide): Array<{ name: string; type: string; diff: MapEntryDiff }> {
-  const key = (m: BpfMap) => `${m.name}#${m.rawType}`;
-  const aByKey = new Map<string, BpfMap>();
-  for (const m of a.maps) if (!aByKey.has(key(m))) aByKey.set(key(m), m);
-
-  const seen = new Set<string>();
-  const out: Array<{ name: string; type: string; diff: MapEntryDiff }> = [];
-  for (const bm of b.maps) {
-    const k = key(bm);
-    if (seen.has(k)) continue;
-    const am = aByKey.get(k);
-    if (!am) continue;
-    const aDump = a.mapDumps[am.id];
-    const bDump = b.mapDumps[bm.id];
-    if (!aDump || !bDump) continue;
-    seen.add(k);
-    const diff = diffMapEntries(aDump.entries, bDump.entries);
-    if (!diff.identical) out.push({ name: bm.name || `map_${bm.id}`, type: bm.rawType, diff });
-  }
-  return out;
-}
-
 function EntryRow({ tone, icon, label, detail }: { tone: string; icon: React.ReactNode; label: string; detail?: string }) {
   return (
     <div className={cn("flex flex-wrap items-center gap-2 rounded border px-2 py-1 text-xs", tone)}>
@@ -231,32 +217,41 @@ function EntryRow({ tone, icon, label, detail }: { tone: string; icon: React.Rea
   );
 }
 
-function MapEntryDiffBlock({ diffs }: { diffs: Array<{ name: string; type: string; diff: MapEntryDiff }> }) {
+function MapEntryDiffBlock({ diffs }: { diffs: SnapshotMapEntryDiff[] }) {
   if (diffs.length === 0) return null;
   return (
     <div className="glass rounded-xl p-4 space-y-3">
       <h3 className="text-sm font-semibold text-foreground flex items-center gap-2">
         <Database size={14} className="text-primary" /> Map contents
       </h3>
-      {diffs.map(({ name, type, diff }) => (
-        <div key={`${name}#${type}`} className="space-y-1.5">
+      {diffs.map(({ name, type, beforeId, afterId, diff }) => (
+        <div key={`${beforeId}-${afterId}`} className="space-y-1.5">
           <div className="text-xs font-mono text-muted-foreground">
-            {name} <span className="text-muted-foreground/60">({type})</span> ·{" "}
+            {name} <span className="text-muted-foreground/60">({type}) · A #{beforeId} → B #{afterId}</span> ·{" "}
             <span className="text-emerald-400">+{diff.added.length}</span>{" "}
             <span className="text-rose-400">−{diff.removed.length}</span>{" "}
             <span className="text-amber-300">~{diff.changed.length}</span>
           </div>
+          {diff.identical && <p className="text-xs text-emerald-400">No map-entry differences in complete dumps.</p>}
+          {diff.warnings.length > 0 && <div role="status" className="text-xs text-amber-200 space-y-1">
+            <p>Map-content comparison incomplete; equality and missing entries are unverified.</p>
+            {diff.warnings.map((warning, i) => <p key={i}>{warning}</p>)}
+          </div>}
+          {diff.onlyBefore.map(e => <EntryRow key={`ob-${e.keyHex}-${e.keyBtf}`} tone="text-amber-200 border-amber-500/25"
+            icon="?" label={e.keyBtf ?? e.keyDecimal ?? e.keyHex} detail="Observed only in A; removal unverified" />)}
+          {diff.onlyAfter.map(e => <EntryRow key={`oa-${e.keyHex}-${e.keyBtf}`} tone="text-amber-200 border-amber-500/25"
+            icon="?" label={e.keyBtf ?? e.keyDecimal ?? e.keyHex} detail="Observed only in B; addition unverified" />)}
           {diff.added.map(e => (
-            <EntryRow key={`a-${e.keyHex}`} tone="text-emerald-400 border-emerald-500/25 bg-emerald-500/5"
+            <EntryRow key={`a-${e.keyHex}-${e.keyBtf}`} tone="text-emerald-400 border-emerald-500/25 bg-emerald-500/5"
               icon={<Plus size={11} />} label={e.keyBtf ?? e.keyDecimal ?? e.keyHex} detail={`= ${e.valueBtf ?? e.valueDecimal ?? e.valueHex}`} />
           ))}
           {diff.changed.map(c => (
-            <EntryRow key={`c-${c.keyHex}`} tone="text-amber-300 border-amber-500/25 bg-amber-500/5"
+            <EntryRow key={`c-${c.keyHex}-${c.keyLabel}`} tone="text-amber-300 border-amber-500/25 bg-amber-500/5"
               icon={<Pencil size={11} />} label={c.keyLabel}
               detail={`${c.before.valueBtf ?? c.before.valueDecimal ?? c.before.valueHex} → ${c.after.valueBtf ?? c.after.valueDecimal ?? c.after.valueHex}`} />
           ))}
           {diff.removed.map(e => (
-            <EntryRow key={`r-${e.keyHex}`} tone="text-rose-400 border-rose-500/25 bg-rose-500/5"
+            <EntryRow key={`r-${e.keyHex}-${e.keyBtf}`} tone="text-rose-400 border-rose-500/25 bg-rose-500/5"
               icon={<Minus size={11} />} label={e.keyBtf ?? e.keyDecimal ?? e.keyHex} detail={`= ${e.valueBtf ?? e.valueDecimal ?? e.valueHex}`} />
           ))}
         </div>
@@ -309,7 +304,8 @@ export default function DiffView() {
     () => (a && b ? diffSnapshots(a.snapshot, b.snapshot, a.maps, b.maps) : null),
     [a, b]
   );
-  const entryDiffs = useMemo(() => (a && b ? mapEntryDiffs(a, b) : []), [a, b]);
+  const entryDiffs = useMemo(() => (a && b && diff ? diffSnapshotMapEntries(diff.maps, b.maps, a.mapDumps, b.mapDumps) : []), [a, b, diff]);
+  const coverageUnknown = !!(a && b && (hasCollectionGaps(a.snapshot.collection) || hasCollectionGaps(b.snapshot.collection)));
 
   return (
     <div className="p-6 space-y-6 max-w-5xl mx-auto">
@@ -320,8 +316,9 @@ export default function DiffView() {
         </h1>
         <p className="text-sm text-muted-foreground mt-0.5">
           Compare two captured snapshots (from <span className="font-mono">capture-snapshot.sh</span> or
-          Download Topology). Programs are matched by name + bytecode; maps by name + type. Attach a
-          map-dump file to each side to also diff map <em>contents</em> key-by-key.
+          Download Topology). Programs are matched by name, type, and bytecode tag; maps by name and type.
+          Duplicate identities require unique matching pin paths; unresolved clones are shown as ambiguous.
+          Attach map dumps to compare contents using the same object matches.
         </p>
       </div>
 
@@ -344,11 +341,19 @@ export default function DiffView() {
         </div>
       )}
 
+      {diff && coverageUnknown && (
+        <p role="status" className="text-sm text-amber-200">
+          Comparison uses available data. Collection coverage is incomplete or unknown;
+          apparent additions and removals may reflect collection gaps.
+        </p>
+      )}
       {diff && (
         <>
-          {diff.summary.identical ? (
-            <div className="glass rounded-xl p-4 text-sm text-emerald-400">
-              The two snapshots are identical (no program or map differences).
+          {diff.summary.noObservedChanges ? (
+            <div className={`glass rounded-xl p-4 text-sm ${coverageUnknown || !diff.summary.identical ? "text-amber-200" : "text-emerald-400"}`}>
+              {coverageUnknown || !diff.summary.identical
+                ? "No confirmed inventory changes; complete equality is unverified."
+                : "No differences in compared inventory fields. Map contents are compared separately below when dumps are loaded."}
             </div>
           ) : (
             <div className="grid grid-cols-3 sm:grid-cols-6 gap-2">

@@ -52,6 +52,16 @@ describe("mergeProgramListMetrics (SSE identity preservation)", () => {
 });
 
 describe("applySnapshotMetrics", () => {
+  it("updates collection freshness while retaining program identities", () => {
+    const base = snap([prog(1, 10)]);
+    const collection = { sources: { progs: { label: "Programs", state: "error" as const,
+      attemptedAt: 2000, lastSuccessAt: 1000, error: "permission denied" } } };
+    const next = applySnapshotMetrics(base, { timestamp: 2000, stats: base.stats,
+      programs: [{ id: 1, runCnt: 10 }], collection })!;
+    expect(next.collection).toEqual(collection);
+    expect(next.programs).toBe(base.programs);
+  });
+
   it("updates timestamp/stats, merges program metrics, and preserves unchanged topology objects", () => {
     const p1 = prog(1, 10);
     const base = snap([p1]);

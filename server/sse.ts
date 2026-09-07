@@ -40,7 +40,7 @@ import type {
 
 // How often to send a keepalive ping (ms) to prevent proxy timeouts
 const PING_INTERVAL_MS = 15_000;
-const SNAPSHOT_TOPOLOGY_IGNORED_KEYS = new Set(["timestamp", "stats", "runCnt", "runTimeNs"]);
+const SNAPSHOT_TOPOLOGY_IGNORED_KEYS = new Set(["timestamp", "stats", "runCnt", "runTimeNs", "collection"]);
 
 interface ClientStreamState {
   snapshotTopologyHash: string | null;
@@ -105,6 +105,7 @@ export function mapsHash(maps: BpfMap[]): string {
 function buildSnapshotMetricsUpdate(snap: EbpfSnapshot): SnapshotMetricsUpdate {
   return {
     timestamp: snap.timestamp,
+    collection: snap.collection,
     stats: snap.stats,
     programs: snap.programs.map((prog) => {
       const metrics: SnapshotMetricsUpdate["programs"][number] = { id: prog.id };

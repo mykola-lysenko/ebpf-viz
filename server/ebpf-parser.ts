@@ -631,7 +631,7 @@ export function enrichWithNetAttachments(
         ? directionFromKind(entry.kind)
         : undefined;
       p.attachments.push({
-        kind,
+        kind: entry.kind?.startsWith("tcx/") ? "tcx" : entry.kind?.startsWith("netkit/") ? "netkit" : kind,
         detail: detail(entry) + suffix,
         ...(entry.devname ? { ifname: entry.devname } : {}),
         ...(direction ? { direction } : {}),
@@ -1439,7 +1439,8 @@ export function buildProgramChains(
   progs: Map<number, BpfProgram>,
   rawNet: RawNetSnapshot[],
   rawCgroups: RawCgroupEntry[],
-  rawEffectiveCgroups: RawCgroupEntry[] = []
+  rawEffectiveCgroups: RawCgroupEntry[] = [],
+  netns: RawNetnsSnapshot[] = []
 ): ProgramChain[] {
   const effectiveCgroupChains = buildKernelEffectiveCgroupProgramChains(
     progs,
@@ -1451,96 +1452,75 @@ export function buildProgramChains(
       ? effectiveCgroupChains
       : buildInferredCgroupProgramChains(progs, rawCgroups);
 
-  // ── TC chains ──────────────────────────────────────────────────────────
+  chains.push(...buildTcChains(progs, rawNet));
+  for (const ns of netns) chains.push(...buildTcChains(progs, ns.net, ns.label));
+  return chains;
+}
+
+/** TCX query order is local to one device/direction/namespace. Legacy TC has
+ * a separate classifier list and is reached only after all TCX programs NEXT. */
+function buildTcChains(progs: Map<number, BpfProgram>, rawNet: RawNetSnapshot[], netns?: string): ProgramChain[] {
   const snapshot = rawNet[0] ?? {};
-  const detailedTcEntries = tcProgramEntriesFromFilters(progs, snapshot);
-  const detailedHooks = detailedTcHookKeys(detailedTcEntries);
-
-  // Group TC entries by hook, preserving kernel execution order.
-  const tcByHook = new Map<
-    string,
-    {
-      devname: string;
-      kind: string;
-      chain: number;
-      programs: ProgramChain["programs"];
-    }
-  >();
-
-  for (const entry of detailedTcEntries) {
-    const key = tcHookKey(entry.devname, entry.kind, entry.chain);
-    if (!tcByHook.has(key)) {
-      tcByHook.set(key, {
-        devname: entry.devname,
-        kind: entry.kind,
-        chain: entry.chain,
-        programs: [],
-      });
-    }
-
-    tcByHook.get(key)!.programs.push({
-      id: entry.id,
-      position: tcByHook.get(key)!.programs.length + 1,
-      name: entry.name,
-      tc: {
-        protocol: entry.protocol,
-        priority: entry.priority,
-        chain: entry.chain,
-        handle: entry.handle,
-        directAction: entry.directAction,
-        actionCount: entry.actionCount,
-        stats: entry.stats,
-      },
-    });
+  const detailed = tcProgramEntriesFromFilters(progs, snapshot);
+  const detailedHooks = detailedTcHookKeys(detailed);
+  type Group = { devname: string; kind: string; chain: number; mechanism: "tcx" | "legacy-tc";
+    known: boolean; programs: ProgramChain["programs"]; seen: Set<string> };
+  const groups = new Map<string, Group>();
+  const getGroup = (devname: string, kind: string, chain = 0): Group => {
+    const key = tcHookKey(devname, kind, chain);
+    if (!groups.has(key)) groups.set(key, { devname, kind, chain, mechanism: kind.startsWith("tcx/") ? "tcx" : "legacy-tc",
+      known: true, programs: [], seen: new Set() });
+    return groups.get(key)!;
+  };
+  for (const entry of detailed) {
+    const group = getGroup(entry.devname, entry.kind, entry.chain);
+    group.known &&= entry.priority !== undefined;
+    group.programs.push({ id: entry.id, position: group.programs.length + 1, name: entry.name,
+      tc: { protocol: entry.protocol, priority: entry.priority, chain: entry.chain, handle: entry.handle,
+        directAction: entry.directAction, actionCount: entry.actionCount, stats: entry.stats } });
   }
-
-  for (const entry of snapshot.tc ?? []) {
-    const progId = netEntryProgId(entry);
-    if (progId === undefined || !progs.has(progId)) continue;
+  const tcxRows = (snapshot.tcx ?? []).map(entry => ({ ...entry,
+    kind: entry.kind?.startsWith("tcx/") ? entry.kind : `tcx/${entry.kind ?? "unknown"}` }));
+  for (const entry of [...(snapshot.tc ?? []), ...tcxRows]) {
+    if (entry.kind?.startsWith("netkit/")) continue;
     const kind = entry.kind ?? "tc";
     const key = tcHookKey(entry.devname, kind);
     if (detailedHooks.has(key)) continue;
-    if (!tcByHook.has(key)) {
-      tcByHook.set(key, {
-        devname: entry.devname,
-        kind,
-        chain: 0,
-        programs: [],
-      });
-    }
-
-    const group = tcByHook.get(key)!;
-    // The coarse bpftool net view can repeat the same attachment; avoid
-    // manufacturing duplicate chain positions unless detailed tc data says so.
-    if (!group.programs.some(p => p.id === progId)) {
-      group.programs.push({
-        id: progId,
-        position: group.programs.length + 1,
-        name: entry.name ?? progs.get(progId)!.name,
-      });
-    }
+    const id = netEntryProgId(entry);
+    if (id === undefined) continue;
+    const group = getGroup(entry.devname, kind);
+    group.known &&= group.mechanism === "tcx" && typeof entry.prog_id === "number" && tcDirectionFromKind(kind) !== "unknown";
+    if (!progs.has(id)) { group.known = false; continue; }
+    const identity = entry.link_id ? `link:${entry.link_id}` : `prog:${id}`;
+    if (group.seen.has(identity)) continue;
+    group.seen.add(identity);
+    group.programs.push({ id, position: group.programs.length + 1, name: entry.name ?? progs.get(id)!.name });
   }
-
-  for (const [key, group] of Array.from(tcByHook.entries())) {
-    if (group.programs.length < 2) continue;
+  const result: ProgramChain[] = [];
+  for (const [key, group] of Array.from(groups.entries())) {
     const direction = tcDirectionFromKind(group.kind);
-    chains.push({
-      hookId: `tc:${key}`,
-      hookLabel: `${group.devname} ${
-        direction === "unknown" ? group.kind : direction
-      }`,
-      hookType: "tc",
-      attachPoint: group.devname,
-      attachType:
-        group.chain === 0 ? group.kind : `${group.kind} chain ${group.chain}`,
-      programs: group.programs,
+    const afterTcx = group.mechanism === "legacy-tc" && Array.from(groups.values()).some(g =>
+      g.mechanism === "tcx" && g.devname === group.devname && tcDirectionFromKind(g.kind) === direction);
+    // Keep singleton TCX and its conditional legacy stage visible as well.
+    if (!group.programs.length || (group.programs.length < 2 && group.mechanism !== "tcx" && !afterTcx)) continue;
+    result.push({
+      hookId: `tc:${netns ? `${netns}:` : ""}${key}`,
+      hookLabel: `${group.devname} ${direction === "unknown" ? group.kind : direction}`,
+      hookType: "tc", attachPoint: group.devname,
+      attachType: group.chain === 0 ? group.kind : `${group.kind} chain ${group.chain}`,
+      ...(netns ? { netns } : {}), mechanism: group.mechanism,
+      ordering: group.known ? group.mechanism === "tcx" ? "kernel-query" : "tc-priority" : "unknown",
+      ...(afterTcx ? { afterTcx: true } : {}), programs: group.programs,
       chainSource: detailedHooks.has(key) ? "tc-filter" : "bpftool-net",
-      canShortCircuit: true, // TC programs can return TC_ACT_SHOT
-      packetContext: buildTcPacketContext(direction),
+      canShortCircuit: true,
+      // TCX NEXT and PASS have different continuation semantics. Do not feed
+      // this stage into the legacy TC verdict model until those are modeled.
+      ...(group.mechanism === "legacy-tc" ? { packetContext: buildTcPacketContext(direction) } : {}),
     });
   }
-
-  return chains;
+  return result.sort((a, b) => a.attachPoint.localeCompare(b.attachPoint)
+    || tcDirectionOrder(tcDirectionFromKind(a.attachType)) - tcDirectionOrder(tcDirectionFromKind(b.attachType))
+    || (a.mechanism === "tcx" ? 0 : 1) - (b.mechanism === "tcx" ? 0 : 1));
 }
 
 // ─── Master parse function ─────────────────────────────────────────────────
@@ -1944,7 +1924,8 @@ export function buildSnapshot(
       progMap,
       rawNet,
       rawCgroups,
-      rawEffectiveCgroups
+      rawEffectiveCgroups,
+      netnsSnapshots
     ),
     namespaceTopology: buildNamespaceTopology(
       progMap,

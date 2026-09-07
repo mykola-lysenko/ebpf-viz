@@ -181,10 +181,10 @@ describe("parseEntry", () => {
 describe("parseMapDumpOutput", () => {
   const META = { mapId: 10, mapType: "hash", mapName: "my_map" };
 
-  it("returns empty entries for empty stdout", () => {
+  it("reports unavailable contents for empty stdout", () => {
     const result = parseMapDumpOutput("", "", META.mapId, META.mapType, META.mapName);
     expect(result.entries).toHaveLength(0);
-    expect(result.error).toBeNull();
+    expect(result.error).toContain("JSON entry array");
   });
 
   it("returns empty entries for null output", () => {
@@ -262,13 +262,13 @@ describe("parseMapDumpOutput", () => {
     expect(result.entries).toHaveLength(0);
   });
 
-  it("returns empty entries when output is not an array", () => {
+  it("reports unavailable contents when output is not an array", () => {
     const result = parseMapDumpOutput(
       JSON.stringify({ error: "not an array" }), "",
       META.mapId, META.mapType, META.mapName
     );
     expect(result.entries).toHaveLength(0);
-    expect(result.error).toBeNull();
+    expect(result.error).toContain("JSON entry array");
   });
 
   it("assigns sequential index values starting from 0", () => {
