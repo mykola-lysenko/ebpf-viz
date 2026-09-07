@@ -30,24 +30,24 @@ versions when scope and validation are established.
 
 ## Milestone A — trustworthy collection and diffs
 
-**A.1 implementation complete locally:** Per-source status and last-good data,
+**A.1 implementation complete:** Per-source status and last-good data,
 namespace coverage/deferrals, stale-counter handling, capture/import/export
 metadata, live UI, and diff coverage warnings are implemented. Regression and
 Chromium workflow checks pass. See [collection semantics](collection-status.md).
-**A.2 implementation complete locally:** Inventory and map contents share
+**A.2 implementation complete:** Inventory and map contents share
 conservative object matching, ambiguous clones are visible, and actual
 relationship/pin sets are compared. Dump errors, acquisition completeness,
 truncation, and decoded BTF values survive comparison. Regression tests and
 Chromium capture workflows pass; see [comparison semantics](snapshot-diff.md).
-**A.3 audit and fixes complete locally:** Four UML packet tests verify ordered
+**A.3 audit and fixes complete:** Four UML packet tests verify ordered
 TCX ingress/egress and conditional legacy TC execution. Native bpftool TCX
 attachment loss/reordering was not reproduced. Reproduced mechanism labeling,
 alternate-input chain coverage, namespace scoping, and unsupported ordering
 claims are fixed. Revision is unavailable in ordinary bpftool JSON; TCX
 continuation prediction remains explicitly unmodeled. See the
 [recorded audit and fixtures](tcx-audit.md).
-Milestone A is complete locally; publication/CI of these local changes remains
-separate from the implementation status.
+Milestone A implementation is complete. Publication uses the shared GitHub CI
+and release gates; local validation alone does not establish release readiness.
 
 **Acceptance delivered:** Collection failures carry explicit coverage and
 freshness; same-count relationship and pin changes are detected; ambiguous or
